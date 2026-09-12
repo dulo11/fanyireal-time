@@ -1,6 +1,7 @@
 package com.zhou.floatingtranslator;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Html;
@@ -76,17 +77,23 @@ public final class TranslationRouter implements AutoCloseable {
         void onError(String message);
     }
 
+    private static final String PREFS = "floating_translator";
+    private static final String PREF_AZURE_ACTIVE_SLOT = "azure_active_slot";
+
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final SecureConfig secure;
+    private final SharedPreferences prefs;
     private final String source;
     private final String target;
     private final String selectedEngine;
     private final Translator mlKit;
     private volatile boolean closed;
+    private volatile int lastAzureSlot = 1;
 
     public TranslationRouter(Context context, String source, String target, String selectedEngine) {
         this.secure = new SecureConfig(context);
+        this.prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         this.source = source;
         this.target = target;
         this.selectedEngine = normalizeEngine(selectedEngine);
@@ -111,8 +118,7 @@ public final class TranslationRouter implements AutoCloseable {
             case BAIDU:
                 return secure.has(SecureConfig.BAIDU_APP_ID) && secure.has(SecureConfig.BAIDU_SECRET);
             case AZURE:
-                // Single-service/global Translator resources can work without a region header.
-                return secure.has(SecureConfig.AZURE_KEY);
+                return secure.hasAnyAzureProfile();
             case ALIYUN:
                 return secure.has(SecureConfig.ALIYUN_ACCESS_KEY_ID)
                     && secure.has(SecureConfig.ALIYUN_ACCESS_KEY_SECRET);
@@ -215,7 +221,10 @@ public final class TranslationRouter implements AutoCloseable {
                 }
                 String finalResult = result == null ? "" : result.trim();
                 if (finalResult.isEmpty()) throw new IllegalStateException("返回了空译文");
-                main.post(() -> callback.onSuccess(finalResult, engineLabel(engine)));
+                String successName = AZURE.equals(engine)
+                    ? engineLabel(engine) + " · 账号" + lastAzureSlot
+                    : engineLabel(engine);
+                main.post(() -> callback.onSuccess(finalResult, successName));
             } catch (Exception e) {
                 main.post(() -> callback.onError(safe(e)));
             }
@@ -260,20 +269,70 @@ public final class TranslationRouter implements AutoCloseable {
         return out.toString();
     }
 
+    /**
+     * Azure supports up to four locally encrypted profiles. The last successful slot is tried first.
+     * If Azure reports quota/rate/auth subscription failures (typically HTTP 401/403/429), the next
+     * configured slot is tried automatically. Normal connectivity errors are surfaced immediately so
+     * a temporary network outage does not incorrectly mark/cycle through every account.
+     */
     private String translateAzure(String text) throws Exception {
-        String key = secure.get(SecureConfig.AZURE_KEY);
-        String region = secure.get(SecureConfig.AZURE_REGION);
         String endpoint = "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0"
             + "&from=" + url(source) + "&to=" + url(azureCode(target));
         JSONArray body = new JSONArray();
         body.put(new JSONObject().put("Text", text));
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("Content-Type", "application/json; charset=UTF-8");
-        headers.put("Ocp-Apim-Subscription-Key", key);
-        if (!region.trim().isEmpty()) headers.put("Ocp-Apim-Subscription-Region", region.trim());
-        String response = postRaw(endpoint, body.toString(), headers);
-        JSONArray arr = new JSONArray(response);
-        return arr.getJSONObject(0).getJSONArray("translations").getJSONObject(0).getString("text");
+
+        int startSlot = Math.max(1, Math.min(4, prefs.getInt(PREF_AZURE_ACTIVE_SLOT, 1)));
+        List<String> errors = new ArrayList<>();
+        boolean foundConfigured = false;
+
+        for (int offset = 0; offset < 4; offset++) {
+            int slot = ((startSlot - 1 + offset) % 4) + 1;
+            String key = secure.get(SecureConfig.azureKeyName(slot));
+            if (key.isEmpty()) continue;
+            foundConfigured = true;
+            String region = secure.get(SecureConfig.azureRegionName(slot));
+
+            Map<String, String> headers = new LinkedHashMap<>();
+            headers.put("Content-Type", "application/json; charset=UTF-8");
+            headers.put("Ocp-Apim-Subscription-Key", key);
+            if (!region.trim().isEmpty()) {
+                headers.put("Ocp-Apim-Subscription-Region", region.trim());
+            }
+
+            try {
+                String response = postRaw(endpoint, body.toString(), headers);
+                JSONArray arr = new JSONArray(response);
+                String translated = arr.getJSONObject(0)
+                    .getJSONArray("translations").getJSONObject(0).getString("text");
+                lastAzureSlot = slot;
+                prefs.edit().putInt(PREF_AZURE_ACTIVE_SLOT, slot).apply();
+                return translated;
+            } catch (Exception e) {
+                String message = safe(e);
+                errors.add("账号" + slot + "：" + message);
+                if (!shouldRotateAzure(message)) throw e;
+                int next = nextConfiguredAzureSlot(slot);
+                if (next > 0) prefs.edit().putInt(PREF_AZURE_ACTIVE_SLOT, next).apply();
+            }
+        }
+
+        if (!foundConfigured) throw new IllegalStateException("未配置 Azure 账号1-4");
+        throw new IllegalStateException("Azure 账号1-4 均不可用：" + String.join("；", errors));
+    }
+
+    private int nextConfiguredAzureSlot(int current) {
+        for (int step = 1; step <= 4; step++) {
+            int slot = ((current - 1 + step) % 4) + 1;
+            if (secure.has(SecureConfig.azureKeyName(slot))) return slot;
+        }
+        return -1;
+    }
+
+    private static boolean shouldRotateAzure(String message) {
+        String m = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return m.contains("http 401") || m.contains("http 403") || m.contains("http 429")
+            || m.contains("quota") || m.contains("exceed") || m.contains("limit")
+            || m.contains("subscription") || m.contains("rate");
     }
 
     private String translateAliyun(String text) throws Exception {
