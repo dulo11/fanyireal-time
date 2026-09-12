@@ -36,6 +36,7 @@ public class MainActivity extends Activity {
 
     private Spinner sourceSpinner;
     private Spinner targetSpinner;
+    private Spinner inputModeSpinner;
     private CheckBox showOriginal;
     private CheckBox preferOffline;
     private SeekBar fontSize;
@@ -62,7 +63,7 @@ public class MainActivity extends Activity {
         TextView title = text("浮译", 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
-        TextView subtitle = text("其他 App 声音 · 实时悬浮翻译", 16, Color.rgb(201,190,221));
+        TextView subtitle = text("系统声音 · 免提通话 · 实时悬浮翻译", 16, Color.rgb(201,190,221));
         subtitle.setPadding(0, dp(4), 0, dp(22));
         root.addView(subtitle);
 
@@ -70,6 +71,15 @@ public class MainActivity extends Activity {
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
         card.setBackgroundResource(com.zhou.floatingtranslator.R.drawable.panel);
         root.addView(card, new LinearLayout.LayoutParams(-1, -2));
+
+        card.addView(label("声音来源"));
+        inputModeSpinner = new Spinner(this);
+        inputModeSpinner.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item,
+            new String[]{"系统内部声音（视频/直播/游戏）", "麦克风/免提通话（实验功能）"}));
+        inputModeSpinner.setSelection(preferences.getInt("input_mode", 0));
+        inputModeSpinner.setBackgroundColor(Color.rgb(51,45,73));
+        card.addView(inputModeSpinner, matchWrap());
 
         card.addView(label("声音语言"));
         sourceSpinner = spinner();
@@ -151,8 +161,11 @@ public class MainActivity extends Activity {
 
         TextView note = text(
             "支持 ML Kit 全部 59 种语言。常用语言排列在前，其他语言继续向下滑动选择。\n\n" +
-            "说明：系统会在每次启动时显示“开始录制或投射”确认，这是 Android 的安全要求。" +
-            "部分 App 会主动禁止内部音频捕获；部分语言也可能没有可用的系统语音包。\n\n" +
+            "系统声音模式：每次启动都会显示“开始录制或投射”确认，这是 Android 的安全要求。" +
+            "部分 App 会主动禁止内部音频捕获。\n\n" +
+            "免提通话模式（实验）：通话时打开免提，让本机麦克风收听对方声音；受回声、噪声、手机系统限制影响，" +
+            "不能保证所有电话/通话 App 都可用，也不会直接读取通话内部音频。\n\n" +
+            "部分语言可能没有可用的系统语音包。" +
             "文字翻译由 Google ML Kit 设备端模型提供。",
             14, Color.rgb(201,190,221));
         note.setPadding(dp(4), dp(22), dp(4), 0);
@@ -212,6 +225,12 @@ public class MainActivity extends Activity {
             toast("请选择不同的原语言和目标语言");
             return;
         }
+        if (inputModeSpinner.getSelectedItemPosition() == 1) {
+            startTranslationService(0, null);
+            status.setText("麦克风翻译已启动；电话使用时请开启免提");
+            toast("免提通话翻译正在运行");
+            return;
+        }
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE);
     }
@@ -222,21 +241,27 @@ public class MainActivity extends Activity {
             if (requestCode == REQUEST_CAPTURE) status.setText("你取消了系统声音授权");
             return;
         }
+        startTranslationService(resultCode, data);
+        status.setText("翻译已启动，可以切换到视频或直播 App");
+        toast("浮译正在后台运行");
+    }
+
+    private void startTranslationService(int resultCode, Intent resultData) {
         LanguageOption source = (LanguageOption) sourceSpinner.getSelectedItem();
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         Intent service = new Intent(this, TranslationService.class)
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_RESULT_CODE, resultCode)
-            .putExtra(TranslationService.EXTRA_RESULT_DATA, data)
+            .putExtra(TranslationService.EXTRA_INPUT_MODE,
+                inputModeSpinner.getSelectedItemPosition() == 1 ? TranslationService.INPUT_MICROPHONE : TranslationService.INPUT_PLAYBACK)
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
+        if (resultData != null) service.putExtra(TranslationService.EXTRA_RESULT_DATA, resultData);
         startForegroundService(service);
-        status.setText("翻译已启动，可以切换到视频或直播 App");
-        toast("浮译正在后台运行");
     }
 
     private void requestRuntimePermissions() {
@@ -267,6 +292,7 @@ public class MainActivity extends Activity {
         preferences.edit()
             .putInt("source_index", sourceSpinner.getSelectedItemPosition())
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
+            .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
             .putBoolean("show_original", showOriginal.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
             .putInt("font_size", fontSize.getProgress())
