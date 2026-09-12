@@ -8,6 +8,10 @@ import android.util.Base64;
 
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -21,17 +25,10 @@ public final class SecureConfig {
     public static final String YOUDAO_APP_KEY = "youdao_app_key";
     public static final String YOUDAO_SECRET = "youdao_secret";
 
-    // Azure slot 1 deliberately keeps the original key names for seamless migration.
+    // Azure profile 1 deliberately keeps the original key names for seamless migration.
+    // Profiles 2+ are generated dynamically, so the UI is no longer limited to four accounts.
     public static final String AZURE_KEY = "azure_key";
     public static final String AZURE_REGION = "azure_region";
-    public static final String AZURE_KEY_1 = AZURE_KEY;
-    public static final String AZURE_REGION_1 = AZURE_REGION;
-    public static final String AZURE_KEY_2 = "azure_key_2";
-    public static final String AZURE_REGION_2 = "azure_region_2";
-    public static final String AZURE_KEY_3 = "azure_key_3";
-    public static final String AZURE_REGION_3 = "azure_region_3";
-    public static final String AZURE_KEY_4 = "azure_key_4";
-    public static final String AZURE_REGION_4 = "azure_region_4";
 
     public static final String ALIYUN_ACCESS_KEY_ID = "aliyun_access_key_id";
     public static final String ALIYUN_ACCESS_KEY_SECRET = "aliyun_access_key_secret";
@@ -40,16 +37,10 @@ public final class SecureConfig {
     public static final String LIBRE_ENDPOINT = "libre_endpoint";
     public static final String LIBRE_KEY = "libre_key";
 
-    public static final String[] ALL_KEYS = {
-        BAIDU_APP_ID, BAIDU_SECRET, YOUDAO_APP_KEY, YOUDAO_SECRET,
-        AZURE_KEY_1, AZURE_REGION_1, AZURE_KEY_2, AZURE_REGION_2,
-        AZURE_KEY_3, AZURE_REGION_3, AZURE_KEY_4, AZURE_REGION_4,
-        ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET,
-        DEEPL_KEY, GOOGLE_KEY, LIBRE_ENDPOINT, LIBRE_KEY
-    };
-
     private static final String PREFS = "floating_translator_secure_v1";
     private static final String KEY_ALIAS = "floating_translator_api_key_v1";
+    private static final String AZURE_KEY_PREFIX = "azure_key_";
+    private static final String AZURE_REGION_PREFIX = "azure_region_";
     private final SharedPreferences prefs;
 
     public SecureConfig(Context context) {
@@ -84,7 +75,7 @@ public final class SecureConfig {
             byte[] encrypted = Base64.decode(parts[1], Base64.NO_WRAP);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), new GCMParameterSpec(128, iv));
-            return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+            return new String(cipher.doFinal(encrypted, StandardCharsets.UTF_8));
         } catch (Exception e) {
             return "";
         }
@@ -95,38 +86,44 @@ public final class SecureConfig {
     }
 
     public static String azureKeyName(int slot) {
-        switch (slot) {
-            case 2: return AZURE_KEY_2;
-            case 3: return AZURE_KEY_3;
-            case 4: return AZURE_KEY_4;
-            case 1:
-            default: return AZURE_KEY_1;
-        }
+        int safeSlot = Math.max(1, slot);
+        return safeSlot == 1 ? AZURE_KEY : AZURE_KEY_PREFIX + safeSlot;
     }
 
     public static String azureRegionName(int slot) {
-        switch (slot) {
-            case 2: return AZURE_REGION_2;
-            case 3: return AZURE_REGION_3;
-            case 4: return AZURE_REGION_4;
-            case 1:
-            default: return AZURE_REGION_1;
+        int safeSlot = Math.max(1, slot);
+        return safeSlot == 1 ? AZURE_REGION : AZURE_REGION_PREFIX + safeSlot;
+    }
+
+    /** Returns every configured Azure profile number in ascending order. */
+    public List<Integer> configuredAzureSlots() {
+        List<Integer> slots = new ArrayList<>();
+        if (has(AZURE_KEY)) slots.add(1);
+        Map<String, ?> all = prefs.getAll();
+        for (String name : all.keySet()) {
+            if (!name.startsWith(AZURE_KEY_PREFIX)) continue;
+            String suffix = name.substring(AZURE_KEY_PREFIX.length());
+            try {
+                int slot = Integer.parseInt(suffix);
+                if (slot >= 2 && has(azureKeyName(slot)) && !slots.contains(slot)) slots.add(slot);
+            } catch (NumberFormatException ignored) {
+            }
         }
+        Collections.sort(slots);
+        return slots;
     }
 
     public boolean hasAnyAzureProfile() {
-        for (int slot = 1; slot <= 4; slot++) {
-            if (has(azureKeyName(slot))) return true;
-        }
-        return false;
+        return !configuredAzureSlots().isEmpty();
     }
 
     public int configuredAzureProfileCount() {
-        int count = 0;
-        for (int slot = 1; slot <= 4; slot++) {
-            if (has(azureKeyName(slot))) count++;
-        }
-        return count;
+        return configuredAzureSlots().size();
+    }
+
+    public int highestConfiguredAzureSlot() {
+        List<Integer> slots = configuredAzureSlots();
+        return slots.isEmpty() ? 0 : slots.get(slots.size() - 1);
     }
 
     /** Clears every API credential/value stored by this app. */
@@ -136,9 +133,7 @@ public final class SecureConfig {
 
     /** Returns only a count; never exposes secret values. */
     public int configuredValueCount() {
-        int count = 0;
-        for (String key : ALL_KEYS) if (has(key)) count++;
-        return count;
+        return prefs.getAll().size();
     }
 
     private SecretKey getOrCreateKey() throws Exception {
