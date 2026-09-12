@@ -50,5 +50,9 @@
             android:name=".TranslationService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />
+        <service
+            android:name=".RootCallTranslationService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
     </application>
 </manifest>
