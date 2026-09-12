@@ -43,7 +43,6 @@ public class MainActivity extends Activity {
     private CheckBox showOriginal;
     private CheckBox preferOffline;
     private CheckBox enableOcr;
-    private CheckBox autoMicFallback;
     private SeekBar fontSize;
     private TextView engineStatus;
     private TextView status;
@@ -52,11 +51,14 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!preferences.getBoolean("v041_migrated", false)) {
+        if (!preferences.getBoolean("v042_migrated", false)) {
             preferences.edit()
-                .putBoolean("v041_migrated", true)
+                .putBoolean("v042_migrated", true)
                 .putBoolean("prefer_offline", true)
                 .putBoolean("enable_ocr", false)
+                // 0.4.1 could switch to microphone simply because the stream was quiet.
+                // 0.4.2 deliberately disables that behaviour. The user chooses the source.
+                .putBoolean("auto_mic_fallback", false)
                 .apply();
         }
         setContentView(buildUi());
@@ -70,11 +72,11 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("浮译 0.4.1", 34, Color.WHITE);
+        TextView title = text("浮译 0.4.2", 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
-        TextView subtitle = text("离线优先 · Vosk 语音识别 · ML Kit 翻译 · 在线备用", 15,
+        TextView subtitle = text("离线优先 · 手动声音来源 · Vosk ASR · ML Kit 翻译", 15,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -93,14 +95,37 @@ public class MainActivity extends Activity {
         engineSettings.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
         card.addView(engineSettings, matchWrap());
 
-        card.addView(label("声音来源"));
+        Button modelManager = secondaryButton("📦 离线模型管理 / 删除下载包");
+        modelManager.setOnClickListener(v -> startActivity(new Intent(this, ModelManagerActivity.class)));
+        card.addView(modelManager, matchWrap());
+
+        card.addView(label("声音来源（现在完全由你手动选择，不再因沉默自动切换）"));
         inputModeSpinner = new Spinner(this);
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
-            new String[]{"系统内部声音（视频/直播/游戏）", "麦克风/免提通话"}));
-        inputModeSpinner.setSelection(preferences.getInt("input_mode", 0));
+            new String[]{
+                "系统内部声音（直播/视频；不自动切麦克风）",
+                "麦克风识别手机外放（App 禁止内录时用）"
+            }));
+        inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         card.addView(inputModeSpinner, matchWrap());
+
+        Button choosePlayback = secondaryButton("使用系统内部声音");
+        choosePlayback.setOnClickListener(v -> {
+            inputModeSpinner.setSelection(0);
+            saveSettings();
+            status.setText("已选择系统内部声音。不会因为主播停顿而自动切麦克风。\n点击“开始实时翻译”重新启动即可。");
+        });
+        card.addView(choosePlayback, matchWrap());
+
+        Button chooseMic = secondaryButton("使用麦克风识别手机外放");
+        chooseMic.setOnClickListener(v -> {
+            inputModeSpinner.setSelection(1);
+            saveSettings();
+            status.setText("已选择麦克风外放识别。请让直播声音从手机扬声器播放，点击“开始实时翻译”重新启动。");
+        });
+        card.addView(chooseMic, matchWrap());
 
         card.addView(label("原语言"));
         sourceSpinner = spinner();
@@ -124,15 +149,11 @@ public class MainActivity extends Activity {
         showOriginal = check("同时显示原文", preferences.getBoolean("show_original", true));
         card.addView(showOriginal);
 
-        enableOcr = check("开启屏幕 OCR（默认关闭；会增加耗电）",
+        enableOcr = check("开启屏幕 OCR（默认关闭；直播语音建议关闭）",
             preferences.getBoolean("enable_ocr", false));
         card.addView(enableOcr);
 
-        autoMicFallback = check("系统声音抓不到时自动切麦克风兜底",
-            preferences.getBoolean("auto_mic_fallback", true));
-        card.addView(autoMicFallback);
-
-        preferOffline = check("系统语音兜底时也优先离线",
+        preferOffline = check("系统语音备用时也优先离线",
             preferences.getBoolean("prefer_offline", true));
         card.addView(preferOffline);
 
@@ -171,7 +192,7 @@ public class MainActivity extends Activity {
         card.addView(copy, matchWrap());
 
         status = text(
-            "首次使用一种离线语音语言时，会自动下载 Vosk 小模型；下载一次后即可断网使用。",
+            "0.4.2 已取消“8 秒没声音就自动改麦克风”。系统声音和麦克风外放现在必须手动选。",
             14, Color.rgb(201, 190, 221));
         status.setPadding(0, dp(12), 0, 0);
         card.addView(status);
@@ -182,12 +203,12 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "0.4.1 默认链路：\n" +
-            "声音 → Vosk 本地离线语音识别 → ML Kit 本地离线翻译。\n" +
-            "只有离线环节不可用时，才会尝试系统语音服务或你自己配置的在线 API。\n\n" +
-            "Vosk 当前内置下载配置支持：" + OfflineSpeechEngine.supportedSummary() + "。\n" +
-            "日语小模型约 48 MB，英语约 40 MB，中文约 42 MB；模型保存在应用私有目录。\n" +
-            "OCR 仍默认关闭，避免整屏文字反复识别导致卡顿和乱翻。",
+            "建议直播日语→中文先这样测：\n" +
+            "① OCR 关闭；② 日语→中文；③ 先选系统内部声音。\n" +
+            "如果悬浮窗声音电平一直为 0，再手动改成“麦克风识别手机外放”。\n\n" +
+            "语音：Vosk 本地离线优先；翻译：ML Kit 本地离线优先。\n" +
+            "下载过的 Vosk 和 ML Kit 模型可在“离线模型管理”里查看和删除。\n" +
+            "大模型（NLLB / sherpa-onnx 高精度 ASR）后续按需下载，不会强塞进基础 APK。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(4), dp(20), dp(4), 0);
         root.addView(note);
@@ -296,7 +317,7 @@ public class MainActivity extends Activity {
         boolean needsProjection = !microphoneMode || enableOcr.isChecked();
         if (!needsProjection) {
             startTranslationService(0, null);
-            status.setText("正在准备离线麦克风翻译……");
+            status.setText("正在准备麦克风外放离线识别……");
             return;
         }
 
@@ -308,7 +329,7 @@ public class MainActivity extends Activity {
         } else {
             captureIntent = manager.createScreenCaptureIntent();
         }
-        status.setText("请允许共享整个屏幕；系统声音捕获需要该权限。");
+        status.setText("请允许共享整个屏幕；系统内部声音捕获需要该权限。");
         startActivityForResult(captureIntent, REQUEST_CAPTURE);
     }
 
@@ -328,14 +349,13 @@ public class MainActivity extends Activity {
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         boolean youdaoSpeech = preferences.getBoolean("youdao_speech_fallback", true);
+        boolean microphone = inputModeSpinner.getSelectedItemPosition() == 1;
 
         Intent service = new Intent(this, TranslationService.class)
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_RESULT_CODE, resultCode)
             .putExtra(TranslationService.EXTRA_INPUT_MODE,
-                inputModeSpinner.getSelectedItemPosition() == 1
-                    ? TranslationService.INPUT_MICROPHONE
-                    : TranslationService.INPUT_PLAYBACK)
+                microphone ? TranslationService.INPUT_MICROPHONE : TranslationService.INPUT_PLAYBACK)
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
@@ -344,7 +364,8 @@ public class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
             .putExtra(TranslationService.EXTRA_ENABLE_OCR, enableOcr.isChecked())
-            .putExtra(TranslationService.EXTRA_AUTO_MIC_FALLBACK, autoMicFallback.isChecked())
+            // Important: never switch because a live stream is briefly silent.
+            .putExtra(TranslationService.EXTRA_AUTO_MIC_FALLBACK, false)
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
         if (resultData != null) service.putExtra(TranslationService.EXTRA_RESULT_DATA, resultData);
         startForegroundService(service);
@@ -397,7 +418,7 @@ public class MainActivity extends Activity {
             .putBoolean("show_original", showOriginal.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
             .putBoolean("enable_ocr", enableOcr.isChecked())
-            .putBoolean("auto_mic_fallback", autoMicFallback.isChecked())
+            .putBoolean("auto_mic_fallback", false)
             .putInt("font_size", fontSize.getProgress())
             .apply();
     }
