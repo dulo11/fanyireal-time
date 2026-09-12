@@ -56,6 +56,10 @@ dependencies {
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
 
     // High-accuracy optional offline ASR runtime. Model packs are downloaded separately.
-    implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
+    implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8") {
+        // The Android AAR already contains the Java API classes. The transitive JVM
+        // helper jar duplicates those classes and must not be packaged into Android.
+        exclude(group = "com.github.k2-fsa.sherpa-onnx", module = "sherpa-onnx-jvm")
+    }
     implementation("org.apache.commons:commons-compress:1.27.1")
 }
