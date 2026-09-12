@@ -1,6 +1,7 @@
 package com.zhou.floatingtranslator;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -11,12 +12,13 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/** Global precision and conversation-profile preferences for sherpa-onnx ASR models. */
+/** Global precision and fast-speech preferences for sherpa-onnx ASR models. */
 public final class AsrPrecisionActivity extends Activity {
     private static final String PREFS = "floating_translator";
     private SharedPreferences prefs;
     private TextView current;
     private TextView conversationCurrent;
+    private TextView advancedStatus;
     private TextView models;
 
     @Override protected void onCreate(Bundle state) {
@@ -40,9 +42,8 @@ public final class AsrPrecisionActivity extends Activity {
         root.addView(title);
 
         TextView intro = text(
-            "这里分两件事：FP32 / INT8 是模型权重精度；“高精度·快语速”控制一句话如何切段。" +
-            "快速聊天时，过早切句通常比 INT8/FP32 差异更影响识别结果。\n\n" +
-            "普通直播和 ROOT 通话共用这些设置。",
+            "目标是快速聊天也尽量听完整：高精度模式优先使用 Silero 神经网络 VAD 切句，保留前文音频上下文，" +
+            "长句或可疑结果会自动再识别一次。普通直播和 ROOT 通话共用这些设置。",
             14, Color.rgb(205, 195, 222));
         intro.setPadding(0, dp(7), 0, dp(14));
         root.addView(intro);
@@ -53,24 +54,25 @@ public final class AsrPrecisionActivity extends Activity {
         conversationCurrent.setPadding(0, dp(6), 0, dp(8));
         conversationCard.addView(conversationCurrent);
 
-        Button accuracy = button("👑 高精度·快语速｜默认｜长句 + 约 0.9 秒重叠保护");
+        Button accuracy = button("👑 高精度·快语速｜默认｜Silero VAD + 上下文 + 二次校正");
         accuracy.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_ACCURACY));
         conversationCard.addView(accuracy, params());
 
-        Button balanced = button("⚖ 均衡对话｜中等延迟｜约 0.45 秒重叠");
+        Button balanced = button("⚖ 均衡对话｜Silero VAD + 较短上下文");
         balanced.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_BALANCED));
         conversationCard.addView(balanced, params());
 
-        Button low = button("⚡ 低延迟｜更快出字｜快语速更容易切断");
+        Button low = button("⚡ 低延迟｜音量切句｜更快出字");
         low.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_LOW_LATENCY));
         conversationCard.addView(low, params());
 
-        TextView conversationTip = text(
-            "高精度模式会把连续讲话的强制切段从旧版约 4.2 秒延长到约 10 秒，静音结束判断也更宽松；" +
-            "必须强制切段时保留约 0.9 秒音频重叠，并自动去掉重复文字。ReazonSpeech 在高精度模式还会尝试 modified beam search。",
-            13, Color.rgb(184, 174, 207));
-        conversationTip.setPadding(0, dp(7), 0, 0);
-        conversationCard.addView(conversationTip);
+        advancedStatus = text("", 13, Color.rgb(184, 174, 207));
+        advancedStatus.setPadding(0, dp(7), 0, dp(4));
+        conversationCard.addView(advancedStatus);
+
+        Button hotwords = button("🧠 热词 / 人名词库");
+        hotwords.setOnClickListener(v -> startActivity(new Intent(this, AsrHotwordActivity.class)));
+        conversationCard.addView(hotwords, params());
 
         LinearLayout card = card(root);
         card.addView(section("模型权重精度"));
@@ -97,9 +99,9 @@ public final class AsrPrecisionActivity extends Activity {
         modelCard.addView(models);
 
         TextView note = text(
-            "SenseVoice 完整包同时有 FP32 + INT8；ReazonSpeech、Whisper Small、Whisper Medium 的完整包也可切换。\n" +
-            "Parakeet 日语、Qwen3-ASR 0.6B、Omnilingual 300M 当前一键下载包以 INT8 为主；选择 FP32 时会安全回退。\n" +
-            "如果目标是快语速准确率，优先换更强模型 + 高精度快语速模式，再考虑把 INT8 切到 FP32。",
+            "SenseVoice、ReazonSpeech、Whisper Small / Medium 的完整包可切换 FP32 + INT8；" +
+            "Parakeet 日语、Qwen3-ASR 0.6B、Omnilingual 300M 当前一键包以 INT8 为主。\n" +
+            "快语速准确率通常先受模型能力、切句和上下文影响，再受 FP32/INT8 影响。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(2), dp(6), dp(2), 0);
         root.addView(note);
@@ -125,6 +127,14 @@ public final class AsrPrecisionActivity extends Activity {
         String profile = prefs.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
         if (current != null) current.setText("当前：" + precisionLabel(selected));
         if (conversationCurrent != null) conversationCurrent.setText("当前：" + conversationLabel(profile));
+        if (advancedStatus != null) {
+            String raw = prefs.getString(AsrHotwordActivity.KEY_HOTWORDS, "");
+            int count = 0;
+            for (String line : raw.split("\\r?\\n")) if (!line.trim().isEmpty()) count++;
+            advancedStatus.setText(
+                "Silero VAD：" + (VadModelStore.isReady(this) ? "✅ 已准备" : "○ 首次高精度识别时自动下载") +
+                "\n热词：" + count + " 个 · 高精度长句会按需要自动二次上下文校正");
+        }
         if (models == null) return;
         OfflineModelStore store = new OfflineModelStore(this);
         StringBuilder out = new StringBuilder();
@@ -150,6 +160,11 @@ public final class AsrPrecisionActivity extends Activity {
         if (SherpaSpeechEngine.PROFILE_LOW_LATENCY.equals(value)) return "低延迟";
         if (SherpaSpeechEngine.PROFILE_BALANCED.equals(value)) return "均衡对话";
         return "高精度·快语速";
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        refresh();
     }
 
     private LinearLayout card(LinearLayout root) {
