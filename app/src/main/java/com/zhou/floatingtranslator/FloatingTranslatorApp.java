@@ -24,7 +24,8 @@ public final class FloatingTranslatorApp extends Application implements Applicat
     }
 
     private void signal(Activity activity, String action) {
-        if (!(activity instanceof MainActivity)) return;
+        // All activities belong to FloatingTranslator, so hide/pause the overlay while any
+        // app screen is in front. This prevents OCR from reading the new home dashboard too.
         boolean running = getSharedPreferences("floating_translator", MODE_PRIVATE)
             .getBoolean("service_running", false);
         if (!running) return;
