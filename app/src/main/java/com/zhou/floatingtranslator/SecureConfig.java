@@ -22,6 +22,8 @@ public final class SecureConfig {
     public static final String YOUDAO_SECRET = "youdao_secret";
     public static final String AZURE_KEY = "azure_key";
     public static final String AZURE_REGION = "azure_region";
+    public static final String ALIYUN_ACCESS_KEY_ID = "aliyun_access_key_id";
+    public static final String ALIYUN_ACCESS_KEY_SECRET = "aliyun_access_key_secret";
     public static final String DEEPL_KEY = "deepl_key";
     public static final String GOOGLE_KEY = "google_key";
     public static final String LIBRE_ENDPOINT = "libre_endpoint";
@@ -29,7 +31,8 @@ public final class SecureConfig {
 
     public static final String[] ALL_KEYS = {
         BAIDU_APP_ID, BAIDU_SECRET, YOUDAO_APP_KEY, YOUDAO_SECRET,
-        AZURE_KEY, AZURE_REGION, DEEPL_KEY, GOOGLE_KEY, LIBRE_ENDPOINT, LIBRE_KEY
+        AZURE_KEY, AZURE_REGION, ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET,
+        DEEPL_KEY, GOOGLE_KEY, LIBRE_ENDPOINT, LIBRE_KEY
     };
 
     private static final String PREFS = "floating_translator_secure_v1";
