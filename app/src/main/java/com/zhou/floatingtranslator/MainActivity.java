@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
         title.setTypeface(null, 1);
         root.addView(title);
 
-        TextView subtitle = text("固定声音来源 · 高精度离线 ASR · 历史/SRT · 断点下载 · ROOT 通话实验", 15,
+        TextView subtitle = text("固定声音来源 · 高精度离线 ASR · ROOT 通话/VoIP · 历史/SRT", 15,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -108,7 +108,7 @@ public class MainActivity extends Activity {
         historyButton.setOnClickListener(v -> startActivity(new Intent(this, HistoryActivity.class)));
         card.addView(historyButton, matchWrap());
 
-        Button rootCall = secondaryButton("☎ ROOT 通话翻译实验室");
+        Button rootCall = secondaryButton("☎ ROOT 通话 / VoIP 兼容中心");
         rootCall.setOnClickListener(v -> startActivity(new Intent(this, RootCallActivity.class)));
         card.addView(rootCall, matchWrap());
 
@@ -121,10 +121,11 @@ public class MainActivity extends Activity {
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "系统内部声音｜直播/视频｜不会自动切麦克风",
-                "麦克风识别手机外放｜通话外放/禁止内录时手动选"
+                "系统内部声音｜直播/视频｜MediaProjection",
+                "麦克风识别手机外放｜通话兼容备用",
+                "ROOT 内部通话/VoIP｜使用已保存 App + ALSA 配置"
             }));
-        inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
+        inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         card.addView(inputModeSpinner, matchWrap());
 
@@ -142,7 +143,7 @@ public class MainActivity extends Activity {
                 "Whisper Medium INT8｜多语言高精度｜日英混合★★★★★｜耗电/内存高",
                 "Qwen3-ASR 0.6B INT8｜多语言高精度｜日英混合★★★★★｜模型约 1GB",
                 "Omnilingual ASR 300M INT8｜1600+语言｜小语种优先｜覆盖最广",
-                "Android 系统 SpeechRecognizer｜手机自带服务｜仅麦克风较稳定",
+                "Android 系统 SpeechRecognizer｜只适合麦克风来源",
                 "有道云语音 ASR｜联网备用｜需 AppKey/AppSecret"
             }));
         asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
@@ -168,7 +169,7 @@ public class MainActivity extends Activity {
         TextView asrInfo = text(
             "纯日语：ReazonSpeech / Parakeet → SenseVoice → Vosk。\n" +
             "日英混合：Qwen3-ASR / Whisper → SenseVoice。\n" +
-            "高精度模型需先在“离线模型中心”下载；0.5.1 下载中断后重新点会从断点继续。",
+            "ROOT 通话来源同样送入这些 ASR；必须先在 ROOT 通话兼容中心找到有声音的 PCM。",
             13, Color.rgb(184, 174, 207));
         asrInfo.setPadding(0, dp(4), 0, dp(8));
         card.addView(asrInfo);
@@ -200,7 +201,7 @@ public class MainActivity extends Activity {
             preferences.getBoolean("show_diagnostics", true));
         card.addView(showDiagnostics);
 
-        enableOcr = check("开启屏幕 OCR（直播语音建议关闭）",
+        enableOcr = check("开启屏幕 OCR（直播语音/ROOT 通话建议关闭）",
             preferences.getBoolean("enable_ocr", false));
         card.addView(enableOcr);
 
@@ -247,7 +248,7 @@ public class MainActivity extends Activity {
         card.addView(copy, matchWrap());
 
         status = text(
-            "0.5.1：修复模型容量单位；高精度模型支持断点续传/自动重试；新增历史/SRT、更新检测、ROOT 通话诊断。",
+            "0.5.3：ROOT 通话/VoIP 可作为第三种固定声音来源；支持按 App 保存 ALSA/tinycap PCM 配置。",
             14, Color.rgb(201, 190, 221));
         status.setPadding(0, dp(12), 0, 0);
         card.addView(status);
@@ -258,8 +259,8 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "日语直播准确度优先：系统内部声音 + ReazonSpeech/Parakeet；日英混合用 Qwen3-ASR 或 Whisper。\n" +
-            "通话翻译：无 ROOT 先用外放 + 麦克风；有 KernelSU/Magisk 可进入 ROOT 通话实验室扫描本机音频路由。",
+            "ROOT 通话：先到“ROOT 通话 / VoIP 兼容中心”，让目标 App 保持通话，测试并保存一个有明显音频电平的 PCM；" +
+            "再回来选择 ROOT 来源开始翻译。声音来源仍然不会自动切换。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(4), dp(20), dp(4), 0);
         root.addView(note);
@@ -442,10 +443,17 @@ public class MainActivity extends Activity {
             return;
         }
 
-        boolean microphoneMode = inputModeSpinner.getSelectedItemPosition() == 1;
+        int sourceMode = inputModeSpinner.getSelectedItemPosition();
+        boolean microphoneMode = sourceMode == 1;
+        boolean rootMode = sourceMode == 2;
         String asr = selectedAsrMode();
         if (TranslationService.ASR_SYSTEM.equals(asr) && !microphoneMode) {
-            toast("系统 SpeechRecognizer 只能稳定用于麦克风，请改声音来源或换离线 ASR");
+            toast("系统 SpeechRecognizer 只能用于麦克风来源；ROOT/内部声音请选择本地 ASR 或有道云 ASR");
+            return;
+        }
+        if (rootMode && !RootCallProfileStore.hasSelected(this)) {
+            toast("还没有 ROOT 通话配置，先进入 ROOT 通话 / VoIP 兼容中心扫描并保存");
+            startActivity(new Intent(this, RootCallActivity.class));
             return;
         }
 
@@ -461,10 +469,12 @@ public class MainActivity extends Activity {
             }
         }
 
-        boolean needsProjection = !microphoneMode || enableOcr.isChecked();
+        boolean needsProjection = ((!microphoneMode && !rootMode) || enableOcr.isChecked());
         if (!needsProjection) {
             startTranslationService(0, null);
-            status.setText("正在准备固定麦克风来源 + " + asrLabel(asr));
+            status.setText(rootMode
+                ? "正在准备固定 ROOT 通话来源 + " + asrLabel(asr)
+                : "正在准备固定麦克风来源 + " + asrLabel(asr));
             return;
         }
 
@@ -475,7 +485,9 @@ public class MainActivity extends Activity {
         } else {
             captureIntent = manager.createScreenCaptureIntent();
         }
-        status.setText("请允许共享整个屏幕；系统内部声音捕获需要该权限。");
+        status.setText(rootMode
+            ? "ROOT 声音已经固定；因为你同时开了 OCR，请允许共享整个屏幕。"
+            : "请允许共享整个屏幕；系统内部声音捕获需要该权限。");
         startActivityForResult(captureIntent, REQUEST_CAPTURE);
     }
 
@@ -495,14 +507,15 @@ public class MainActivity extends Activity {
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         boolean youdaoSpeech = preferences.getBoolean("youdao_speech_fallback", true);
-        boolean microphone = inputModeSpinner.getSelectedItemPosition() == 1;
+        int sourceMode = inputModeSpinner.getSelectedItemPosition();
+        String input = sourceMode == 1 ? TranslationService.INPUT_MICROPHONE
+            : sourceMode == 2 ? TranslationService.INPUT_ROOT : TranslationService.INPUT_PLAYBACK;
         String asr = selectedAsrMode();
 
         Intent service = new Intent(this, TranslationService.class)
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_RESULT_CODE, resultCode)
-            .putExtra(TranslationService.EXTRA_INPUT_MODE,
-                microphone ? TranslationService.INPUT_MICROPHONE : TranslationService.INPUT_PLAYBACK)
+            .putExtra(TranslationService.EXTRA_INPUT_MODE, input)
             .putExtra(TranslationService.EXTRA_ASR_MODE, asr)
             .putExtra(TranslationService.EXTRA_LANGUAGE_MODE, selectedLanguageMode())
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
@@ -552,7 +565,7 @@ public class MainActivity extends Activity {
         super.onResume();
         updateEngineStatus();
         if (history != null) updateHistory();
-        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
+        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
         try { startService(new Intent(this, TranslationService.class).setAction(TranslationService.ACTION_UI_VISIBLE)); }
         catch (Exception ignored) {}
     }
@@ -572,9 +585,11 @@ public class MainActivity extends Activity {
     private void updateEngineStatus() {
         if (engineStatus == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
+        String root = RootCallProfileStore.hasSelected(this)
+            ? "\nROOT 配置：" + RootCallProfileStore.selectedPackage(this) : "";
         engineStatus.setText("当前翻译：" + engineLabel(engine) + "\n默认 ASR："
             + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO))
-            + "\n历史：" + HistoryStore.count(this) + " 条");
+            + "\n历史：" + HistoryStore.count(this) + " 条" + root);
     }
 
     private String engineLabel(String engine) {
