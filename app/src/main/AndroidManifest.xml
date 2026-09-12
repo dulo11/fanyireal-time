@@ -8,7 +8,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Android 11+ package visibility: SpeechRecognizer needs to discover the system RecognitionService. -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
@@ -22,6 +21,9 @@
         android:roundIcon="@drawable/ic_launcher"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
+        <activity
+            android:name=".ApiSettingsActivity"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
