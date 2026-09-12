@@ -2,6 +2,8 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -47,23 +49,23 @@ jobs:
       - name: Copy Release APK
         run: |
           test -f app/build/outputs/apk/release/app-release.apk || exit 1
-          cp app/build/outputs/apk/release/app-release.apk FloatingTranslator-v0.4.3-release.apk
+          cp app/build/outputs/apk/release/app-release.apk FloatingTranslator-v0.5.0-release.apk
 
       - name: Verify APK Signature
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -n "$APKSIGNER" || exit 1
-          "$APKSIGNER" verify --verbose --print-certs FloatingTranslator-v0.4.3-release.apk
+          "$APKSIGNER" verify --verbose --print-certs FloatingTranslator-v0.5.0-release.apk
 
       - name: Show APK information
         run: |
-          ls -lh FloatingTranslator-v0.4.3-release.apk
-          sha256sum FloatingTranslator-v0.4.3-release.apk
+          ls -lh FloatingTranslator-v0.5.0-release.apk
+          sha256sum FloatingTranslator-v0.5.0-release.apk
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: FloatingTranslator-v0.4.3-Signed
-          path: FloatingTranslator-v0.4.3-release.apk
+          name: FloatingTranslator-v0.5.0-Signed
+          path: FloatingTranslator-v0.5.0-release.apk
           if-no-files-found: error
           retention-days: 30
