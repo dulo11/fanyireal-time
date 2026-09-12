@@ -52,11 +52,11 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!preferences.getBoolean("v040_migrated", false)) {
+        if (!preferences.getBoolean("v041_migrated", false)) {
             preferences.edit()
-                .putBoolean("v040_migrated", true)
+                .putBoolean("v041_migrated", true)
+                .putBoolean("prefer_offline", true)
                 .putBoolean("enable_ocr", false)
-                .putString("engine_id", TranslationRouter.AUTO)
                 .apply();
         }
         setContentView(buildUi());
@@ -70,10 +70,11 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("浮译 0.4.0", 34, Color.WHITE);
+        TextView title = text("浮译 0.4.1", 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
-        TextView subtitle = text("多引擎 · 系统声音 · 麦克风 · 可选屏幕 OCR", 16,
+
+        TextView subtitle = text("离线优先 · Vosk 语音识别 · ML Kit 翻译 · 在线备用", 15,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -88,7 +89,7 @@ public class MainActivity extends Activity {
         card.addView(engineStatus);
         updateEngineStatus();
 
-        Button engineSettings = secondaryButton("⚙ 翻译引擎 / API 设置");
+        Button engineSettings = secondaryButton("⚙ 翻译引擎 / API 备用设置");
         engineSettings.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
         card.addView(engineSettings, matchWrap());
 
@@ -123,16 +124,16 @@ public class MainActivity extends Activity {
         showOriginal = check("同时显示原文", preferences.getBoolean("show_original", true));
         card.addView(showOriginal);
 
-        enableOcr = check("开启屏幕 OCR（较耗电；直播语音翻译建议先关闭）",
+        enableOcr = check("开启屏幕 OCR（默认关闭；会增加耗电）",
             preferences.getBoolean("enable_ocr", false));
         card.addView(enableOcr);
 
-        autoMicFallback = check("系统声音失败时自动切麦克风/云语音兜底",
+        autoMicFallback = check("系统声音抓不到时自动切麦克风兜底",
             preferences.getBoolean("auto_mic_fallback", true));
         card.addView(autoMicFallback);
 
-        preferOffline = check("系统语音识别优先离线",
-            preferences.getBoolean("prefer_offline", false));
+        preferOffline = check("系统语音兜底时也优先离线",
+            preferences.getBoolean("prefer_offline", true));
         card.addView(preferOffline);
 
         card.addView(label("字幕大小"));
@@ -145,7 +146,7 @@ public class MainActivity extends Activity {
         overlay.setOnClickListener(v -> openOverlaySettings());
         card.addView(overlay, matchWrap());
 
-        Button model = secondaryButton("② 下载 ML Kit 离线备用模型");
+        Button model = secondaryButton("② 下载当前 ML Kit 离线翻译模型");
         model.setOnClickListener(v -> downloadCurrentModel(model));
         card.addView(model, matchWrap());
 
@@ -159,9 +160,8 @@ public class MainActivity extends Activity {
 
         Button stop = secondaryButton("停止翻译");
         stop.setOnClickListener(v -> {
-            Intent intent = new Intent(this, TranslationService.class)
-                .setAction(TranslationService.ACTION_STOP);
-            startService(intent);
+            startService(new Intent(this, TranslationService.class)
+                .setAction(TranslationService.ACTION_STOP));
             status.setText("已停止");
         });
         card.addView(stop, matchWrap());
@@ -170,7 +170,8 @@ public class MainActivity extends Activity {
         copy.setOnClickListener(v -> copyLastTranslation());
         card.addView(copy, matchWrap());
 
-        status = text("建议：先测试翻译引擎。直播语音先关闭 OCR，确认语音链路稳定后再按需开启。",
+        status = text(
+            "首次使用一种离线语音语言时，会自动下载 Vosk 小模型；下载一次后即可断网使用。",
             14, Color.rgb(201, 190, 221));
         status.setPadding(0, dp(12), 0, 0);
         card.addView(status);
@@ -181,13 +182,16 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "0.4.0：加入自动 / ML Kit / 百度 / 有道 / Azure / DeepL / Google Cloud / LibreTranslate。\n" +
-            "自动模式会按语言方向优先使用已配置的在线引擎，失败后自动回退。\n" +
-            "如果系统没有语音识别服务，并且你已配置有道 API，可启用有道云语音翻译兜底。\n" +
-            "OCR 默认关闭，并降低分辨率与频率；开启时会过滤明显不属于原语言的界面文字，避免整屏乱翻。",
+            "0.4.1 默认链路：\n" +
+            "声音 → Vosk 本地离线语音识别 → ML Kit 本地离线翻译。\n" +
+            "只有离线环节不可用时，才会尝试系统语音服务或你自己配置的在线 API。\n\n" +
+            "Vosk 当前内置下载配置支持：" + OfflineSpeechEngine.supportedSummary() + "。\n" +
+            "日语小模型约 48 MB，英语约 40 MB，中文约 42 MB；模型保存在应用私有目录。\n" +
+            "OCR 仍默认关闭，避免整屏文字反复识别导致卡顿和乱翻。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(4), dp(20), dp(4), 0);
         root.addView(note);
+
         return scroll;
     }
 
@@ -208,13 +212,13 @@ public class MainActivity extends Activity {
             return;
         }
         button.setEnabled(false);
-        status.setText("正在下载 ML Kit 备用模型……");
+        status.setText("正在下载 ML Kit 离线翻译模型……");
         Translator translator = Translation.getClient(new TranslatorOptions.Builder()
             .setSourceLanguage(source.mlKitTag)
             .setTargetLanguage(target.mlKitTag)
             .build());
         translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-            .addOnSuccessListener(x -> status.setText("✅ ML Kit 离线备用模型已就绪"))
+            .addOnSuccessListener(x -> status.setText("✅ ML Kit 离线翻译模型已就绪"))
             .addOnFailureListener(e -> status.setText("❌ 模型下载失败：" + safe(e)))
             .addOnCompleteListener(t -> {
                 button.setEnabled(true);
@@ -231,11 +235,12 @@ public class MainActivity extends Activity {
             return;
         }
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
-        TranslationRouter router = new TranslationRouter(this, source.mlKitTag, target.mlKitTag, engine);
+        OfflineFirstTranslationRouter router = new OfflineFirstTranslationRouter(
+            this, source.mlKitTag, target.mlKitTag, engine);
         String sample = sampleFor(source.mlKitTag);
         button.setEnabled(false);
-        status.setText("测试中：" + TranslationRouter.engineLabel(engine));
-        router.translate(sample, new TranslationRouter.Callback() {
+        status.setText("测试中：" + engineLabel(engine));
+        router.translate(sample, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 status.setText("✅ " + engineName + "\n原文：" + sample + "\n译文：" + translated);
                 preferences.edit()
@@ -257,7 +262,7 @@ public class MainActivity extends Activity {
 
     private String sampleFor(String language) {
         switch (language) {
-            case "zh": return "你好，这是翻译测试。";
+            case "zh": return "你好，这是离线翻译测试。";
             case "ja": return "こんにちは、今日はいい天気ですね。";
             case "vi": return "Xin chào, hôm nay thời tiết rất đẹp.";
             case "tl": return "Kumusta, maganda ang panahon ngayon.";
@@ -279,6 +284,7 @@ public class MainActivity extends Activity {
             toast("请允许录音权限");
             return;
         }
+
         LanguageOption source = (LanguageOption) sourceSpinner.getSelectedItem();
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         if (source.mlKitTag.equals(target.mlKitTag)) {
@@ -290,18 +296,19 @@ public class MainActivity extends Activity {
         boolean needsProjection = !microphoneMode || enableOcr.isChecked();
         if (!needsProjection) {
             startTranslationService(0, null);
-            status.setText("麦克风翻译已启动");
+            status.setText("正在准备离线麦克风翻译……");
             return;
         }
 
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         Intent captureIntent;
         if (Build.VERSION.SDK_INT >= 34) {
-            captureIntent = manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay());
+            captureIntent = manager.createScreenCaptureIntent(
+                MediaProjectionConfig.createConfigForDefaultDisplay());
         } else {
             captureIntent = manager.createScreenCaptureIntent();
         }
-        status.setText("请允许共享整个屏幕；系统声音/OCR 需要此权限。");
+        status.setText("请允许共享整个屏幕；系统声音捕获需要该权限。");
         startActivityForResult(captureIntent, REQUEST_CAPTURE);
     }
 
@@ -313,7 +320,7 @@ public class MainActivity extends Activity {
             return;
         }
         startTranslationService(resultCode, data);
-        status.setText("实时翻译已启动，可以切换到视频/直播 App");
+        status.setText("离线实时翻译正在准备，可以切到视频/直播 App");
     }
 
     private void startTranslationService(int resultCode, Intent resultData) {
@@ -373,7 +380,12 @@ public class MainActivity extends Activity {
     private void updateEngineStatus() {
         if (engineStatus == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
-        engineStatus.setText("当前引擎：" + TranslationRouter.engineLabel(engine));
+        engineStatus.setText("当前翻译：" + engineLabel(engine));
+    }
+
+    private String engineLabel(String engine) {
+        if (TranslationRouter.AUTO.equals(engine)) return "自动（ML Kit 离线优先，在线只兜底）";
+        return TranslationRouter.engineLabel(engine);
     }
 
     private void saveSettings() {
@@ -470,11 +482,11 @@ public class MainActivity extends Activity {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
-    private void toast(String value) {
-        Toast.makeText(this, value, Toast.LENGTH_SHORT).show();
-    }
-
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void toast(String value) {
+        Toast.makeText(this, value, Toast.LENGTH_SHORT).show();
     }
 }
