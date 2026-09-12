@@ -2,14 +2,25 @@ package com.zhou.floatingtranslator;
 
 import android.app.Activity;
 import android.app.Application;
-import android.os.Bundle;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Bundle;
 
-/** Prevents MediaProjection/OCR from recursively processing the app's own UI. */
+/** Prevents MediaProjection/OCR from recursively processing the app's own UI and records history. */
 public final class FloatingTranslatorApp extends Application implements Application.ActivityLifecycleCallbacks {
+    private SharedPreferences.OnSharedPreferenceChangeListener historyListener;
+
     @Override public void onCreate() {
         super.onCreate();
         registerActivityLifecycleCallbacks(this);
+        SharedPreferences prefs = getSharedPreferences("floating_translator", MODE_PRIVATE);
+        historyListener = (preferences, key) -> {
+            if (!"last_translation".equals(key)) return;
+            String translated = preferences.getString("last_translation", "");
+            String original = preferences.getString("last_original", "");
+            HistoryStore.append(this, original, translated);
+        };
+        prefs.registerOnSharedPreferenceChangeListener(historyListener);
     }
 
     private void signal(Activity activity, String action) {
