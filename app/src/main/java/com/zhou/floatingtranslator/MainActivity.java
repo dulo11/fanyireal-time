@@ -39,6 +39,8 @@ public class MainActivity extends Activity {
     private Spinner inputModeSpinner;
     private CheckBox showOriginal;
     private CheckBox preferOffline;
+    private CheckBox enableOcr;
+    private CheckBox autoMicFallback;
     private SeekBar fontSize;
     private TextView status;
     private TextView history;
@@ -60,28 +62,28 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(28));
         scroll.addView(root);
 
-        TextView title = text("浮译", 34, Color.WHITE);
+        TextView title = text("浮译 0.3.1", 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
-        TextView subtitle = text("系统声音 · 免提通话 · 实时悬浮翻译", 16, Color.rgb(201,190,221));
+        TextView subtitle = text("系统声音 · 自动麦克风兜底 · 屏幕 OCR · 实时悬浮翻译", 16, Color.rgb(201,190,221));
         subtitle.setPadding(0, dp(4), 0, dp(22));
         root.addView(subtitle);
 
         LinearLayout card = column(14);
         card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        card.setBackgroundResource(com.zhou.floatingtranslator.R.drawable.panel);
+        card.setBackgroundResource(R.drawable.panel);
         root.addView(card, new LinearLayout.LayoutParams(-1, -2));
 
         card.addView(label("声音来源"));
         inputModeSpinner = new Spinner(this);
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
-            new String[]{"系统内部声音（视频/直播/游戏）", "麦克风/免提通话（实验功能）"}));
+            new String[]{"系统内部声音（视频/直播/游戏）", "麦克风/免提通话"}));
         inputModeSpinner.setSelection(preferences.getInt("input_mode", 0));
         inputModeSpinner.setBackgroundColor(Color.rgb(51,45,73));
         card.addView(inputModeSpinner, matchWrap());
 
-        card.addView(label("声音语言"));
+        card.addView(label("原语言（同时用于语音识别和屏幕 OCR）"));
         sourceSpinner = spinner();
         sourceSpinner.setSelection(preferences.getInt("source_index", 1));
         card.addView(sourceSpinner, matchWrap());
@@ -106,6 +108,18 @@ public class MainActivity extends Activity {
         showOriginal.setChecked(preferences.getBoolean("show_original", true));
         card.addView(showOriginal);
 
+        enableOcr = new CheckBox(this);
+        enableOcr.setText("开启屏幕 OCR（识别视频字幕/直播文字/评论并翻译）");
+        enableOcr.setTextColor(Color.WHITE);
+        enableOcr.setChecked(preferences.getBoolean("enable_ocr", true));
+        card.addView(enableOcr);
+
+        autoMicFallback = new CheckBox(this);
+        autoMicFallback.setText("系统声音抓不到时，8 秒后自动切到麦克风/扬声器兜底");
+        autoMicFallback.setTextColor(Color.WHITE);
+        autoMicFallback.setChecked(preferences.getBoolean("auto_mic_fallback", true));
+        card.addView(autoMicFallback);
+
         preferOffline = new CheckBox(this);
         preferOffline.setText("语音识别优先离线（更省流量，准确度可能降低）");
         preferOffline.setTextColor(Color.WHITE);
@@ -123,7 +137,7 @@ public class MainActivity extends Activity {
         overlay.setOnClickListener(v -> openOverlaySettings());
         card.addView(overlay, matchWrap());
 
-        Button model = secondaryButton("② 下载当前语言模型");
+        Button model = secondaryButton("② 下载当前翻译语言模型");
         model.setOnClickListener(v -> downloadCurrentModel(model));
         card.addView(model, matchWrap());
 
@@ -150,7 +164,7 @@ public class MainActivity extends Activity {
         });
         card.addView(clear, matchWrap());
 
-        status = text("首次使用：先授权悬浮窗，再下载模型。", 14, Color.rgb(201,190,221));
+        status = text("首次使用：先授权悬浮窗，再下载翻译模型。OCR 模型已经打包在 APK 内。", 14, Color.rgb(201,190,221));
         status.setPadding(0, dp(14), 0, 0);
         card.addView(status);
 
@@ -160,13 +174,13 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "支持 ML Kit 全部 59 种语言。常用语言排列在前，其他语言继续向下滑动选择。\n\n" +
-            "系统声音模式：每次启动都会显示“开始录制或投射”确认，这是 Android 的安全要求。" +
-            "部分 App 会主动禁止内部音频捕获。\n\n" +
-            "免提通话模式（实验）：通话时打开免提，让本机麦克风收听对方声音；受回声、噪声、手机系统限制影响，" +
-            "不能保证所有电话/通话 App 都可用，也不会直接读取通话内部音频。\n\n" +
-            "部分语言可能没有可用的系统语音包。" +
-            "文字翻译由 Google ML Kit 设备端模型提供。",
+            "0.3.1 新增：屏幕 OCR、系统声音输入电平、内部声音被禁止时自动切换麦克风。\n\n" +
+            "屏幕 OCR 为设备端识别，支持拉丁文字、中文、日文、韩文和天城文脚本；这些 OCR 模型已打包进 APK，" +
+            "不需要首次联网下载。翻译本身仍使用你下载的 ML Kit 翻译语言模型。\n\n" +
+            "系统声音模式：每次启动都会出现 Android 的“开始录制或投射”确认。部分 App 会禁止内部音频捕获；" +
+            "开启自动兜底后，如果连续 8 秒检测不到可捕获声音，会改用手机麦克风听外放声音。\n\n" +
+            "麦克风模式：如果同时开启 OCR，也会请求屏幕投射权限，因为 OCR 需要读取屏幕图像。\n\n" +
+            "受 Android DRM/安全策略保护的画面可能无法被 OCR 或内部声音捕获。",
             14, Color.rgb(201,190,221));
         note.setPadding(dp(4), dp(22), dp(4), 0);
         root.addView(note);
@@ -190,14 +204,14 @@ public class MainActivity extends Activity {
             return;
         }
         button.setEnabled(false);
-        status.setText("正在下载模型，请保持网络连接……");
+        status.setText("正在下载翻译模型，请保持网络连接……");
         Translator translator = Translation.getClient(new TranslatorOptions.Builder()
             .setSourceLanguage(source.mlKitTag)
             .setTargetLanguage(target.mlKitTag)
             .build());
         translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
             .addOnSuccessListener(x -> {
-                status.setText("模型已就绪，之后可以离线翻译");
+                status.setText("翻译模型已就绪，之后可以离线翻译");
                 button.setEnabled(true);
                 translator.close();
             })
@@ -225,12 +239,16 @@ public class MainActivity extends Activity {
             toast("请选择不同的原语言和目标语言");
             return;
         }
-        if (inputModeSpinner.getSelectedItemPosition() == 1) {
+
+        boolean microphoneMode = inputModeSpinner.getSelectedItemPosition() == 1;
+        boolean needsScreenProjection = !microphoneMode || enableOcr.isChecked();
+        if (!needsScreenProjection) {
             startTranslationService(0, null);
             status.setText("麦克风翻译已启动；电话使用时请开启免提");
-            toast("免提通话翻译正在运行");
+            toast("麦克风翻译正在运行");
             return;
         }
+
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE);
     }
@@ -238,7 +256,7 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQUEST_CAPTURE || resultCode != RESULT_OK || data == null) {
-            if (requestCode == REQUEST_CAPTURE) status.setText("你取消了系统声音授权");
+            if (requestCode == REQUEST_CAPTURE) status.setText("你取消了屏幕/声音捕获授权");
             return;
         }
         startTranslationService(resultCode, data);
@@ -253,12 +271,16 @@ public class MainActivity extends Activity {
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_RESULT_CODE, resultCode)
             .putExtra(TranslationService.EXTRA_INPUT_MODE,
-                inputModeSpinner.getSelectedItemPosition() == 1 ? TranslationService.INPUT_MICROPHONE : TranslationService.INPUT_PLAYBACK)
+                inputModeSpinner.getSelectedItemPosition() == 1
+                    ? TranslationService.INPUT_MICROPHONE
+                    : TranslationService.INPUT_PLAYBACK)
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
+            .putExtra(TranslationService.EXTRA_ENABLE_OCR, enableOcr.isChecked())
+            .putExtra(TranslationService.EXTRA_AUTO_MIC_FALLBACK, autoMicFallback.isChecked())
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
         if (resultData != null) service.putExtra(TranslationService.EXTRA_RESULT_DATA, resultData);
         startForegroundService(service);
@@ -295,6 +317,8 @@ public class MainActivity extends Activity {
             .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
             .putBoolean("show_original", showOriginal.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
+            .putBoolean("enable_ocr", enableOcr.isChecked())
+            .putBoolean("auto_mic_fallback", autoMicFallback.isChecked())
             .putInt("font_size", fontSize.getProgress())
             .apply();
     }
@@ -330,12 +354,38 @@ public class MainActivity extends Activity {
     }
     private TextView label(String value) { return text(value, 14, Color.rgb(201,190,221)); }
     private TextView text(String value, float sp, int color) {
-        TextView t = new TextView(this); t.setText(value); t.setTextSize(sp); t.setTextColor(color); return t;
+        TextView t = new TextView(this);
+        t.setText(value);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        return t;
     }
-    private Button primaryButton(String value) { Button b=button(value); b.setBackgroundResource(R.drawable.button_primary); return b; }
-    private Button secondaryButton(String value) { Button b=button(value); b.setBackgroundResource(R.drawable.button_secondary); return b; }
-    private Button button(String value) { Button b=new Button(this); b.setText(value); b.setTextColor(Color.WHITE); b.setAllCaps(false); return b; }
-    private LinearLayout.LayoutParams matchWrap() { LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2); p.setMargins(0,dp(6),0,dp(6)); return p; }
-    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    private void toast(String value) { Toast.makeText(this, value, Toast.LENGTH_SHORT).show(); }
+    private Button primaryButton(String value) {
+        Button b = button(value);
+        b.setBackgroundResource(R.drawable.button_primary);
+        return b;
+    }
+    private Button secondaryButton(String value) {
+        Button b = button(value);
+        b.setBackgroundResource(R.drawable.button_secondary);
+        return b;
+    }
+    private Button button(String value) {
+        Button b = new Button(this);
+        b.setText(value);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
+        return b;
+    }
+    private LinearLayout.LayoutParams matchWrap() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.setMargins(0, dp(6), 0, dp(6));
+        return p;
+    }
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+    private void toast(String value) {
+        Toast.makeText(this, value, Toast.LENGTH_SHORT).show();
+    }
 }
