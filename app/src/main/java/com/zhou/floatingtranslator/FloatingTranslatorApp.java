@@ -6,7 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
-/** Prevents MediaProjection/OCR from recursively processing the app's own UI and records history. */
+/** Prevents translation overlays from covering the app UI and records translation history. */
 public final class FloatingTranslatorApp extends Application implements Application.ActivityLifecycleCallbacks {
     private SharedPreferences.OnSharedPreferenceChangeListener historyListener;
 
@@ -24,14 +24,13 @@ public final class FloatingTranslatorApp extends Application implements Applicat
     }
 
     private void signal(Activity activity, String action) {
-        // All activities belong to FloatingTranslator, so hide/pause the overlay while any
-        // app screen is in front. This prevents OCR from reading the new home dashboard too.
         boolean running = getSharedPreferences("floating_translator", MODE_PRIVATE)
             .getBoolean("service_running", false);
         if (!running) return;
-        try {
-            startService(new Intent(this, TranslationService.class).setAction(action));
-        } catch (Exception ignored) {}
+        try { startService(new Intent(this, TranslationService.class).setAction(action)); }
+        catch (Exception ignored) {}
+        try { startService(new Intent(this, RootCallTranslationService.class).setAction(action)); }
+        catch (Exception ignored) {}
     }
 
     @Override public void onActivityResumed(Activity activity) {
