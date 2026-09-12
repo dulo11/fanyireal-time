@@ -18,6 +18,7 @@ import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig;
 import com.k2fsa.sherpa.onnx.SpeechSegment;
+import com.k2fsa.sherpa.onnx.TenVadModelConfig;
 import com.k2fsa.sherpa.onnx.Vad;
 import com.k2fsa.sherpa.onnx.VadModelConfig;
 
@@ -133,7 +134,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 try {
                     r = buildRecognizer(meta, modelDir, true);
                 } catch (Throwable hotwordFailure) {
-                    // A malformed/native-unsupported hotword file must never make ASR unusable.
                     postStatus("热词原生偏置暂不可用，继续加载普通识别器");
                     r = buildRecognizer(meta, modelDir, false);
                 }
@@ -171,11 +171,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     /** Accept 16 kHz, mono, PCM16 little-endian audio plus its observed peak. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
         if (!isReady() || pcm == null || length <= 0) return;
-        if (neuralVad && vad != null) {
-            acceptNeuralVad(pcm, length);
-        } else {
-            acceptEnergyFallback(pcm, length, peak);
-        }
+        if (neuralVad && vad != null) acceptNeuralVad(pcm, length);
+        else acceptEnergyFallback(pcm, length, peak);
     }
 
     private void acceptNeuralVad(byte[] pcm, int length) {
@@ -239,6 +236,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         if (!naturalEnd && !forcedEnd) return;
 
         byte[] segment = speech.toByteArray();
+        long completedSegmentMs = segmentMs;
         boolean dedupe = currentSegmentHasOverlap;
         boolean keepOverlap = forcedEnd && !naturalEnd && voiced && overlapMs() > 0L;
         byte[] overlap = keepOverlap ? tailPcm(segment, overlapMs()) : new byte[0];
@@ -255,7 +253,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             float[] raw = pcm16ToFloat(segment);
             float[] review = merge(reviewPrefix, raw);
             queueDecode(raw, dedupe, review,
-                PROFILE_ACCURACY.equals(conversationProfile) && (forcedEnd || segmentMs >= 4200L),
+                PROFILE_ACCURACY.equals(conversationProfile) && (forcedEnd || completedSegmentMs >= 4200L),
                 pcmDurationMs(segment.length));
             reviewTail = tailSamples(raw, reviewContextMs());
         }
@@ -510,22 +508,14 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         float minSilence = PROFILE_ACCURACY.equals(conversationProfile) ? 0.58f : 0.42f;
         float minSpeech = PROFILE_ACCURACY.equals(conversationProfile) ? 0.18f : 0.22f;
         float maxSpeech = PROFILE_ACCURACY.equals(conversationProfile) ? 11.5f : 7.5f;
-        SileroVadModelConfig silero = SileroVadModelConfig.builder()
-            .setModel(modelFile.getAbsolutePath())
-            .setThreshold(threshold)
-            .setMinSilenceDuration(minSilence)
-            .setMinSpeechDuration(minSpeech)
-            .setWindowSize(VAD_WINDOW)
-            .setMaxSpeechDuration(maxSpeech)
-            .build();
-        VadModelConfig config = VadModelConfig.builder()
-            .setSileroVadModelConfig(silero)
-            .setSampleRate(SAMPLE_RATE)
-            .setNumThreads(1)
-            .setDebug(false)
-            .setProvider("cpu")
-            .build();
-        return new Vad(config);
+        SileroVadModelConfig silero = new SileroVadModelConfig(
+            modelFile.getAbsolutePath(), threshold, minSilence, minSpeech, VAD_WINDOW, maxSpeech);
+        TenVadModelConfig ten = new TenVadModelConfig("", 0.5f, 0.25f, 0.25f, 256, 5.0f);
+        VadModelConfig config = new VadModelConfig(
+            silero, ten, SAMPLE_RATE, 1, "cpu", false);
+        // The Android AAR exposes the Kotlin constructor as (AssetManager?, VadModelConfig).
+        // null selects file-system model loading rather than assets.
+        return new Vad(null, config);
     }
 
     private File writeHotwordsFile() {
