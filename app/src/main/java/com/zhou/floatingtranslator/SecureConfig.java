@@ -20,8 +20,19 @@ public final class SecureConfig {
     public static final String BAIDU_SECRET = "baidu_secret";
     public static final String YOUDAO_APP_KEY = "youdao_app_key";
     public static final String YOUDAO_SECRET = "youdao_secret";
+
+    // Azure slot 1 deliberately keeps the original key names for seamless migration.
     public static final String AZURE_KEY = "azure_key";
     public static final String AZURE_REGION = "azure_region";
+    public static final String AZURE_KEY_1 = AZURE_KEY;
+    public static final String AZURE_REGION_1 = AZURE_REGION;
+    public static final String AZURE_KEY_2 = "azure_key_2";
+    public static final String AZURE_REGION_2 = "azure_region_2";
+    public static final String AZURE_KEY_3 = "azure_key_3";
+    public static final String AZURE_REGION_3 = "azure_region_3";
+    public static final String AZURE_KEY_4 = "azure_key_4";
+    public static final String AZURE_REGION_4 = "azure_region_4";
+
     public static final String ALIYUN_ACCESS_KEY_ID = "aliyun_access_key_id";
     public static final String ALIYUN_ACCESS_KEY_SECRET = "aliyun_access_key_secret";
     public static final String DEEPL_KEY = "deepl_key";
@@ -31,7 +42,9 @@ public final class SecureConfig {
 
     public static final String[] ALL_KEYS = {
         BAIDU_APP_ID, BAIDU_SECRET, YOUDAO_APP_KEY, YOUDAO_SECRET,
-        AZURE_KEY, AZURE_REGION, ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET,
+        AZURE_KEY_1, AZURE_REGION_1, AZURE_KEY_2, AZURE_REGION_2,
+        AZURE_KEY_3, AZURE_REGION_3, AZURE_KEY_4, AZURE_REGION_4,
+        ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET,
         DEEPL_KEY, GOOGLE_KEY, LIBRE_ENDPOINT, LIBRE_KEY
     };
 
@@ -79,6 +92,41 @@ public final class SecureConfig {
 
     public boolean has(String name) {
         return !get(name).isEmpty();
+    }
+
+    public static String azureKeyName(int slot) {
+        switch (slot) {
+            case 2: return AZURE_KEY_2;
+            case 3: return AZURE_KEY_3;
+            case 4: return AZURE_KEY_4;
+            case 1:
+            default: return AZURE_KEY_1;
+        }
+    }
+
+    public static String azureRegionName(int slot) {
+        switch (slot) {
+            case 2: return AZURE_REGION_2;
+            case 3: return AZURE_REGION_3;
+            case 4: return AZURE_REGION_4;
+            case 1:
+            default: return AZURE_REGION_1;
+        }
+    }
+
+    public boolean hasAnyAzureProfile() {
+        for (int slot = 1; slot <= 4; slot++) {
+            if (has(azureKeyName(slot))) return true;
+        }
+        return false;
+    }
+
+    public int configuredAzureProfileCount() {
+        int count = 0;
+        for (int slot = 1; slot <= 4; slot++) {
+            if (has(azureKeyName(slot))) count++;
+        }
+        return count;
     }
 
     /** Clears every API credential/value stored by this app. */
