@@ -12,6 +12,8 @@ public final class FloatingTranslatorApp extends Application implements Applicat
 
     @Override public void onCreate() {
         super.onCreate();
+        // Capture the process baseline before any optional ASR model is loaded.
+        RuntimeMemory.captureProcessBaseline(this);
         registerActivityLifecycleCallbacks(this);
         SharedPreferences prefs = getSharedPreferences("floating_translator", MODE_PRIVATE);
         historyListener = (preferences, key) -> {
