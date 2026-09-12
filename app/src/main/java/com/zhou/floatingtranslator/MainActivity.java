@@ -40,6 +40,7 @@ public class MainActivity extends Activity {
     private Spinner sourceSpinner;
     private Spinner targetSpinner;
     private Spinner inputModeSpinner;
+    private Spinner asrModeSpinner;
     private CheckBox showOriginal;
     private CheckBox preferOffline;
     private CheckBox enableOcr;
@@ -51,14 +52,13 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!preferences.getBoolean("v042_migrated", false)) {
+        if (!preferences.getBoolean("v043_migrated", false)) {
             preferences.edit()
-                .putBoolean("v042_migrated", true)
+                .putBoolean("v043_migrated", true)
                 .putBoolean("prefer_offline", true)
                 .putBoolean("enable_ocr", false)
-                // 0.4.1 could switch to microphone simply because the stream was quiet.
-                // 0.4.2 deliberately disables that behaviour. The user chooses the source.
                 .putBoolean("auto_mic_fallback", false)
+                .putString("asr_mode", TranslationService.ASR_AUTO)
                 .apply();
         }
         setContentView(buildUi());
@@ -72,11 +72,11 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("浮译 0.4.2", 34, Color.WHITE);
+        TextView title = text("浮译 0.4.3", 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
-        TextView subtitle = text("离线优先 · 手动声音来源 · Vosk ASR · ML Kit 翻译", 15,
+        TextView subtitle = text("固定声音来源 · ASR 可选 · 流式识别翻译 · 离线优先", 15,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -99,33 +99,39 @@ public class MainActivity extends Activity {
         modelManager.setOnClickListener(v -> startActivity(new Intent(this, ModelManagerActivity.class)));
         card.addView(modelManager, matchWrap());
 
-        card.addView(label("声音来源（现在完全由你手动选择，不再因沉默自动切换）"));
+        card.addView(label("固定声音来源（选中后一直使用，绝不自动切换）"));
         inputModeSpinner = new Spinner(this);
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "系统内部声音（直播/视频；不自动切麦克风）",
-                "麦克风识别手机外放（App 禁止内录时用）"
+                "系统内部声音（直播/视频）",
+                "麦克风识别手机外放"
             }));
         inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         card.addView(inputModeSpinner, matchWrap());
 
-        Button choosePlayback = secondaryButton("使用系统内部声音");
-        choosePlayback.setOnClickListener(v -> {
-            inputModeSpinner.setSelection(0);
-            saveSettings();
-            status.setText("已选择系统内部声音。不会因为主播停顿而自动切麦克风。\n点击“开始实时翻译”重新启动即可。");
-        });
-        card.addView(choosePlayback, matchWrap());
+        card.addView(label("语音识别 ASR（全部显示，可固定选择）"));
+        asrModeSpinner = new Spinner(this);
+        asrModeSpinner.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item,
+            new String[]{
+                "自动：Vosk 离线 → 系统识别 → 有道云",
+                "Vosk 内置离线 ASR",
+                "Android 系统 SpeechRecognizer",
+                "有道云语音 ASR（需 AppKey/AppSecret）"
+            }));
+        asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
+        asrModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
+        card.addView(asrModeSpinner, matchWrap());
 
-        Button chooseMic = secondaryButton("使用麦克风识别手机外放");
-        chooseMic.setOnClickListener(v -> {
-            inputModeSpinner.setSelection(1);
-            saveSettings();
-            status.setText("已选择麦克风外放识别。请让直播声音从手机扬声器播放，点击“开始实时翻译”重新启动。");
-        });
-        card.addView(chooseMic, matchWrap());
+        TextView asrInfo = text(
+            "已接入：Vosk 离线 ASR、Android 系统 SpeechRecognizer、有道云语音 ASR。\n" +
+            "未接入：sherpa-onnx / Whisper（后续大模型页再加入，不假装已经可用）。\n" +
+            "注意：系统 SpeechRecognizer 只能稳定用于麦克风；系统内部声音建议选 Vosk 或有道云。",
+            13, Color.rgb(184, 174, 207));
+        asrInfo.setPadding(0, dp(4), 0, dp(8));
+        card.addView(asrInfo);
 
         card.addView(label("原语言"));
         sourceSpinner = spinner();
@@ -149,11 +155,11 @@ public class MainActivity extends Activity {
         showOriginal = check("同时显示原文", preferences.getBoolean("show_original", true));
         card.addView(showOriginal);
 
-        enableOcr = check("开启屏幕 OCR（默认关闭；直播语音建议关闭）",
+        enableOcr = check("开启屏幕 OCR（直播语音建议关闭）",
             preferences.getBoolean("enable_ocr", false));
         card.addView(enableOcr);
 
-        preferOffline = check("系统语音备用时也优先离线",
+        preferOffline = check("系统 SpeechRecognizer 也请求离线模式",
             preferences.getBoolean("prefer_offline", true));
         card.addView(preferOffline);
 
@@ -192,7 +198,7 @@ public class MainActivity extends Activity {
         card.addView(copy, matchWrap());
 
         status = text(
-            "0.4.2 已取消“8 秒没声音就自动改麦克风”。系统声音和麦克风外放现在必须手动选。",
+            "0.4.3：声音来源固定；ASR 可固定选择；Vosk 的中间识别结果也会流式翻译，不再必须等对方停下来才出译文。",
             14, Color.rgb(201, 190, 221));
         status.setPadding(0, dp(12), 0, 0);
         card.addView(status);
@@ -203,12 +209,9 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "建议直播日语→中文先这样测：\n" +
-            "① OCR 关闭；② 日语→中文；③ 先选系统内部声音。\n" +
-            "如果悬浮窗声音电平一直为 0，再手动改成“麦克风识别手机外放”。\n\n" +
-            "语音：Vosk 本地离线优先；翻译：ML Kit 本地离线优先。\n" +
-            "下载过的 Vosk 和 ML Kit 模型可在“离线模型管理”里查看和删除。\n" +
-            "大模型（NLLB / sherpa-onnx 高精度 ASR）后续按需下载，不会强塞进基础 APK。",
+            "日语直播推荐：系统内部声音 + Vosk 内置离线 ASR + 日语→中文 + OCR 关闭。\n" +
+            "如果某个 App 禁止内录，再手动切成“麦克风识别手机外放”。\n\n" +
+            "快语速/长句：现在每约 1.2 秒会对最新稳定的 Vosk partial 做一次流式翻译，最终结果出来后再覆盖成完整译文；长文本还会分段翻译后合并。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(4), dp(20), dp(4), 0);
         root.addView(note);
@@ -223,6 +226,23 @@ public class MainActivity extends Activity {
         s.setAdapter(adapter);
         s.setBackgroundColor(Color.rgb(51, 45, 73));
         return s;
+    }
+
+    private int asrIndex(String mode) {
+        if (TranslationService.ASR_VOSK.equals(mode)) return 1;
+        if (TranslationService.ASR_SYSTEM.equals(mode)) return 2;
+        if (TranslationService.ASR_YOUDAO.equals(mode)) return 3;
+        return 0;
+    }
+
+    private String selectedAsrMode() {
+        int pos = asrModeSpinner == null ? 0 : asrModeSpinner.getSelectedItemPosition();
+        switch (pos) {
+            case 1: return TranslationService.ASR_VOSK;
+            case 2: return TranslationService.ASR_SYSTEM;
+            case 3: return TranslationService.ASR_YOUDAO;
+            default: return TranslationService.ASR_AUTO;
+        }
     }
 
     private void downloadCurrentModel(Button button) {
@@ -314,10 +334,16 @@ public class MainActivity extends Activity {
         }
 
         boolean microphoneMode = inputModeSpinner.getSelectedItemPosition() == 1;
+        String asr = selectedAsrMode();
+        if (TranslationService.ASR_SYSTEM.equals(asr) && !microphoneMode) {
+            toast("系统 SpeechRecognizer 只能用于麦克风，请改声音来源或改用 Vosk");
+            return;
+        }
+
         boolean needsProjection = !microphoneMode || enableOcr.isChecked();
         if (!needsProjection) {
             startTranslationService(0, null);
-            status.setText("正在准备麦克风外放离线识别……");
+            status.setText("正在准备固定麦克风来源 + " + asrLabel(asr));
             return;
         }
 
@@ -341,7 +367,7 @@ public class MainActivity extends Activity {
             return;
         }
         startTranslationService(resultCode, data);
-        status.setText("离线实时翻译正在准备，可以切到视频/直播 App");
+        status.setText("实时翻译正在准备；声音来源不会自动改变。");
     }
 
     private void startTranslationService(int resultCode, Intent resultData) {
@@ -350,12 +376,14 @@ public class MainActivity extends Activity {
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         boolean youdaoSpeech = preferences.getBoolean("youdao_speech_fallback", true);
         boolean microphone = inputModeSpinner.getSelectedItemPosition() == 1;
+        String asr = selectedAsrMode();
 
         Intent service = new Intent(this, TranslationService.class)
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_RESULT_CODE, resultCode)
             .putExtra(TranslationService.EXTRA_INPUT_MODE,
                 microphone ? TranslationService.INPUT_MICROPHONE : TranslationService.INPUT_PLAYBACK)
+            .putExtra(TranslationService.EXTRA_ASR_MODE, asr)
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
@@ -364,11 +392,17 @@ public class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
             .putExtra(TranslationService.EXTRA_ENABLE_OCR, enableOcr.isChecked())
-            // Important: never switch because a live stream is briefly silent.
             .putExtra(TranslationService.EXTRA_AUTO_MIC_FALLBACK, false)
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
         if (resultData != null) service.putExtra(TranslationService.EXTRA_RESULT_DATA, resultData);
         startForegroundService(service);
+    }
+
+    private String asrLabel(String asr) {
+        if (TranslationService.ASR_VOSK.equals(asr)) return "Vosk 离线 ASR";
+        if (TranslationService.ASR_SYSTEM.equals(asr)) return "系统 SpeechRecognizer";
+        if (TranslationService.ASR_YOUDAO.equals(asr)) return "有道云 ASR";
+        return "自动 ASR";
     }
 
     private void requestRuntimePermissions() {
@@ -415,6 +449,7 @@ public class MainActivity extends Activity {
             .putInt("source_index", sourceSpinner.getSelectedItemPosition())
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
             .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
+            .putString("asr_mode", selectedAsrMode())
             .putBoolean("show_original", showOriginal.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
             .putBoolean("enable_ocr", enableOcr.isChecked())
