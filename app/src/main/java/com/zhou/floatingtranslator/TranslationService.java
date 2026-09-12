@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
@@ -15,6 +16,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
@@ -34,11 +36,7 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.google.mlkit.common.model.DownloadConditions;
-import com.google.mlkit.nl.translate.Translation;
-import com.google.mlkit.nl.translate.Translator;
-import com.google.mlkit.nl.translate.TranslatorOptions;
-
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
@@ -48,6 +46,9 @@ import java.util.concurrent.Executors;
 public class TranslationService extends Service implements RecognitionListener {
     public static final String ACTION_START = "com.zhou.floatingtranslator.START";
     public static final String ACTION_STOP = "com.zhou.floatingtranslator.STOP";
+    public static final String ACTION_UI_VISIBLE = "com.zhou.floatingtranslator.UI_VISIBLE";
+    public static final String ACTION_UI_HIDDEN = "com.zhou.floatingtranslator.UI_HIDDEN";
+
     public static final String EXTRA_RESULT_CODE = "result_code";
     public static final String EXTRA_RESULT_DATA = "result_data";
     public static final String EXTRA_INPUT_MODE = "input_mode";
@@ -56,6 +57,8 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String EXTRA_SOURCE_SPEECH = "source_speech";
     public static final String EXTRA_SOURCE_MLKIT = "source_mlkit";
     public static final String EXTRA_TARGET_MLKIT = "target_mlkit";
+    public static final String EXTRA_ENGINE_ID = "engine_id";
+    public static final String EXTRA_YOUDAO_SPEECH_FALLBACK = "youdao_speech_fallback";
     public static final String EXTRA_SHOW_ORIGINAL = "show_original";
     public static final String EXTRA_PREFER_OFFLINE = "prefer_offline";
     public static final String EXTRA_FONT_SIZE = "font_size";
@@ -64,11 +67,13 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private static final int NOTIFICATION_ID = 3401;
     private static final String CHANNEL_ID = "floating_translation";
+    private static final String PREFS = "floating_translator";
     private static final int SAMPLE_RATE = 16000;
     private static final int AUDIO_PRESENT_PEAK = 64;
     private static final long SILENCE_FALLBACK_MS = 8000L;
     private static final long AUDIO_WITHOUT_TEXT_FALLBACK_MS = 10000L;
-    private static final long LEVEL_UPDATE_MS = 450L;
+    private static final long LEVEL_UPDATE_MS = 1200L;
+    private static final long CLOUD_CHUNK_MS = 4200L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -77,7 +82,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private MediaProjection projection;
     private AudioRecord audioRecord;
     private SpeechRecognizer recognizer;
-    private Translator translator;
+    private TranslationRouter router;
     private OcrCapture ocrCapture;
     private ParcelFileDescriptor readPipe;
     private ParcelFileDescriptor writePipe;
@@ -91,7 +96,6 @@ public class TranslationService extends Service implements RecognitionListener {
     private TextView translatedText;
     private TextView ocrOriginalText;
     private TextView ocrTranslatedText;
-    private TextView inputLevelText;
     private TextView diagnosticsText;
     private TextView pauseControl;
 
@@ -99,14 +103,21 @@ public class TranslationService extends Service implements RecognitionListener {
     private boolean preferOffline;
     private boolean enableOcr;
     private boolean autoMicFallback;
+    private boolean allowYoudaoSpeech;
     private volatile boolean paused;
     private volatile boolean fallbackPosted;
     private boolean micFallbackActivated;
+    private boolean cloudSpeechMode;
+    private volatile boolean cloudSpeechRequestInFlight;
     private volatile boolean ocrTextSeen;
+    private boolean ocrTranslationBusy;
+    private String pendingOcrText = "";
+
     private String inputMode = INPUT_PLAYBACK;
     private String speechLanguage;
     private String sourceMlTag;
     private String targetMlTag;
+    private String engineId;
     private String lastPartial = "";
     private String lastOcrText = "";
     private Runnable partialTranslation;
@@ -117,10 +128,15 @@ public class TranslationService extends Service implements RecognitionListener {
     private long lastLevelUiAt;
     private int playbackRecognizerErrors;
 
-    private volatile String diagTranslation = "加载中";
+    private final ByteArrayOutputStream cloudPcm = new ByteArrayOutputStream(160000);
+    private long cloudChunkStartedAt;
+    private int cloudChunkPeak;
+
+    private volatile String diagTranslation = "未启动";
     private volatile String diagAudio = "未启动";
     private volatile String diagSpeech = "未启动";
-    private volatile String diagScreen = "未启动";
+    private volatile String diagScreen = "OCR 已关闭";
+    private String lastRenderedDiagnostics = "";
 
     @Override public void onCreate() {
         super.onCreate();
@@ -129,29 +145,50 @@ public class TranslationService extends Service implements RecognitionListener {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
-        if (ACTION_STOP.equals(intent.getAction())) {
+        String action = intent.getAction();
+        if (ACTION_STOP.equals(action)) {
             stopEverything();
             return START_NOT_STICKY;
         }
-        if (!ACTION_START.equals(intent.getAction())) return START_NOT_STICKY;
+        if (ACTION_UI_VISIBLE.equals(action)) {
+            setUiVisible(true);
+            if (!running) stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_UI_HIDDEN.equals(action)) {
+            setUiVisible(false);
+            if (!running) stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (!ACTION_START.equals(action)) return START_NOT_STICKY;
+
+        if (running || projection != null || router != null) stopPipelineOnly();
 
         inputMode = intent.getStringExtra(EXTRA_INPUT_MODE);
         if (!INPUT_MICROPHONE.equals(inputMode)) inputMode = INPUT_PLAYBACK;
         speechLanguage = intent.getStringExtra(EXTRA_SOURCE_SPEECH);
         sourceMlTag = intent.getStringExtra(EXTRA_SOURCE_MLKIT);
         targetMlTag = intent.getStringExtra(EXTRA_TARGET_MLKIT);
+        engineId = intent.getStringExtra(EXTRA_ENGINE_ID);
+        if (engineId == null) engineId = TranslationRouter.AUTO;
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
         preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, false);
-        enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, true);
+        enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, false);
         autoMicFallback = intent.getBooleanExtra(EXTRA_AUTO_MIC_FALLBACK, true);
+        allowYoudaoSpeech = intent.getBooleanExtra(EXTRA_YOUDAO_SPEECH_FALLBACK, true);
         paused = false;
         fallbackPosted = false;
         micFallbackActivated = false;
+        cloudSpeechMode = false;
+        cloudSpeechRequestInFlight = false;
         ocrTextSeen = false;
+        ocrTranslationBusy = false;
+        pendingOcrText = "";
         playbackRecognizerErrors = 0;
         lastPartial = "";
         lastOcrText = "";
         audibleWithoutTextStartedAt = 0L;
+        resetCloudChunk();
         int fontSize = intent.getIntExtra(EXTRA_FONT_SIZE, 24);
 
         Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class);
@@ -167,8 +204,6 @@ public class TranslationService extends Service implements RecognitionListener {
         if (foregroundType == 0) foregroundType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
         startForeground(NOTIFICATION_ID, buildNotification("正在准备实时翻译"), foregroundType);
 
-        if (running || projection != null || translator != null) stopPipelineOnly();
-
         if (!Settings.canDrawOverlays(this)
             || (projectionNeeded && resultData == null)
             || sourceMlTag == null || targetMlTag == null) {
@@ -176,27 +211,17 @@ public class TranslationService extends Service implements RecognitionListener {
             return START_NOT_STICKY;
         }
 
+        running = true;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
         createOverlay(fontSize);
-        setDiagTranslation("加载模型 " + sourceMlTag + "→" + targetMlTag);
+        router = new TranslationRouter(this, sourceMlTag, targetMlTag, engineId);
+        setDiagTranslation("引擎：" + router.selectedEngineName());
         setDiagScreen(enableOcr ? "等待屏幕捕获" : "OCR 已关闭");
         setDiagAudio(INPUT_PLAYBACK.equals(inputMode) ? "等待系统声音" : "等待麦克风");
-        setDiagSpeech("等待识别器");
+        setDiagSpeech("检测语音识别服务");
 
-        translator = Translation.getClient(new TranslatorOptions.Builder()
-            .setSourceLanguage(sourceMlTag)
-            .setTargetLanguage(targetMlTag)
-            .build());
-        showStatus("正在加载翻译模型……");
-        translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-            .addOnSuccessListener(x -> {
-                setDiagTranslation("ML Kit 已就绪 " + sourceMlTag + "→" + targetMlTag);
-                if (projectionNeeded) startProjection(resultCode, resultData);
-                else startMicrophoneMode();
-            })
-            .addOnFailureListener(e -> {
-                setDiagTranslation("模型失败：" + safeMessage(e));
-                showStatus("模型不可用，请回到浮译重新下载\n" + safeMessage(e));
-            });
+        if (projectionNeeded) startProjection(resultCode, resultData);
+        else startMicrophoneMode();
         return START_NOT_STICKY;
     }
 
@@ -208,46 +233,37 @@ public class TranslationService extends Service implements RecognitionListener {
             projection.registerCallback(new MediaProjection.Callback() {
                 @Override public void onStop() {
                     main.post(() -> {
-                        setDiagScreen("屏幕捕获已被系统停止");
+                        setDiagScreen("屏幕捕获已停止");
                         stopEverything();
                     });
                 }
             }, main);
-
             if (enableOcr) startOcr();
             if (INPUT_MICROPHONE.equals(inputMode)) startMicrophoneMode();
             else startPlaybackMode();
         } catch (Exception e) {
-            setDiagScreen("屏幕捕获失败：" + safeMessage(e));
-            showStatus("启动屏幕/声音捕获失败：" + safeMessage(e));
+            setDiagScreen("屏幕捕获失败：" + safe(e));
+            showStatus("启动屏幕/声音捕获失败：" + safe(e));
         }
     }
 
     private void startOcr() {
         if (projection == null || !enableOcr) return;
-        setDiagScreen("正在创建 OCR 捕获");
+        setDiagScreen("OCR 捕获启动中");
         ocrCapture = new OcrCapture(this, sourceMlTag, new OcrCapture.Callback() {
             @Override public void onFrame(int width, int height) {
-                if (!ocrTextSeen) {
-                    main.post(() -> setDiagScreen("屏幕捕获正常 " + width + "×" + height + "，等待文字"));
-                }
+                if (!ocrTextSeen) main.post(() -> setDiagScreen("屏幕正常 " + width + "×" + height));
             }
 
             @Override public void onText(String text) {
                 main.post(() -> {
                     ocrTextSeen = true;
-                    setDiagScreen("OCR 已识别 " + text.length() + " 个字符");
                     handleOcrText(text);
                 });
             }
 
             @Override public void onError(Exception error) {
-                main.post(() -> {
-                    setDiagScreen("OCR 错误：" + safeMessage(error));
-                    if (ocrTranslatedText != null) {
-                        ocrTranslatedText.setText("屏幕 OCR 暂不可用：" + safeMessage(error));
-                    }
-                });
+                main.post(() -> setDiagScreen("OCR 错误：" + safe(error)));
             }
         });
         ocrCapture.start(projection);
@@ -256,92 +272,93 @@ public class TranslationService extends Service implements RecognitionListener {
     private void startPlaybackMode() {
         try {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                showStatus("缺少录音权限");
                 setDiagAudio("缺少录音权限");
                 return;
             }
-
             AudioPlaybackCaptureConfiguration capture = new AudioPlaybackCaptureConfiguration.Builder(projection)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
                 .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
                 .build();
-            AudioFormat format = new AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(SAMPLE_RATE)
-                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                .build();
-            int min = Math.max(AudioRecord.getMinBufferSize(SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), SAMPLE_RATE);
+            AudioFormat format = pcmFormat();
+            int min = minBuffer();
             audioRecord = new AudioRecord.Builder()
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(min * 2)
                 .setAudioPlaybackCaptureConfig(capture)
                 .build();
-
             if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
                 throw new IllegalStateException("AudioRecord 初始化失败");
             }
-
-            running = true;
             playbackStartedAt = SystemClock.elapsedRealtime();
             lastAudibleAt = playbackStartedAt;
             lastSpeechTextAt = playbackStartedAt;
             audibleWithoutTextStartedAt = 0L;
             audioRecord.startRecording();
             setDiagAudio("系统声音采集已启动");
-            startRecognizerSession();
-            worker.execute(this::captureLoop);
-            showStatus(enableOcr
-                ? "等待系统声音……\n屏幕 OCR 已同时开启"
-                : "等待其他 App 播放声音……");
-            updateNotification("正在翻译系统声音 + 屏幕文字");
+            startRecognizerOrCloud();
+            worker.execute(this::capturePlaybackLoop);
+            showStatus(enableOcr ? "系统声音翻译中 · OCR 已开启" : "系统声音翻译中");
+            updateNotification("系统声音实时翻译中");
         } catch (Exception e) {
-            setDiagAudio("系统声音启动失败：" + safeMessage(e));
+            setDiagAudio("系统声音启动失败：" + safe(e));
             if (autoMicFallback) {
-                showStatus("系统声音不可直接捕获，正在切换麦克风……");
                 main.postDelayed(() -> switchToMicrophoneFallback("系统声音捕获启动失败"), 250);
             } else {
-                showStatus("启动系统声音失败：" + safeMessage(e));
+                showStatus("启动系统声音失败：" + safe(e));
             }
         }
     }
 
     private void startMicrophoneMode() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            showStatus("缺少录音权限");
             setDiagAudio("缺少录音权限");
             return;
         }
-        running = true;
-        setDiagAudio("麦克风已启动，等待声音");
-        startRecognizerSession();
+        setDiagAudio("麦克风模式");
+        startRecognizerOrCloud();
         showStatus(enableOcr && projection != null
-            ? "正在监听麦克风……\n屏幕 OCR 已同时开启"
-            : "正在监听麦克风……\n电话翻译时请打开免提并尽量降低环境噪声");
-        updateNotification("麦克风/免提 + 屏幕翻译中");
+            ? "麦克风翻译中 · OCR 已开启"
+            : "麦克风翻译中");
+        updateNotification("麦克风实时翻译中");
+    }
+
+    private void startRecognizerOrCloud() {
+        if (!running || paused) return;
+        if (SpeechRecognizer.isRecognitionAvailable(this)) {
+            startRecognizerSession();
+            return;
+        }
+        if (canUseYoudaoSpeech()) {
+            activateCloudSpeech("系统没有语音识别服务，已启用有道云语音");
+        } else {
+            cloudSpeechMode = false;
+            setDiagSpeech("系统没有语音识别服务");
+            showStatus("系统没有可用语音识别服务\n可在“翻译引擎/API设置”配置有道语音兜底");
+        }
+    }
+
+    private boolean canUseYoudaoSpeech() {
+        return allowYoudaoSpeech && router != null && router.hasYoudaoCredentials();
+    }
+
+    private void activateCloudSpeech(String reason) {
+        cloudSpeechMode = true;
+        closeSpeechPipe();
+        destroyRecognizer();
+        resetCloudChunk();
+        setDiagSpeech(reason);
+        if (INPUT_MICROPHONE.equals(inputMode)) startCloudMicrophoneCapture();
     }
 
     private void startRecognizerSession() {
         main.post(() -> {
-            if (!running || paused) return;
+            if (!running || paused || cloudSpeechMode) return;
             closeSpeechPipe();
             destroyRecognizer();
-
-            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-                setDiagSpeech("系统没有可用语音识别服务");
-                showStatus("系统没有可用的语音识别服务");
-                if (INPUT_PLAYBACK.equals(inputMode) && autoMicFallback) {
-                    switchToMicrophoneFallback("系统语音识别服务不可用");
-                }
-                return;
-            }
-
             try {
-                // Use the system default recognizer for maximum OEM compatibility.
                 recognizer = SpeechRecognizer.createSpeechRecognizer(this);
                 recognizer.setRecognitionListener(this);
-
                 Intent listen = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage)
@@ -361,26 +378,21 @@ public class TranslationService extends Service implements RecognitionListener {
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, SAMPLE_RATE)
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
                         .putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE);
-                    setDiagSpeech("识别器启动中（内部 PCM）");
+                    setDiagSpeech("系统识别器：内部音频");
                 } else {
-                    setDiagSpeech("识别器启动中（麦克风）");
+                    setDiagSpeech("系统识别器：麦克风");
                 }
                 recognizer.startListening(listen);
             } catch (Exception e) {
-                setDiagSpeech("识别器启动失败：" + safeMessage(e));
-                if (INPUT_PLAYBACK.equals(inputMode) && autoMicFallback) {
-                    switchToMicrophoneFallback("系统语音识别器不接受内部音频");
-                } else {
-                    showStatus("语音识别启动失败：" + safeMessage(e));
-                }
+                setDiagSpeech("识别器启动失败：" + safe(e));
+                if (canUseYoudaoSpeech()) activateCloudSpeech("系统识别器不兼容，已切有道云语音");
             }
         });
     }
 
-    private void captureLoop() {
+    private void capturePlaybackLoop() {
         short[] shorts = new short[1600];
         byte[] bytes = new byte[shorts.length * 2];
-
         while (running && INPUT_PLAYBACK.equals(inputMode)) {
             AudioRecord record = audioRecord;
             if (record == null) break;
@@ -388,73 +400,174 @@ public class TranslationService extends Service implements RecognitionListener {
             try {
                 count = record.read(shorts, 0, shorts.length, AudioRecord.READ_BLOCKING);
             } catch (Exception e) {
-                setDiagAudio("读取系统声音失败：" + safeMessage(e));
+                main.post(() -> setDiagAudio("系统声音读取失败：" + safe(e)));
                 break;
             }
-            if (count <= 0) continue;
-            if (paused) continue;
-
-            int peak = 0;
-            for (int i = 0; i < count; i++) {
-                int value = Math.abs((int) shorts[i]);
-                if (value > peak) peak = value;
-                bytes[i * 2] = (byte) (shorts[i] & 0xff);
-                bytes[i * 2 + 1] = (byte) ((shorts[i] >> 8) & 0xff);
-            }
-
+            if (count <= 0 || paused) continue;
+            int peak = shortsToBytes(shorts, count, bytes);
             long now = SystemClock.elapsedRealtime();
             if (peak >= AUDIO_PRESENT_PEAK) {
                 lastAudibleAt = now;
                 if (now - lastSpeechTextAt > 1500L && audibleWithoutTextStartedAt == 0L) {
                     audibleWithoutTextStartedAt = now;
                 }
-                if (now - lastSpeechTextAt <= 1500L) audibleWithoutTextStartedAt = 0L;
             } else if (now - lastAudibleAt > 1500L) {
                 audibleWithoutTextStartedAt = 0L;
             }
+            updateAudioLevelThrottled(peak, true);
 
-            if (now - lastLevelUiAt >= LEVEL_UPDATE_MS) {
-                lastLevelUiAt = now;
-                final int currentPeak = peak;
-                main.post(() -> setDiagAudio(audioLevelLabel(currentPeak)));
+            if (cloudSpeechMode) {
+                appendCloudPcm(bytes, count * 2, peak);
+            } else {
+                OutputStream output;
+                synchronized (pipeLock) { output = speechOutput; }
+                try {
+                    if (output != null) output.write(bytes, 0, count * 2);
+                } catch (IOException e) {
+                    if (canUseYoudaoSpeech()) {
+                        main.post(() -> activateCloudSpeech("内部音频管道不兼容，已切有道云语音"));
+                    }
+                }
             }
 
             if (autoMicFallback && !micFallbackActivated && !fallbackPosted
                 && now - playbackStartedAt >= SILENCE_FALLBACK_MS
                 && now - lastAudibleAt >= SILENCE_FALLBACK_MS) {
                 fallbackPosted = true;
-                main.post(() -> switchToMicrophoneFallback("连续 8 秒未检测到可捕获的系统声音"));
+                main.post(() -> switchToMicrophoneFallback("连续 8 秒未检测到系统声音"));
                 break;
             }
 
-            if (autoMicFallback && !micFallbackActivated && !fallbackPosted
+            if (!cloudSpeechMode && autoMicFallback && !micFallbackActivated && !fallbackPosted
                 && audibleWithoutTextStartedAt > 0L
                 && now - audibleWithoutTextStartedAt >= AUDIO_WITHOUT_TEXT_FALLBACK_MS
                 && now - lastSpeechTextAt >= AUDIO_WITHOUT_TEXT_FALLBACK_MS) {
-                fallbackPosted = true;
-                main.post(() -> switchToMicrophoneFallback("系统声音有信号，但 10 秒没有识别出文字"));
-                break;
-            }
-
-            OutputStream output;
-            synchronized (pipeLock) { output = speechOutput; }
-            try {
-                if (output != null) output.write(bytes, 0, count * 2);
-            } catch (IOException e) {
-                setDiagSpeech("内部音频管道断开，正在重启识别器");
-                if (!paused && INPUT_PLAYBACK.equals(inputMode)) {
-                    main.postDelayed(this::startRecognizerSession, 250);
+                if (canUseYoudaoSpeech()) {
+                    main.post(() -> activateCloudSpeech("系统声音有信号但无文字，已切有道云语音"));
+                } else {
+                    fallbackPosted = true;
+                    main.post(() -> switchToMicrophoneFallback("系统声音有信号但 10 秒没有识别文字"));
+                    break;
                 }
             }
         }
     }
 
-    private String audioLevelLabel(int peak) {
-        if (peak < AUDIO_PRESENT_PEAK) return "系统声音：▁ 近乎静音";
-        if (peak < 500) return "系统声音：▂ 有信号";
-        if (peak < 2000) return "系统声音：▃▅ 有声音";
-        if (peak < 8000) return "系统声音：▃▅▇ 正常";
-        return "系统声音：▃▅▇█ 较强";
+    private void startCloudMicrophoneCapture() {
+        releaseAudioRecord();
+        try {
+            audioRecord = new AudioRecord.Builder()
+                .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                .setAudioFormat(pcmFormat())
+                .setBufferSizeInBytes(minBuffer() * 2)
+                .build();
+            if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                throw new IllegalStateException("麦克风 AudioRecord 初始化失败");
+            }
+            audioRecord.startRecording();
+            setDiagAudio("麦克风采集已启动");
+            worker.execute(this::captureCloudMicrophoneLoop);
+        } catch (Exception e) {
+            setDiagAudio("麦克风云语音启动失败：" + safe(e));
+        }
+    }
+
+    private void captureCloudMicrophoneLoop() {
+        short[] shorts = new short[1600];
+        byte[] bytes = new byte[shorts.length * 2];
+        while (running && INPUT_MICROPHONE.equals(inputMode) && cloudSpeechMode) {
+            AudioRecord record = audioRecord;
+            if (record == null) break;
+            int count;
+            try {
+                count = record.read(shorts, 0, shorts.length, AudioRecord.READ_BLOCKING);
+            } catch (Exception e) {
+                break;
+            }
+            if (count <= 0 || paused) continue;
+            int peak = shortsToBytes(shorts, count, bytes);
+            updateAudioLevelThrottled(peak, false);
+            appendCloudPcm(bytes, count * 2, peak);
+        }
+    }
+
+    private void appendCloudPcm(byte[] bytes, int length, int peak) {
+        if (!cloudSpeechMode || router == null) return;
+        long now = SystemClock.elapsedRealtime();
+        if (cloudChunkStartedAt == 0L) cloudChunkStartedAt = now;
+        cloudChunkPeak = Math.max(cloudChunkPeak, peak);
+        cloudPcm.write(bytes, 0, length);
+        if (now - cloudChunkStartedAt < CLOUD_CHUNK_MS) return;
+
+        byte[] chunk = cloudPcm.toByteArray();
+        int peakForChunk = cloudChunkPeak;
+        resetCloudChunk();
+        if (peakForChunk < AUDIO_PRESENT_PEAK || chunk.length < SAMPLE_RATE * 2) return;
+        if (cloudSpeechRequestInFlight) return;
+        cloudSpeechRequestInFlight = true;
+        setDiagSpeech("有道云语音：识别中…");
+        router.translateYoudaoSpeech(chunk, new TranslationRouter.SpeechCallback() {
+            @Override public void onSuccess(String original, String translated, String engineName) {
+                cloudSpeechRequestInFlight = false;
+                lastSpeechTextAt = SystemClock.elapsedRealtime();
+                setDiagSpeech(engineName + " 正常");
+                setDiagTranslation(engineName + " 直译");
+                if (showOriginal && originalText != null) originalText.setText("语音原文：" + original);
+                if (translatedText != null) translatedText.setText("语音译文：" + translated);
+                saveHistory(original, translated);
+            }
+
+            @Override public void onError(String message) {
+                cloudSpeechRequestInFlight = false;
+                setDiagSpeech("有道云语音失败：" + message);
+            }
+        });
+    }
+
+    private void resetCloudChunk() {
+        synchronized (cloudPcm) {
+            cloudPcm.reset();
+            cloudChunkStartedAt = 0L;
+            cloudChunkPeak = 0;
+        }
+    }
+
+    private int shortsToBytes(short[] shorts, int count, byte[] bytes) {
+        int peak = 0;
+        for (int i = 0; i < count; i++) {
+            int value = Math.abs((int) shorts[i]);
+            if (value > peak) peak = value;
+            bytes[i * 2] = (byte) (shorts[i] & 0xff);
+            bytes[i * 2 + 1] = (byte) ((shorts[i] >> 8) & 0xff);
+        }
+        return peak;
+    }
+
+    private AudioFormat pcmFormat() {
+        return new AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(SAMPLE_RATE)
+            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+            .build();
+    }
+
+    private int minBuffer() {
+        return Math.max(AudioRecord.getMinBufferSize(SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), SAMPLE_RATE);
+    }
+
+    private void updateAudioLevelThrottled(int peak, boolean system) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastLevelUiAt < LEVEL_UPDATE_MS) return;
+        lastLevelUiAt = now;
+        String prefix = system ? "系统声音" : "麦克风";
+        String value;
+        if (peak < AUDIO_PRESENT_PEAK) value = prefix + "：▁ 近乎静音";
+        else if (peak < 500) value = prefix + "：▂ 有信号";
+        else if (peak < 2000) value = prefix + "：▃▅ 有声音";
+        else if (peak < 8000) value = prefix + "：▃▅▇ 正常";
+        else value = prefix + "：▃▅▇█ 较强";
+        main.post(() -> setDiagAudio(value));
     }
 
     private void switchToMicrophoneFallback(String reason) {
@@ -462,14 +575,14 @@ public class TranslationService extends Service implements RecognitionListener {
         micFallbackActivated = true;
         fallbackPosted = true;
         inputMode = INPUT_MICROPHONE;
+        cloudSpeechMode = false;
         releaseAudioRecord();
         closeSpeechPipe();
         destroyRecognizer();
+        resetCloudChunk();
         setDiagAudio("已切换麦克风兜底");
-        setDiagSpeech("准备麦克风识别器");
-        showStatus(reason + "\n已自动改用麦克风，请保持视频/直播外放声音");
-        updateNotification("系统声音受限，已切换麦克风翻译");
-        main.postDelayed(this::startRecognizerSession, 300);
+        showStatus(reason + "\n已改用麦克风，请保持外放声音");
+        main.postDelayed(this::startRecognizerOrCloud, 350);
     }
 
     @Override public void onPartialResults(Bundle results) {
@@ -483,7 +596,7 @@ public class TranslationService extends Service implements RecognitionListener {
         if (showOriginal && originalText != null) originalText.setText("语音原文：" + text);
         if (partialTranslation != null) main.removeCallbacks(partialTranslation);
         partialTranslation = () -> translateVoice(text, false);
-        main.postDelayed(partialTranslation, 450);
+        main.postDelayed(partialTranslation, 750);
     }
 
     @Override public void onResults(Bundle results) {
@@ -496,8 +609,8 @@ public class TranslationService extends Service implements RecognitionListener {
             if (showOriginal && originalText != null) originalText.setText("语音原文：" + text);
             translateVoice(text, true);
         }
-        if (running && !paused && INPUT_MICROPHONE.equals(inputMode)) {
-            main.postDelayed(this::startRecognizerSession, 350);
+        if (running && !paused && INPUT_MICROPHONE.equals(inputMode) && !cloudSpeechMode) {
+            main.postDelayed(this::startRecognizerSession, 700);
         }
     }
 
@@ -506,74 +619,126 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     @Override public void onEndOfSegmentedSession() {
-        if (running && !paused) main.postDelayed(this::startRecognizerSession, 300);
+        if (running && !paused && !cloudSpeechMode) main.postDelayed(this::startRecognizerSession, 700);
     }
 
     private void translateVoice(String text, boolean committed) {
-        Translator current = translator;
+        TranslationRouter current = router;
         if (current == null || text.isEmpty()) return;
-        current.translate(text)
-            .addOnSuccessListener(value -> {
+        current.translate(text, new TranslationRouter.Callback() {
+            @Override public void onSuccess(String value, String engineName) {
                 if (committed || text.equals(lastPartial)) {
-                    setDiagTranslation("ML Kit 正常 " + sourceMlTag + "→" + targetMlTag);
+                    setDiagTranslation(engineName);
                     if (translatedText != null) translatedText.setText("语音译文：" + value);
                     saveHistory(text, value);
                 }
-            })
-            .addOnFailureListener(e -> {
-                setDiagTranslation("翻译失败：" + safeMessage(e));
-                if (translatedText != null) translatedText.setText("语音翻译失败：" + safeMessage(e));
-            });
+            }
+
+            @Override public void onError(String message) {
+                setDiagTranslation("翻译失败：" + message);
+                if (translatedText != null) translatedText.setText("语音翻译失败：" + message);
+            }
+        });
     }
 
-    private void handleOcrText(String text) {
-        if (!enableOcr || paused || translator == null || text == null) return;
-        String cleaned = sanitizeOcrText(text);
+    private void handleOcrText(String raw) {
+        if (!enableOcr || paused || router == null || raw == null) return;
+        String cleaned = sanitizeOcrText(raw);
         if (cleaned.isEmpty() || cleaned.equals(lastOcrText)) return;
-        lastOcrText = cleaned;
-        if (showOriginal && ocrOriginalText != null) {
-            ocrOriginalText.setText("屏幕原文：" + cleaned);
+        setDiagScreen("OCR 有效文字 " + cleaned.length() + " 字符");
+        if (showOriginal && ocrOriginalText != null) ocrOriginalText.setText("屏幕原文：" + cleaned);
+        if (ocrTranslationBusy) {
+            pendingOcrText = cleaned;
+            return;
         }
-        Translator current = translator;
-        current.translate(cleaned)
-            .addOnSuccessListener(value -> {
-                if (!cleaned.equals(lastOcrText) || ocrTranslatedText == null) return;
-                setDiagTranslation("ML Kit 正常 " + sourceMlTag + "→" + targetMlTag);
-                ocrTranslatedText.setText("屏幕译文：" + value);
-                saveHistory(cleaned, value);
-            })
-            .addOnFailureListener(e -> {
-                setDiagTranslation("OCR 翻译失败：" + safeMessage(e));
-                if (ocrTranslatedText != null) {
-                    ocrTranslatedText.setText("屏幕翻译失败：" + safeMessage(e));
+        startOcrTranslation(cleaned);
+    }
+
+    private void startOcrTranslation(String text) {
+        ocrTranslationBusy = true;
+        lastOcrText = text;
+        router.translate(text, new TranslationRouter.Callback() {
+            @Override public void onSuccess(String value, String engineName) {
+                setDiagTranslation(engineName);
+                if (ocrTranslatedText != null && text.equals(lastOcrText)) {
+                    ocrTranslatedText.setText("屏幕译文：" + value);
+                    saveHistory(text, value);
                 }
-            });
+                finishOcrTranslation();
+            }
+
+            @Override public void onError(String message) {
+                if (ocrTranslatedText != null) ocrTranslatedText.setText("屏幕翻译失败：" + message);
+                finishOcrTranslation();
+            }
+        });
+    }
+
+    private void finishOcrTranslation() {
+        ocrTranslationBusy = false;
+        if (!pendingOcrText.isEmpty() && !pendingOcrText.equals(lastOcrText)) {
+            String next = pendingOcrText;
+            pendingOcrText = "";
+            main.postDelayed(() -> startOcrTranslation(next), 300);
+        } else {
+            pendingOcrText = "";
+        }
     }
 
     private String sanitizeOcrText(String value) {
         String[] lines = value.split("\\n");
         StringBuilder out = new StringBuilder();
+        int accepted = 0;
         for (String raw : lines) {
             String line = raw.trim();
-            if (line.isEmpty()) continue;
-            if (line.startsWith("诊断")
-                || line.startsWith("语音原文：")
-                || line.startsWith("语音译文：")
-                || line.startsWith("屏幕原文：")
-                || line.startsWith("屏幕译文：")
-                || line.startsWith("系统声音：")
-                || line.startsWith("麦克风：")
-                || "暂停".equals(line)
-                || "继续".equals(line)
-                || "关闭".equals(line)) {
-                continue;
-            }
+            if (line.length() < 2 || isOwnUiLine(line)) continue;
+            if (!matchesSourceScript(line, sourceMlTag)) continue;
             if (out.length() > 0) out.append('\n');
             out.append(line);
-            if (out.length() >= 700) break;
+            accepted++;
+            if (accepted >= 4 || out.length() >= 220) break;
         }
         String result = out.toString().trim();
-        return result.length() > 700 ? result.substring(0, 700) : result;
+        return result.length() > 220 ? result.substring(0, 220) : result;
+    }
+
+    private boolean isOwnUiLine(String line) {
+        return line.startsWith("诊断")
+            || line.startsWith("语音原文")
+            || line.startsWith("语音译文")
+            || line.startsWith("屏幕原文")
+            || line.startsWith("屏幕译文")
+            || line.startsWith("系统声音")
+            || line.startsWith("麦克风")
+            || line.contains("浮译 0.4")
+            || line.contains("翻译引擎")
+            || line.contains("开始实时翻译")
+            || line.contains("停止翻译")
+            || "暂停".equals(line)
+            || "继续".equals(line)
+            || "关闭".equals(line);
+    }
+
+    private boolean matchesSourceScript(String text, String lang) {
+        int latin = 0, han = 0, kana = 0, hangul = 0, cyrillic = 0, arabic = 0, devanagari = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            Character.UnicodeBlock b = Character.UnicodeBlock.of(c);
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || b == Character.UnicodeBlock.LATIN_1_SUPPLEMENT) latin++;
+            if (b == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS || b == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS) han++;
+            if (b == Character.UnicodeBlock.HIRAGANA || b == Character.UnicodeBlock.KATAKANA) kana++;
+            if (b == Character.UnicodeBlock.HANGUL_SYLLABLES || b == Character.UnicodeBlock.HANGUL_JAMO) hangul++;
+            if (b == Character.UnicodeBlock.CYRILLIC) cyrillic++;
+            if (b == Character.UnicodeBlock.ARABIC) arabic++;
+            if (b == Character.UnicodeBlock.DEVANAGARI) devanagari++;
+        }
+        if ("ja".equals(lang)) return kana > 0;
+        if ("zh".equals(lang)) return han > 0 && kana == 0;
+        if ("ko".equals(lang)) return hangul > 0;
+        if ("ru".equals(lang) || "uk".equals(lang) || "bg".equals(lang) || "mk".equals(lang)) return cyrillic > 0;
+        if ("ar".equals(lang) || "fa".equals(lang) || "ur".equals(lang)) return arabic > 0;
+        if ("hi".equals(lang) || "mr".equals(lang)) return devanagari > 0;
+        return latin >= 2 && han == 0 && kana == 0 && hangul == 0;
     }
 
     private String bestText(Bundle bundle) {
@@ -587,7 +752,7 @@ public class TranslationService extends Service implements RecognitionListener {
         windowManager = getSystemService(WindowManager.class);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(8), dp(16), dp(10));
+        box.setPadding(dp(14), dp(7), dp(14), dp(9));
         box.setBackgroundResource(R.drawable.panel);
 
         LinearLayout controls = new LinearLayout(this);
@@ -601,23 +766,19 @@ public class TranslationService extends Service implements RecognitionListener {
         box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
 
         diagnosticsText = overlayText(11, Color.rgb(190, 165, 255));
-        diagnosticsText.setMaxLines(5);
+        diagnosticsText.setMaxLines(4);
         diagnosticsText.setGravity(Gravity.START);
         box.addView(diagnosticsText, new LinearLayout.LayoutParams(-1, -2));
 
-        inputLevelText = overlayText(12, Color.rgb(210, 190, 255));
-        inputLevelText.setMaxLines(1);
-        box.addView(inputLevelText, new LinearLayout.LayoutParams(-1, -2));
-
-        originalText = overlayText(Math.max(13, fontSize - 5), Color.rgb(218, 209, 231));
+        originalText = overlayText(Math.max(12, fontSize - 6), Color.rgb(218, 209, 231));
         translatedText = overlayText(fontSize, Color.WHITE);
         translatedText.setTypeface(null, 1);
+        originalText.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
         box.addView(originalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translatedText, new LinearLayout.LayoutParams(-1, -2));
-        originalText.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
 
-        ocrOriginalText = overlayText(Math.max(12, fontSize - 6), Color.rgb(205, 215, 235));
-        ocrTranslatedText = overlayText(Math.max(14, fontSize - 2), Color.WHITE);
+        ocrOriginalText = overlayText(Math.max(11, fontSize - 7), Color.rgb(205, 215, 235));
+        ocrTranslatedText = overlayText(Math.max(13, fontSize - 3), Color.WHITE);
         ocrTranslatedText.setTypeface(null, 1);
         ocrOriginalText.setVisibility(enableOcr && showOriginal ? View.VISIBLE : View.GONE);
         ocrTranslatedText.setVisibility(enableOcr ? View.VISIBLE : View.GONE);
@@ -631,9 +792,8 @@ public class TranslationService extends Service implements RecognitionListener {
             -1, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             windowFlags, PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        overlayParams.x = dp(12);
-        overlayParams.y = dp(110);
-        overlayParams.width = getResources().getDisplayMetrics().widthPixels - dp(24);
+        overlayParams.y = dp(100);
+        overlayParams.width = getResources().getDisplayMetrics().widthPixels - dp(28);
         makeDraggable(box);
         windowManager.addView(overlay, overlayParams);
         renderDiagnostics();
@@ -652,7 +812,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private TextView overlayControl(String value) {
         TextView t = overlayText(13, Color.rgb(190, 165, 255));
         t.setText(value);
-        t.setPadding(dp(8), dp(3), dp(8), dp(5));
+        t.setPadding(dp(8), dp(2), dp(8), dp(4));
         return t;
     }
 
@@ -663,10 +823,7 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void setDiagAudio(String value) {
         diagAudio = value;
-        main.post(() -> {
-            if (inputLevelText != null) inputLevelText.setText(value);
-            renderDiagnostics();
-        });
+        main.post(this::renderDiagnostics);
     }
 
     private void setDiagSpeech(String value) {
@@ -681,33 +838,38 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void renderDiagnostics() {
         if (diagnosticsText == null) return;
-        diagnosticsText.setText(
-            "诊断｜翻译：" + diagTranslation +
-            "\n声音：" + diagAudio +
-            "\n语音：" + diagSpeech +
-            "\n屏幕：" + diagScreen
-        );
+        String value = "翻译：" + diagTranslation
+            + "\n声音：" + diagAudio
+            + "\n语音：" + diagSpeech
+            + "\n屏幕：" + diagScreen;
+        if (value.equals(lastRenderedDiagnostics)) return;
+        lastRenderedDiagnostics = value;
+        diagnosticsText.setText(value);
+    }
+
+    private void setUiVisible(boolean visible) {
+        if (ocrCapture != null) ocrCapture.setPaused(visible);
+        if (overlay != null) overlay.setVisibility(visible ? View.GONE : View.VISIBLE);
     }
 
     private void togglePause() {
         paused = !paused;
+        if (ocrCapture != null) ocrCapture.setPaused(paused);
         if (paused) {
-            if (recognizer != null) recognizer.cancel();
+            destroyRecognizer();
             pauseControl.setText("继续");
             showStatus("翻译已暂停");
-            setDiagSpeech("已暂停");
         } else {
             pauseControl.setText("暂停");
             showStatus("正在继续监听……");
-            setDiagSpeech("正在重新启动");
-            startRecognizerSession();
+            if (!cloudSpeechMode) startRecognizerOrCloud();
         }
     }
 
     private void saveHistory(String original, String translated) {
-        getSharedPreferences("floating_translator", MODE_PRIVATE).edit()
-            .putString("last_original", original)
-            .putString("last_translation", translated)
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString("last_original", original == null ? "" : original)
+            .putString("last_translation", translated == null ? "" : translated)
             .apply();
     }
 
@@ -755,8 +917,19 @@ public class TranslationService extends Service implements RecognitionListener {
         }
     }
 
+    private void closeSpeechPipe() {
+        synchronized (pipeLock) {
+            try { if (speechOutput != null) speechOutput.close(); } catch (IOException ignored) {}
+            try { if (readPipe != null) readPipe.close(); } catch (IOException ignored) {}
+            speechOutput = null;
+            readPipe = null;
+            writePipe = null;
+        }
+    }
+
     private void stopPipelineOnly() {
         running = false;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", false).apply();
         if (partialTranslation != null) main.removeCallbacks(partialTranslation);
         releaseAudioRecord();
         closeSpeechPipe();
@@ -770,10 +943,11 @@ public class TranslationService extends Service implements RecognitionListener {
         if (currentProjection != null) {
             try { currentProjection.stop(); } catch (Exception ignored) {}
         }
-        if (translator != null) {
-            translator.close();
-            translator = null;
+        if (router != null) {
+            router.close();
+            router = null;
         }
+        resetCloudChunk();
     }
 
     private void stopEverything() {
@@ -783,27 +957,17 @@ public class TranslationService extends Service implements RecognitionListener {
         stopSelf();
     }
 
-    private void closeSpeechPipe() {
-        synchronized (pipeLock) {
-            try { if (speechOutput != null) speechOutput.close(); } catch (IOException ignored) {}
-            try { if (readPipe != null) readPipe.close(); } catch (IOException ignored) {}
-            speechOutput = null;
-            readPipe = null;
-            writePipe = null;
-        }
-    }
-
     private void removeOverlay() {
         if (windowManager != null && overlay != null) {
             try { windowManager.removeView(overlay); } catch (Exception ignored) {}
         }
         overlay = null;
-        diagnosticsText = null;
-        inputLevelText = null;
         originalText = null;
         translatedText = null;
         ocrOriginalText = null;
         ocrTranslatedText = null;
+        diagnosticsText = null;
+        lastRenderedDiagnostics = "";
     }
 
     private void createNotificationChannel() {
@@ -819,7 +983,7 @@ public class TranslationService extends Service implements RecognitionListener {
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("浮译")
+            .setContentTitle("浮译 0.4.0")
             .setContentText(message)
             .setContentIntent(pending)
             .setOngoing(true)
@@ -830,13 +994,14 @@ public class TranslationService extends Service implements RecognitionListener {
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, buildNotification(message));
     }
 
-    private String safeMessage(Exception e) {
+    private String safe(Exception e) {
+        if (e == null) return "未知错误";
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
     private String preview(String text) {
-        String oneLine = text.replace('\n', ' ').trim();
-        return oneLine.length() > 28 ? oneLine.substring(0, 28) + "…" : oneLine;
+        String one = text.replace('\n', ' ').trim();
+        return one.length() > 24 ? one.substring(0, 24) + "…" : one;
     }
 
     private String speechErrorName(int error) {
@@ -867,17 +1032,16 @@ public class TranslationService extends Service implements RecognitionListener {
 
     @Override public void onReadyForSpeech(Bundle params) {
         setDiagSpeech(INPUT_PLAYBACK.equals(inputMode)
-            ? "识别器已就绪，等待内部声音"
-            : "识别器已就绪，等待麦克风语音");
+            ? "系统识别器已就绪"
+            : "麦克风识别器已就绪");
     }
 
     @Override public void onBeginningOfSpeech() {
         setDiagSpeech("检测到语音");
-        if (INPUT_MICROPHONE.equals(inputMode)) setDiagAudio("麦克风：检测到语音");
     }
 
     @Override public void onRmsChanged(float rmsdB) {
-        if (!INPUT_MICROPHONE.equals(inputMode)) return;
+        if (!INPUT_MICROPHONE.equals(inputMode) || cloudSpeechMode) return;
         long now = SystemClock.elapsedRealtime();
         if (now - lastLevelUiAt < LEVEL_UPDATE_MS) return;
         lastLevelUiAt = now;
@@ -888,33 +1052,31 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     @Override public void onBufferReceived(byte[] buffer) {}
-
-    @Override public void onEndOfSpeech() {
-        setDiagSpeech("语音结束，等待结果");
-    }
-
+    @Override public void onEndOfSpeech() { setDiagSpeech("语音结束，等待结果"); }
     @Override public void onEvent(int eventType, Bundle params) {}
 
     @Override public void onError(int error) {
-        if (!running || paused) return;
+        if (!running || paused || cloudSpeechMode) return;
         String message = speechErrorName(error);
         setDiagSpeech("识别错误：" + message);
 
         if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
             || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
-            showStatus("当前语音包不可用：" + speechLanguage);
+            if (canUseYoudaoSpeech()) activateCloudSpeech("系统语音包不可用，已切有道云语音");
+            else showStatus("当前系统语音包不可用：" + speechLanguage);
             return;
         }
 
-        if (INPUT_PLAYBACK.equals(inputMode) && autoMicFallback) {
-            playbackRecognizerErrors++;
-            if (playbackRecognizerErrors >= 3) {
-                switchToMicrophoneFallback("系统声音语音识别连续失败（" + message + "）");
-                return;
-            }
+        playbackRecognizerErrors++;
+        if (playbackRecognizerErrors >= 2 && canUseYoudaoSpeech()) {
+            activateCloudSpeech("系统识别连续失败，已切有道云语音");
+            return;
         }
-
-        main.postDelayed(this::startRecognizerSession, 700);
+        if (INPUT_PLAYBACK.equals(inputMode) && playbackRecognizerErrors >= 3 && autoMicFallback) {
+            switchToMicrophoneFallback("系统声音语音识别连续失败");
+            return;
+        }
+        main.postDelayed(this::startRecognizerSession, 1200);
     }
 
     private int dp(int value) {
