@@ -27,7 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** 0.5.0 model center: download/delete/select high-accuracy offline ASR packs. */
+/** Download/delete/select high-accuracy offline ASR packs. */
 public class ModelManagerActivity extends Activity {
     private static final String PREFS = "floating_translator";
 
@@ -41,6 +41,8 @@ public class ModelManagerActivity extends Activity {
     private TextView status;
     private Button downloadButton;
     private Button deleteButton;
+    private Button clearPartialButton;
+    private volatile boolean downloadInProgress;
 
     private final List<String> modelIds = new ArrayList<>();
     private final List<String> modelLabels = new ArrayList<>();
@@ -49,7 +51,7 @@ public class ModelManagerActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         modelStore = new OfflineModelStore(this);
-        setTitle("浮译 0.5.0 · 离线模型中心");
+        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 离线模型中心");
         setContentView(buildUi());
         refresh();
     }
@@ -68,14 +70,18 @@ public class ModelManagerActivity extends Activity {
 
         TextView note = text(
             "大模型不会强塞进 APK。需要哪个就下载哪个，保存到浮译私有目录；不用时可以删除。\n" +
-            "纯日语优先 ReazonSpeech / Parakeet；日语+英语混说优先 Qwen3-ASR / Whisper / SenseVoice；省电用 Vosk。",
+            "纯日语优先 Parakeet / ReazonSpeech；日英混说优先 Qwen3-ASR / Whisper；韩语和东南亚语言可优先 Qwen3 / Whisper / Omnilingual。",
             14, Color.rgb(201, 190, 221));
         note.setPadding(0, dp(6), 0, dp(14));
         root.addView(note);
 
         summary = text("正在读取模型……", 14, Color.rgb(190, 165, 255));
-        summary.setPadding(0, dp(8), 0, dp(14));
+        summary.setPadding(0, dp(8), 0, dp(8));
         root.addView(summary);
+
+        clearPartialButton = button("🧹 清理未完成下载缓存");
+        clearPartialButton.setOnClickListener(v -> clearPartialDownloads());
+        root.addView(clearPartialButton, matchWrap());
 
         root.addView(section("高精度离线 ASR"));
         buildModelOptions();
@@ -143,7 +149,7 @@ public class ModelManagerActivity extends Activity {
 
         TextView translationFuture = text(
             "文字翻译目前仍是 ML Kit 离线优先。NLLB / OPUS-MT 属于下一步文字翻译大模型，" +
-            "本页不会把“尚未接入”的模型伪装成可用。",
+            "本页不会把尚未接入的模型伪装成可用。",
             13, Color.rgb(180, 170, 205));
         translationFuture.setPadding(0, dp(22), 0, 0);
         root.addView(translationFuture);
@@ -187,8 +193,8 @@ public class ModelManagerActivity extends Activity {
         long bytes = modelStore.installedBytes(id);
         selectedInfo.setText(model.name + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
             + "\n状态：" + (installed ? "✅ 已下载，实际占用 " + OfflineModelStore.human(bytes) : "未下载"));
-        if (downloadButton != null) downloadButton.setEnabled(!installed);
-        if (deleteButton != null) deleteButton.setEnabled(installed);
+        if (downloadButton != null) downloadButton.setEnabled(!installed && !downloadInProgress);
+        if (deleteButton != null) deleteButton.setEnabled(installed && !downloadInProgress);
     }
 
     private void downloadSelected() {
@@ -198,8 +204,14 @@ public class ModelManagerActivity extends Activity {
             status.setText("Vosk 语言包会在实际使用时自动下载，不需要从这里重复下载。");
             return;
         }
+        if (downloadInProgress) {
+            status.setText("已有模型正在下载，请等待完成或失败后再操作缓存。");
+            return;
+        }
+        downloadInProgress = true;
         downloadButton.setEnabled(false);
         deleteButton.setEnabled(false);
+        if (clearPartialButton != null) clearPartialButton.setEnabled(false);
         modelStore.download(model, new OfflineModelStore.Callback() {
             @Override public void onStatus(String message) {
                 status.setText(message);
@@ -213,22 +225,52 @@ public class ModelManagerActivity extends Activity {
             }
 
             @Override public void onSuccess(File modelDir) {
+                downloadInProgress = false;
                 status.setText("✅ " + model.name + " 下载并解压完成，可直接设为默认使用");
+                if (clearPartialButton != null) clearPartialButton.setEnabled(true);
                 updateSelectedInfo();
                 refresh();
             }
 
             @Override public void onError(String message) {
+                downloadInProgress = false;
                 status.setText("❌ " + model.name + " 下载失败：" + message);
+                if (clearPartialButton != null) clearPartialButton.setEnabled(true);
                 updateSelectedInfo();
+                refresh();
             }
+        });
+    }
+
+    private void clearPartialDownloads() {
+        if (downloadInProgress) {
+            status.setText("模型正在下载，不能同时清理断点缓存。");
+            return;
+        }
+        final long before = modelStore.partialDownloadBytes();
+        if (before <= 0L) {
+            status.setText("没有未完成下载缓存");
+            return;
+        }
+        if (clearPartialButton != null) clearPartialButton.setEnabled(false);
+        status.setText("正在清理未完成下载缓存 " + OfflineModelStore.human(before) + "……");
+        worker.execute(() -> {
+            boolean ok = modelStore.clearPartialDownloads();
+            long remaining = modelStore.partialDownloadBytes();
+            runOnUiThread(() -> {
+                if (clearPartialButton != null) clearPartialButton.setEnabled(true);
+                status.setText(ok && remaining == 0L
+                    ? "✅ 已清理未完成下载缓存 " + OfflineModelStore.human(before)
+                    : "清理完成，但仍剩余 " + OfflineModelStore.human(remaining));
+                refresh();
+            });
         });
     }
 
     private void deleteSelected() {
         String id = selectedModelId();
         OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
-        if (model == null) return;
+        if (model == null || downloadInProgress) return;
         status.setText("正在删除 " + model.name + "……");
         worker.execute(() -> {
             boolean ok = modelStore.delete(id);
@@ -261,7 +303,8 @@ public class ModelManagerActivity extends Activity {
             File voskBase = new File(getFilesDir(), "vosk-models");
             long voskBytes = OfflineModelStore.folderSize(voskBase);
             int voskCount = countModelFolders(voskBase);
-            long sherpaBytes = modelStore.allInstalledBytes();
+            long sherpaInstalledBytes = modelStore.allInstalledBytes();
+            long partialBytes = modelStore.partialDownloadBytes();
             int sherpaCount = 0;
             for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
                 if (modelStore.isInstalled(model.id)) sherpaCount++;
@@ -271,14 +314,18 @@ public class ModelManagerActivity extends Activity {
             manager.getDownloadedModels(TranslateRemoteModel.class)
                 .addOnSuccessListener(models -> {
                     String text = "Vosk：" + voskCount + " 个，约 " + OfflineModelStore.human(voskBytes) + "\n" +
-                        "高精度 sherpa-onnx：" + finalSherpaCount + " 个，约 " + OfflineModelStore.human(sherpaBytes) + "\n" +
+                        "高精度 sherpa-onnx：" + finalSherpaCount + " 个，已安装 " + OfflineModelStore.human(sherpaInstalledBytes) + "\n" +
+                        "未完成下载缓存：" + OfflineModelStore.human(partialBytes) + "\n" +
                         "ML Kit 翻译：" + models.size() + " 个语言模型";
                     summary.setText(text);
+                    if (clearPartialButton != null) clearPartialButton.setEnabled(!downloadInProgress && partialBytes > 0L);
                     status.setText("模型状态已刷新");
                     updateSelectedInfo();
                 })
                 .addOnFailureListener(e -> {
-                    summary.setText("Vosk：" + voskCount + " 个 · sherpa：" + finalSherpaCount + " 个");
+                    summary.setText("Vosk：" + voskCount + " 个 · sherpa：" + finalSherpaCount + " 个\n"
+                        + "未完成下载缓存：" + OfflineModelStore.human(partialBytes));
+                    if (clearPartialButton != null) clearPartialButton.setEnabled(!downloadInProgress && partialBytes > 0L);
                     status.setText("ML Kit 模型列表读取失败：" + safe(e));
                     updateSelectedInfo();
                 });
