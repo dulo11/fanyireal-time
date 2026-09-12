@@ -32,10 +32,12 @@ public class ApiSettingsActivity extends Activity {
 
     private EditText baiduAppId;
     private EditText baiduSecret;
-    private EditText youdaoAppKey;
-    private EditText youdaoSecret;
     private EditText azureKey;
     private EditText azureRegion;
+    private EditText aliyunAccessKeyId;
+    private EditText aliyunAccessKeySecret;
+    private EditText youdaoAppKey;
+    private EditText youdaoSecret;
     private EditText deepLKey;
     private EditText googleKey;
     private EditText libreEndpoint;
@@ -47,7 +49,7 @@ public class ApiSettingsActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         secure = new SecureConfig(this);
-        setTitle("浮译 0.5.0 · 翻译引擎与安全");
+        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 翻译引擎与安全");
         setContentView(buildUi());
     }
 
@@ -64,8 +66,8 @@ public class ApiSettingsActivity extends Activity {
         root.addView(title);
 
         TextView note = text(
-            "默认推荐“自动”：ML Kit 本地离线优先，只有本地失败时才尝试已经配置的在线引擎。\n" +
-            "API Key 都是可选备用；保存后使用 Android Keystore + AES/GCM 加密。",
+            "默认推荐“自动”：ML Kit 本地离线优先；只有本地失败时才依次尝试已配置的百度、Azure、阿里云。\n" +
+            "这三项作为当前主力在线翻译；其他旧引擎仅保留兼容。所有 Key 保存后使用 Android Keystore + AES/GCM 加密。",
             14, Color.rgb(201, 190, 221));
         note.setPadding(0, dp(5), 0, dp(16));
         root.addView(note);
@@ -77,7 +79,7 @@ public class ApiSettingsActivity extends Activity {
 
         root.addView(label("默认翻译引擎"));
         String[] labels = TranslationRouter.ENGINE_LABELS.clone();
-        if (labels.length > 0) labels[0] = "自动（ML Kit 离线优先，失败再用在线备用）";
+        if (labels.length > 0) labels[0] = "自动（ML Kit 离线优先；百度 / Azure / 阿里云兜底）";
         engineSpinner = new Spinner(this);
         engineSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item, labels));
@@ -103,33 +105,45 @@ public class ApiSettingsActivity extends Activity {
         showSecrets.setOnCheckedChangeListener((button, checked) -> applySecretVisibility(checked));
         root.addView(showSecrets);
 
-        root.addView(section("百度翻译（可选备用）"));
+        root.addView(section("百度翻译（主力在线备用）"));
         baiduAppId = field("百度 APPID", false, SecureConfig.BAIDU_APP_ID);
         baiduSecret = field("百度密钥", true, SecureConfig.BAIDU_SECRET);
         root.addView(baiduAppId, matchWrap());
         root.addView(baiduSecret, matchWrap());
 
-        root.addView(section("有道智云（可选备用 / 云语音兜底）"));
+        root.addView(section("Azure Translator（主力在线备用）"));
+        azureKey = field("Azure Subscription Key", true, SecureConfig.AZURE_KEY);
+        azureRegion = field("Azure Region（可留空；多服务资源再填 japaneast / eastasia 等）",
+            false, SecureConfig.AZURE_REGION);
+        root.addView(azureKey, matchWrap());
+        root.addView(azureRegion, matchWrap());
+
+        root.addView(section("阿里云机器翻译（主力在线备用）"));
+        aliyunAccessKeyId = field("阿里云 AccessKey ID", false, SecureConfig.ALIYUN_ACCESS_KEY_ID);
+        aliyunAccessKeySecret = field("阿里云 AccessKey Secret", true,
+            SecureConfig.ALIYUN_ACCESS_KEY_SECRET);
+        root.addView(aliyunAccessKeyId, matchWrap());
+        root.addView(aliyunAccessKeySecret, matchWrap());
+        TextView aliyunTip = text(
+            "使用阿里云机器翻译通用版，客户端按 ROA HMAC-SHA1 规则签名；Key 只保存在本机加密配置中。",
+            12, Color.rgb(174, 164, 198));
+        root.addView(aliyunTip);
+
+        root.addView(section("有道智云（旧兼容 / 云语音兜底）"));
         youdaoAppKey = field("有道 AppKey / 应用ID", false, SecureConfig.YOUDAO_APP_KEY);
         youdaoSecret = field("有道 AppSecret / 应用密钥", true, SecureConfig.YOUDAO_SECRET);
         root.addView(youdaoAppKey, matchWrap());
         root.addView(youdaoSecret, matchWrap());
 
-        root.addView(section("Azure Translator（可选备用）"));
-        azureKey = field("Azure Subscription Key", true, SecureConfig.AZURE_KEY);
-        azureRegion = field("Azure Region，例如 japaneast / eastasia", false, SecureConfig.AZURE_REGION);
-        root.addView(azureKey, matchWrap());
-        root.addView(azureRegion, matchWrap());
-
-        root.addView(section("DeepL（可选备用）"));
+        root.addView(section("DeepL（旧兼容备用）"));
         deepLKey = field("DeepL API Key", true, SecureConfig.DEEPL_KEY);
         root.addView(deepLKey, matchWrap());
 
-        root.addView(section("Google Cloud Translation（可选备用）"));
+        root.addView(section("Google Cloud Translation（旧兼容备用）"));
         googleKey = field("Google Cloud API Key", true, SecureConfig.GOOGLE_KEY);
         root.addView(googleKey, matchWrap());
 
-        root.addView(section("LibreTranslate（可选备用）"));
+        root.addView(section("LibreTranslate（旧兼容备用）"));
         libreEndpoint = field("Endpoint，例如 https://你的服务/", false, SecureConfig.LIBRE_ENDPOINT);
         libreKey = field("API Key（没有可留空）", true, SecureConfig.LIBRE_KEY);
         root.addView(libreEndpoint, matchWrap());
@@ -164,22 +178,23 @@ public class ApiSettingsActivity extends Activity {
     }
 
     private EditText field(String hint, boolean secretField, String key) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setHintTextColor(Color.rgb(155, 145, 180));
-        e.setTextColor(Color.WHITE);
-        e.setSingleLine(true);
-        e.setBackgroundColor(Color.rgb(43, 38, 61));
-        e.setPadding(dp(12), dp(8), dp(12), dp(8));
-        e.setTag(Boolean.valueOf(secretField));
-        e.setText(secure.get(key));
-        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_NORMAL);
-        if (secretField) e.setTransformationMethod(PasswordTransformationMethod.getInstance());
-        return e;
+        EditText edit = new EditText(this);
+        edit.setHint(hint);
+        edit.setHintTextColor(Color.rgb(155, 145, 180));
+        edit.setTextColor(Color.WHITE);
+        edit.setSingleLine(true);
+        edit.setBackgroundColor(Color.rgb(43, 38, 61));
+        edit.setPadding(dp(12), dp(8), dp(12), dp(8));
+        edit.setTag(Boolean.valueOf(secretField));
+        edit.setText(secure.get(key));
+        edit.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_NORMAL);
+        if (secretField) edit.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        return edit;
     }
 
     private void applySecretVisibility(boolean show) {
-        EditText[] fields = {baiduSecret, youdaoSecret, azureKey, deepLKey, googleKey, libreKey};
+        EditText[] fields = {baiduSecret, azureKey, aliyunAccessKeySecret, youdaoSecret,
+            deepLKey, googleKey, libreKey};
         for (EditText field : fields) {
             if (field == null) continue;
             int pos = field.getSelectionStart();
@@ -201,16 +216,18 @@ public class ApiSettingsActivity extends Activity {
         try {
             secure.put(SecureConfig.BAIDU_APP_ID, baiduAppId.getText().toString());
             secure.put(SecureConfig.BAIDU_SECRET, baiduSecret.getText().toString());
-            secure.put(SecureConfig.YOUDAO_APP_KEY, youdaoAppKey.getText().toString());
-            secure.put(SecureConfig.YOUDAO_SECRET, youdaoSecret.getText().toString());
             secure.put(SecureConfig.AZURE_KEY, azureKey.getText().toString());
             secure.put(SecureConfig.AZURE_REGION, azureRegion.getText().toString());
+            secure.put(SecureConfig.ALIYUN_ACCESS_KEY_ID, aliyunAccessKeyId.getText().toString());
+            secure.put(SecureConfig.ALIYUN_ACCESS_KEY_SECRET, aliyunAccessKeySecret.getText().toString());
+            secure.put(SecureConfig.YOUDAO_APP_KEY, youdaoAppKey.getText().toString());
+            secure.put(SecureConfig.YOUDAO_SECRET, youdaoSecret.getText().toString());
             secure.put(SecureConfig.DEEPL_KEY, deepLKey.getText().toString());
             secure.put(SecureConfig.GOOGLE_KEY, googleKey.getText().toString());
             secure.put(SecureConfig.LIBRE_ENDPOINT, libreEndpoint.getText().toString());
             secure.put(SecureConfig.LIBRE_KEY, libreKey.getText().toString());
             refreshConfiguredSummary();
-            status.setText("✅ 已加密保存。在线 Key 仅作为你主动选择或离线失败后的备用。");
+            status.setText("✅ 已加密保存。自动模式：ML Kit → 百度 / Azure / 阿里云在线兜底。");
             toast("已保存");
             if (finishAfter) finish();
         } catch (Exception e) {
@@ -221,12 +238,18 @@ public class ApiSettingsActivity extends Activity {
     private void refreshConfiguredSummary() {
         if (configuredSummary == null) return;
         List<String> configured = new ArrayList<>();
-        if (secure.has(SecureConfig.BAIDU_APP_ID) && secure.has(SecureConfig.BAIDU_SECRET)) configured.add("百度");
-        if (secure.has(SecureConfig.YOUDAO_APP_KEY) && secure.has(SecureConfig.YOUDAO_SECRET)) configured.add("有道");
+        if (secure.has(SecureConfig.BAIDU_APP_ID) && secure.has(SecureConfig.BAIDU_SECRET)) {
+            configured.add("百度");
+        }
         if (secure.has(SecureConfig.AZURE_KEY)) configured.add("Azure");
-        if (secure.has(SecureConfig.DEEPL_KEY)) configured.add("DeepL");
-        if (secure.has(SecureConfig.GOOGLE_KEY)) configured.add("Google");
-        if (secure.has(SecureConfig.LIBRE_ENDPOINT)) configured.add("LibreTranslate");
+        if (secure.has(SecureConfig.ALIYUN_ACCESS_KEY_ID)
+            && secure.has(SecureConfig.ALIYUN_ACCESS_KEY_SECRET)) configured.add("阿里云");
+        if (secure.has(SecureConfig.YOUDAO_APP_KEY) && secure.has(SecureConfig.YOUDAO_SECRET)) {
+            configured.add("有道(兼容)");
+        }
+        if (secure.has(SecureConfig.DEEPL_KEY)) configured.add("DeepL(兼容)");
+        if (secure.has(SecureConfig.GOOGLE_KEY)) configured.add("Google(兼容)");
+        if (secure.has(SecureConfig.LIBRE_ENDPOINT)) configured.add("LibreTranslate(兼容)");
         configuredSummary.setText(configured.isEmpty()
             ? "API 安全状态：当前未保存在线 API 配置"
             : "API 安全状态：已配置 " + String.join("、", configured) + "（内容已隐藏）");
@@ -235,7 +258,7 @@ public class ApiSettingsActivity extends Activity {
     private void confirmClearAll() {
         new AlertDialog.Builder(this)
             .setTitle("清空全部 API 密钥？")
-            .setMessage("会删除本机保存的百度、有道、Azure、DeepL、Google、LibreTranslate 配置。离线模型不会删除。")
+            .setMessage("会删除本机保存的百度、Azure、阿里云及其他兼容 API 配置。离线模型不会删除。")
             .setNegativeButton("取消", null)
             .setPositiveButton("清空", (dialog, which) -> {
                 secure.clearAll();
@@ -248,8 +271,9 @@ public class ApiSettingsActivity extends Activity {
     }
 
     private void clearFields() {
-        EditText[] fields = {baiduAppId, baiduSecret, youdaoAppKey, youdaoSecret, azureKey,
-            azureRegion, deepLKey, googleKey, libreEndpoint, libreKey};
+        EditText[] fields = {baiduAppId, baiduSecret, azureKey, azureRegion,
+            aliyunAccessKeyId, aliyunAccessKeySecret, youdaoAppKey, youdaoSecret,
+            deepLKey, googleKey, libreEndpoint, libreKey};
         for (EditText field : fields) if (field != null) field.setText("");
     }
 
@@ -277,39 +301,39 @@ public class ApiSettingsActivity extends Activity {
     }
 
     private TextView section(String value) {
-        TextView t = text(value, 18, Color.WHITE);
-        t.setTypeface(null, 1);
-        t.setPadding(0, dp(18), 0, dp(4));
-        return t;
+        TextView text = text(value, 18, Color.WHITE);
+        text.setTypeface(null, 1);
+        text.setPadding(0, dp(18), 0, dp(4));
+        return text;
     }
 
     private TextView label(String value) {
-        TextView t = text(value, 14, Color.rgb(201, 190, 221));
-        t.setPadding(0, dp(5), 0, dp(3));
-        return t;
+        TextView text = text(value, 14, Color.rgb(201, 190, 221));
+        text.setPadding(0, dp(5), 0, dp(3));
+        return text;
     }
 
     private TextView text(String value, float sp, int color) {
-        TextView t = new TextView(this);
-        t.setText(value);
-        t.setTextSize(sp);
-        t.setTextColor(color);
-        return t;
+        TextView text = new TextView(this);
+        text.setText(value);
+        text.setTextSize(sp);
+        text.setTextColor(color);
+        return text;
     }
 
     private Button button(String value) {
-        Button b = new Button(this);
-        b.setText(value);
-        b.setTextColor(Color.WHITE);
-        b.setAllCaps(false);
-        b.setBackgroundResource(R.drawable.button_secondary);
-        return b;
+        Button button = new Button(this);
+        button.setText(value);
+        button.setTextColor(Color.WHITE);
+        button.setAllCaps(false);
+        button.setBackgroundResource(R.drawable.button_secondary);
+        return button;
     }
 
     private LinearLayout.LayoutParams matchWrap() {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.setMargins(0, dp(6), 0, dp(6));
-        return p;
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.setMargins(0, dp(6), 0, dp(6));
+        return params;
     }
 
     private void toast(String value) {
