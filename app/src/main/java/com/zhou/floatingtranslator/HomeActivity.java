@@ -9,6 +9,8 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -25,6 +27,13 @@ public final class HomeActivity extends Activity {
     private TextView quickStatus;
     private TextView recent;
     private UpdateChecker updateChecker;
+    private final Handler dashboardHandler = new Handler(Looper.getMainLooper());
+    private final Runnable dashboardTick = new Runnable() {
+        @Override public void run() {
+            refreshStatus();
+            dashboardHandler.postDelayed(this, 2000L);
+        }
+    };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -57,7 +66,7 @@ public final class HomeActivity extends Activity {
         root.addView(subtitle);
 
         LinearLayout statusCard = card(root);
-        statusCard.addView(sectionTitle("当前状态"));
+        statusCard.addView(sectionTitle("当前状态 · 运行内存实时刷新"));
         quickStatus = text("", 14, Color.rgb(224, 217, 238));
         quickStatus.setPadding(0, dp(7), 0, 0);
         statusCard.addView(quickStatus);
@@ -101,8 +110,8 @@ public final class HomeActivity extends Activity {
         recentCard.addView(copy, matchWrap());
 
         TextView note = text(
-            "纯日语优先 ReazonSpeech；日英混合优先 Qwen3-ASR / Whisper。\n" +
-            "SenseVoice、ReazonSpeech、Whisper 的完整包可在 FP32 / INT8 间切换；FP32 更吃内存，不代表所有场景都会明显更准。",
+            "常用亚洲语种已放在语言列表前面：中文、英语、日语、越南语、菲律宾语、马来语、韩语；同时还有泰语、印尼语等，文字翻译共覆盖 ML Kit 的 59 种语言。\n" +
+            "ASR：日语优先 Parakeet / ReazonSpeech；韩语可用 SenseVoice / Qwen3 / Whisper；越南语、马来语、菲律宾语、泰语、印尼语优先 Qwen3 / Whisper / Omnilingual。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(3), dp(12), dp(3), 0);
         root.addView(note);
@@ -148,18 +157,23 @@ public final class HomeActivity extends Activity {
     }
 
     private void refreshStatus() {
-        if (quickStatus == null) return;
+        if (quickStatus == null || preferences == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         String asr = preferences.getString("asr_mode", TranslationService.ASR_AUTO);
         String precision = preferences.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
         int input = Math.min(2, preferences.getInt("input_mode", 0));
         boolean overlay = Settings.canDrawOverlays(this);
         String source = input == 2 ? "ROOT 通话/VoIP" : input == 1 ? "麦克风" : "系统内部声音";
+        int sourceIndex = clampLanguageIndex(preferences.getInt("source_index", 2));
+        int targetIndex = clampLanguageIndex(preferences.getInt("target_index", 0));
+        RuntimeMemory.Snapshot memory = RuntimeMemory.read(this);
         quickStatus.setText(
             "声音：" + source + "\n" +
+            "语言：" + LanguageOption.ALL[sourceIndex].label + " → " + LanguageOption.ALL[targetIndex].label + "\n" +
             "ASR：" + asrLabel(asr) + "\n" +
             "ASR 精度：" + precisionLabel(precision) + "\n" +
             "翻译：" + engineLabel(engine) + "\n" +
+            memory.compact() + "\n" +
             "悬浮窗：" + (overlay ? "✅ 已授权" : "⚠ 未授权") + "\n" +
             "历史：" + HistoryStore.count(this) + " 条"
         );
@@ -171,6 +185,10 @@ public final class HomeActivity extends Activity {
                 ? "暂无翻译记录"
                 : (original.isEmpty() ? "译文：" + translated : "原文：" + original + "\n译文：" + translated));
         }
+    }
+
+    private int clampLanguageIndex(int value) {
+        return Math.max(0, Math.min(value, LanguageOption.ALL.length - 1));
     }
 
     private String precisionLabel(String value) {
@@ -230,24 +248,25 @@ public final class HomeActivity extends Activity {
 
     private String asrLabel(String asr) {
         if (TranslationService.ASR_VOSK.equals(asr)) return "Vosk";
-        if (TranslationService.ASR_SENSEVOICE.equals(asr)) return "SenseVoice";
-        if (TranslationService.ASR_REAZON.equals(asr)) return "ReazonSpeech";
-        if (TranslationService.ASR_PARAKEET.equals(asr)) return "Parakeet 日语";
-        if (TranslationService.ASR_WHISPER_SMALL.equals(asr)) return "Whisper Small";
-        if (TranslationService.ASR_WHISPER_MEDIUM.equals(asr)) return "Whisper Medium";
-        if (TranslationService.ASR_QWEN3.equals(asr)) return "Qwen3-ASR";
-        if (TranslationService.ASR_OMNILINGUAL.equals(asr)) return "Omnilingual ASR";
         if (TranslationService.ASR_SYSTEM.equals(asr)) return "系统 SpeechRecognizer";
         if (TranslationService.ASR_YOUDAO.equals(asr)) return "有道云 ASR";
-        return "自动推荐";
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(asr);
+        return model == null ? "自动推荐" : model.name;
     }
 
     @Override protected void onResume() {
         super.onResume();
-        refreshStatus();
+        dashboardHandler.removeCallbacks(dashboardTick);
+        dashboardHandler.post(dashboardTick);
+    }
+
+    @Override protected void onPause() {
+        dashboardHandler.removeCallbacks(dashboardTick);
+        super.onPause();
     }
 
     @Override protected void onDestroy() {
+        dashboardHandler.removeCallbacks(dashboardTick);
         if (updateChecker != null) updateChecker.close();
         super.onDestroy();
     }
