@@ -25,7 +25,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
 import java.nio.ByteBuffer;
 
-/** Periodically captures MediaProjection frames and performs fully on-device ML Kit OCR. */
+/** Low-frequency MediaProjection OCR capture tuned for background use. */
 public final class OcrCapture {
     public interface Callback {
         void onFrame(int width, int height);
@@ -33,8 +33,8 @@ public final class OcrCapture {
         void onError(Exception error);
     }
 
-    private static final long OCR_INTERVAL_MS = 1200L;
-    private static final int MAX_OCR_WIDTH = 1080;
+    private static final long OCR_INTERVAL_MS = 2500L;
+    private static final int MAX_OCR_WIDTH = 720;
 
     private final Context context;
     private final Callback callback;
@@ -46,6 +46,7 @@ public final class OcrCapture {
     private VirtualDisplay virtualDisplay;
     private volatile boolean busy;
     private volatile boolean stopped;
+    private volatile boolean paused;
     private long lastProcessedAt;
 
     public OcrCapture(Context context, String sourceMlTag, Callback callback) {
@@ -68,7 +69,7 @@ public final class OcrCapture {
             int height = Math.max(1, Math.round(originalHeight * scale));
             int density = Math.max(1, Math.round(context.getResources().getDisplayMetrics().densityDpi * scale));
 
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
             imageReader.setOnImageAvailableListener(this::onImageAvailable, handler);
             virtualDisplay = projection.createVirtualDisplay(
                 "FloatingTranslator-OCR",
@@ -80,12 +81,14 @@ public final class OcrCapture {
                 null,
                 handler
             );
-            if (virtualDisplay == null) {
-                throw new IllegalStateException("VirtualDisplay 创建失败");
-            }
+            if (virtualDisplay == null) throw new IllegalStateException("VirtualDisplay 创建失败");
         } catch (Exception e) {
             callback.onError(e);
         }
+    }
+
+    public void setPaused(boolean value) {
+        paused = value;
     }
 
     private void onImageAvailable(ImageReader reader) {
@@ -94,7 +97,7 @@ public final class OcrCapture {
             image = reader.acquireLatestImage();
             if (image == null) return;
             long now = SystemClock.elapsedRealtime();
-            if (stopped || busy || now - lastProcessedAt < OCR_INTERVAL_MS) return;
+            if (stopped || paused || busy || now - lastProcessedAt < OCR_INTERVAL_MS) return;
             lastProcessedAt = now;
             busy = true;
 
@@ -103,13 +106,12 @@ public final class OcrCapture {
                 busy = false;
                 return;
             }
-
             callback.onFrame(bitmap.getWidth(), bitmap.getHeight());
             InputImage input = InputImage.fromBitmap(bitmap, 0);
             recognizer.process(input)
                 .addOnSuccessListener(result -> {
                     String text = normalize(result.getText());
-                    if (!text.isEmpty() && !stopped) callback.onText(text);
+                    if (!text.isEmpty() && !stopped && !paused) callback.onText(text);
                 })
                 .addOnFailureListener(callback::onError)
                 .addOnCompleteListener(task -> {
@@ -150,7 +152,7 @@ public final class OcrCapture {
             .replaceAll("[\\t ]+", " ")
             .replaceAll("\\n{3,}", "\\n\\n")
             .trim();
-        if (text.length() > 900) text = text.substring(0, 900);
+        if (text.length() > 700) text = text.substring(0, 700);
         return text;
     }
 
