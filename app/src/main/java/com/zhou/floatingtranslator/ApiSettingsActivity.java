@@ -32,8 +32,8 @@ public class ApiSettingsActivity extends Activity {
 
     private EditText baiduAppId;
     private EditText baiduSecret;
-    private EditText azureKey;
-    private EditText azureRegion;
+    private final EditText[] azureKeys = new EditText[4];
+    private final EditText[] azureRegions = new EditText[4];
     private EditText aliyunAccessKeyId;
     private EditText aliyunAccessKeySecret;
     private EditText youdaoAppKey;
@@ -67,7 +67,7 @@ public class ApiSettingsActivity extends Activity {
 
         TextView note = text(
             "默认推荐“自动”：ML Kit 本地离线优先；只有本地失败时才依次尝试已配置的百度、Azure、阿里云。\n" +
-            "这三项作为当前主力在线翻译；其他旧引擎仅保留兼容。所有 Key 保存后使用 Android Keystore + AES/GCM 加密。",
+            "Azure 可保存 1-4 共四套资源；当前资源出现配额/限流/订阅错误时会自动切下一套。所有 Key 使用 Android Keystore + AES/GCM 加密。",
             14, Color.rgb(201, 190, 221));
         note.setPadding(0, dp(5), 0, dp(16));
         root.addView(note);
@@ -111,12 +111,20 @@ public class ApiSettingsActivity extends Activity {
         root.addView(baiduAppId, matchWrap());
         root.addView(baiduSecret, matchWrap());
 
-        root.addView(section("Azure Translator（主力在线备用）"));
-        azureKey = field("Azure Subscription Key", true, SecureConfig.AZURE_KEY);
-        azureRegion = field("Azure Region（可留空；多服务资源再填 japaneast / eastasia 等）",
-            false, SecureConfig.AZURE_REGION);
-        root.addView(azureKey, matchWrap());
-        root.addView(azureRegion, matchWrap());
+        root.addView(section("Azure Translator 账号 1-4（自动切换）"));
+        TextView azureTip = text(
+            "按 1 → 2 → 3 → 4 使用。成功后会记住当前账号；遇到 HTTP 401/403/429、quota/exceeded/limit 等配额或订阅错误时自动尝试下一套。Region 单服务 Translator 通常可留空。",
+            12, Color.rgb(174, 164, 198));
+        root.addView(azureTip);
+        for (int slot = 1; slot <= 4; slot++) {
+            root.addView(label("Azure 账号 " + slot));
+            azureKeys[slot - 1] = field("账号" + slot + " · Subscription Key", true,
+                SecureConfig.azureKeyName(slot));
+            azureRegions[slot - 1] = field("账号" + slot + " · Region（可留空）", false,
+                SecureConfig.azureRegionName(slot));
+            root.addView(azureKeys[slot - 1], matchWrap());
+            root.addView(azureRegions[slot - 1], matchWrap());
+        }
 
         root.addView(section("阿里云机器翻译（主力在线备用）"));
         aliyunAccessKeyId = field("阿里云 AccessKey ID", false, SecureConfig.ALIYUN_ACCESS_KEY_ID);
@@ -193,8 +201,14 @@ public class ApiSettingsActivity extends Activity {
     }
 
     private void applySecretVisibility(boolean show) {
-        EditText[] fields = {baiduSecret, azureKey, aliyunAccessKeySecret, youdaoSecret,
-            deepLKey, googleKey, libreKey};
+        List<EditText> fields = new ArrayList<>();
+        fields.add(baiduSecret);
+        for (EditText field : azureKeys) fields.add(field);
+        fields.add(aliyunAccessKeySecret);
+        fields.add(youdaoSecret);
+        fields.add(deepLKey);
+        fields.add(googleKey);
+        fields.add(libreKey);
         for (EditText field : fields) {
             if (field == null) continue;
             int pos = field.getSelectionStart();
@@ -216,8 +230,10 @@ public class ApiSettingsActivity extends Activity {
         try {
             secure.put(SecureConfig.BAIDU_APP_ID, baiduAppId.getText().toString());
             secure.put(SecureConfig.BAIDU_SECRET, baiduSecret.getText().toString());
-            secure.put(SecureConfig.AZURE_KEY, azureKey.getText().toString());
-            secure.put(SecureConfig.AZURE_REGION, azureRegion.getText().toString());
+            for (int slot = 1; slot <= 4; slot++) {
+                secure.put(SecureConfig.azureKeyName(slot), azureKeys[slot - 1].getText().toString());
+                secure.put(SecureConfig.azureRegionName(slot), azureRegions[slot - 1].getText().toString());
+            }
             secure.put(SecureConfig.ALIYUN_ACCESS_KEY_ID, aliyunAccessKeyId.getText().toString());
             secure.put(SecureConfig.ALIYUN_ACCESS_KEY_SECRET, aliyunAccessKeySecret.getText().toString());
             secure.put(SecureConfig.YOUDAO_APP_KEY, youdaoAppKey.getText().toString());
@@ -227,7 +243,7 @@ public class ApiSettingsActivity extends Activity {
             secure.put(SecureConfig.LIBRE_ENDPOINT, libreEndpoint.getText().toString());
             secure.put(SecureConfig.LIBRE_KEY, libreKey.getText().toString());
             refreshConfiguredSummary();
-            status.setText("✅ 已加密保存。自动模式：ML Kit → 百度 / Azure / 阿里云在线兜底。");
+            status.setText("✅ 已加密保存。Azure 账号1-4已启用自动切换逻辑。");
             toast("已保存");
             if (finishAfter) finish();
         } catch (Exception e) {
@@ -241,7 +257,8 @@ public class ApiSettingsActivity extends Activity {
         if (secure.has(SecureConfig.BAIDU_APP_ID) && secure.has(SecureConfig.BAIDU_SECRET)) {
             configured.add("百度");
         }
-        if (secure.has(SecureConfig.AZURE_KEY)) configured.add("Azure");
+        int azureCount = secure.configuredAzureProfileCount();
+        if (azureCount > 0) configured.add("Azure×" + azureCount);
         if (secure.has(SecureConfig.ALIYUN_ACCESS_KEY_ID)
             && secure.has(SecureConfig.ALIYUN_ACCESS_KEY_SECRET)) configured.add("阿里云");
         if (secure.has(SecureConfig.YOUDAO_APP_KEY) && secure.has(SecureConfig.YOUDAO_SECRET)) {
@@ -258,11 +275,12 @@ public class ApiSettingsActivity extends Activity {
     private void confirmClearAll() {
         new AlertDialog.Builder(this)
             .setTitle("清空全部 API 密钥？")
-            .setMessage("会删除本机保存的百度、Azure、阿里云及其他兼容 API 配置。离线模型不会删除。")
+            .setMessage("会删除本机保存的百度、Azure 1-4、阿里云及其他兼容 API 配置。离线模型不会删除。")
             .setNegativeButton("取消", null)
             .setPositiveButton("清空", (dialog, which) -> {
                 secure.clearAll();
                 clearFields();
+                prefs.edit().remove("azure_active_slot").apply();
                 refreshConfiguredSummary();
                 if (status != null) status.setText("✅ 已清空全部 API 配置");
                 toast("API 密钥已清空");
@@ -271,9 +289,19 @@ public class ApiSettingsActivity extends Activity {
     }
 
     private void clearFields() {
-        EditText[] fields = {baiduAppId, baiduSecret, azureKey, azureRegion,
-            aliyunAccessKeyId, aliyunAccessKeySecret, youdaoAppKey, youdaoSecret,
-            deepLKey, googleKey, libreEndpoint, libreKey};
+        List<EditText> fields = new ArrayList<>();
+        fields.add(baiduAppId);
+        fields.add(baiduSecret);
+        for (EditText field : azureKeys) fields.add(field);
+        for (EditText field : azureRegions) fields.add(field);
+        fields.add(aliyunAccessKeyId);
+        fields.add(aliyunAccessKeySecret);
+        fields.add(youdaoAppKey);
+        fields.add(youdaoSecret);
+        fields.add(deepLKey);
+        fields.add(googleKey);
+        fields.add(libreEndpoint);
+        fields.add(libreKey);
         for (EditText field : fields) if (field != null) field.setText("");
     }
 
