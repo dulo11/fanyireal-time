@@ -2,6 +2,8 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -93,6 +95,6 @@ jobs:
               "$APK_NAME" FloatingTranslator-latest.apk \
               --target "$GITHUB_SHA" \
               --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- RAM 监控新增进程启动基线、当前增加量、本次峰值\n- 基线在 Application 启动早期采集，便于比较 Vosk / INT8 / FP32 / 大模型实际额外占用\n- 离线模型中心把已安装模型与未完成下载缓存分开统计\n- 新增一键清理未完成下载缓存，下载进行中会自动禁止清理\n- 修复 0 个高精度模型却显示残留 .part 文件为已安装占用的问题\n- 保留 ROOT 通话、FP32/INT8、日韩及东南亚常用语言和 59 种 ML Kit 翻译\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
+              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 新增默认“高精度·快语速”对话模式，连续讲话最长分段由旧版约 4.2 秒延长到约 10 秒\n- 静音切句更宽松，减少快速聊天时在半句话中间被切断\n- 强制切段保留约 0.9 秒音频重叠，并自动去除重复文字，降低边界漏字\n- 提供高精度 / 均衡 / 低延迟三档对话模式\n- ReazonSpeech 高精度模式尝试 modified beam search\n- Qwen3 高精度模式提高长句输出 token 上限\n- 首页显示当前对话模式；ROOT 通话与普通直播共用同一设置\n- 保留 RAM/PSS 基线、FP32/INT8、模型缓存清理和日韩/东南亚常用语言\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
               --latest
           fi
