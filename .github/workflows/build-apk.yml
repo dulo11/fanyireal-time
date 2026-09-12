@@ -2,8 +2,22 @@ name: Build APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '使用固定签名并发布 GitHub Release'
+        required: true
+        type: boolean
+        default: false
+      version:
+        description: '版本号（不要写 v）'
+        required: true
+        type: string
+        default: '0.3.0'
   push:
     branches: [ main, master ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -21,5 +35,38 @@ jobs:
         run: gradle assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: FloatingTranslator-v0.2.0-debug-apk
+          name: FloatingTranslator-v0.3.0-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Prepare fixed signing key
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || (echo "缺少 ANDROID_KEYSTORE_BASE64 Secret" && exit 1)
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/floating-translator.jks"
+      - name: Build signed release APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/floating-translator.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || (echo "缺少签名密码 Secret" && exit 1)
+          gradle assembleRelease --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk "FloatingTranslator-v${{ inputs.version }}-release.apk"
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        with:
+          name: FloatingTranslator-v${{ inputs.version }}-release-apk
+          path: FloatingTranslator-v${{ inputs.version }}-release.apk
+      - name: Publish GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            "FloatingTranslator-v${{ inputs.version }}-release.apk" \
+            --target "$GITHUB_SHA" \
+            --title "浮译 v${{ inputs.version }}" \
+            --generate-notes
