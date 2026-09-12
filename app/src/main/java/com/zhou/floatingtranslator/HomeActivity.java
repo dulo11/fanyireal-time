@@ -51,7 +51,7 @@ public final class HomeActivity extends Activity {
         version.setPadding(0, dp(2), 0, dp(3));
         root.addView(version);
 
-        TextView subtitle = text("实时语音翻译 · 离线 ASR · 悬浮字幕", 14,
+        TextView subtitle = text("实时语音翻译 · 离线 ASR · ROOT 通话 · 悬浮字幕", 14,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, 0, 0, dp(16));
         root.addView(subtitle);
@@ -84,9 +84,12 @@ public final class HomeActivity extends Activity {
             toolButton("☎ ROOT 通话", v -> startActivity(new Intent(this, RootCallActivity.class)))
         ));
         toolsCard.addView(toolRow(
-            toolButton("⚙ 翻译引擎", v -> startActivity(new Intent(this, ApiSettingsActivity.class))),
-            toolButton("⬆ 检查更新", v -> checkUpdate())
+            toolButton("🎚 ASR 精度", v -> startActivity(new Intent(this, AsrPrecisionActivity.class))),
+            toolButton("⚙ 翻译引擎", v -> startActivity(new Intent(this, ApiSettingsActivity.class)))
         ));
+        Button update = secondaryButton("⬆ 检查更新");
+        update.setOnClickListener(v -> checkUpdate());
+        toolsCard.addView(update, matchWrap());
 
         LinearLayout recentCard = card(root);
         recentCard.addView(sectionTitle("最近翻译"));
@@ -98,8 +101,8 @@ public final class HomeActivity extends Activity {
         recentCard.addView(copy, matchWrap());
 
         TextView note = text(
-            "建议：看日本直播先用“系统内部声音”；纯日语优先 ReazonSpeech，日英混合优先 Qwen3-ASR / Whisper。\n" +
-            "本版只发布通用 APK，不再同时生成 ARM64 单独版本。",
+            "纯日语优先 ReazonSpeech；日英混合优先 Qwen3-ASR / Whisper。\n" +
+            "SenseVoice、ReazonSpeech、Whisper 的完整包可在 FP32 / INT8 间切换；FP32 更吃内存，不代表所有场景都会明显更准。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(3), dp(12), dp(3), 0);
         root.addView(note);
@@ -148,11 +151,14 @@ public final class HomeActivity extends Activity {
         if (quickStatus == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         String asr = preferences.getString("asr_mode", TranslationService.ASR_AUTO);
-        int input = Math.min(1, preferences.getInt("input_mode", 0));
+        String precision = preferences.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
+        int input = Math.min(2, preferences.getInt("input_mode", 0));
         boolean overlay = Settings.canDrawOverlays(this);
+        String source = input == 2 ? "ROOT 通话/VoIP" : input == 1 ? "麦克风" : "系统内部声音";
         quickStatus.setText(
-            "声音：" + (input == 0 ? "系统内部声音" : "麦克风") + "\n" +
+            "声音：" + source + "\n" +
             "ASR：" + asrLabel(asr) + "\n" +
+            "ASR 精度：" + precisionLabel(precision) + "\n" +
             "翻译：" + engineLabel(engine) + "\n" +
             "悬浮窗：" + (overlay ? "✅ 已授权" : "⚠ 未授权") + "\n" +
             "历史：" + HistoryStore.count(this) + " 条"
@@ -165,6 +171,12 @@ public final class HomeActivity extends Activity {
                 ? "暂无翻译记录"
                 : (original.isEmpty() ? "译文：" + translated : "原文：" + original + "\n译文：" + translated));
         }
+    }
+
+    private String precisionLabel(String value) {
+        if (SherpaSpeechEngine.PRECISION_FP32.equals(value)) return "FP32 原始权重";
+        if (SherpaSpeechEngine.PRECISION_INT8.equals(value)) return "INT8 量化";
+        return "自动（INT8 优先）";
     }
 
     private void checkUpdate() {
