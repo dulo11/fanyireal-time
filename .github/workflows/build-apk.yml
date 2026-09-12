@@ -35,7 +35,6 @@ jobs:
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=v$VERSION" >> "$GITHUB_ENV"
           echo "APK_NAME=FloatingTranslator-v${VERSION}-release.apk" >> "$GITHUB_ENV"
-          echo "ARM64_APK_NAME=FloatingTranslator-v${VERSION}-arm64-v8a.apk" >> "$GITHUB_ENV"
           echo "ARTIFACT_NAME=FloatingTranslator-v${VERSION}-Signed" >> "$GITHUB_ENV"
 
       - name: Restore signing keystore
@@ -63,40 +62,22 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$APK_NAME"
           cp "$APK_NAME" FloatingTranslator-latest.apk
 
-      - name: Build arm64-v8a signed APK
-        env:
-          ANDROID_ABI_ONLY: arm64-v8a
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/floating-translator.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle clean assembleRelease --stacktrace
-
-      - name: Copy arm64-v8a APK
-        run: |
-          test -f app/build/outputs/apk/release/app-release.apk || exit 1
-          cp app/build/outputs/apk/release/app-release.apk "$ARM64_APK_NAME"
-          cp "$ARM64_APK_NAME" FloatingTranslator-arm64-latest.apk
-
-      - name: Verify APK signatures
+      - name: Verify APK signature
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -n "$APKSIGNER" || exit 1
           "$APKSIGNER" verify --verbose --print-certs "$APK_NAME"
-          "$APKSIGNER" verify --verbose --print-certs "$ARM64_APK_NAME"
 
       - name: Show APK information
         run: |
-          ls -lh "$APK_NAME" "$ARM64_APK_NAME"
-          sha256sum "$APK_NAME" "$ARM64_APK_NAME"
+          ls -lh "$APK_NAME"
+          sha256sum "$APK_NAME"
 
-      - name: Upload signed APK artifacts
+      - name: Upload signed APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: |
-            ${{ env.APK_NAME }}
-            ${{ env.ARM64_APK_NAME }}
+          path: ${{ env.APK_NAME }}
           if-no-files-found: error
           retention-days: 30
 
@@ -105,16 +86,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" \
-              "$APK_NAME" "$ARM64_APK_NAME" \
-              FloatingTranslator-latest.apk FloatingTranslator-arm64-latest.apk --clobber
+            gh release upload "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk --clobber
             gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --latest
           else
             gh release create "$RELEASE_TAG" \
-              "$APK_NAME" "$ARM64_APK_NAME" \
-              FloatingTranslator-latest.apk FloatingTranslator-arm64-latest.apk \
+              "$APK_NAME" FloatingTranslator-latest.apk \
               --target "$GITHUB_SHA" \
               --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "浮译 $APP_VERSION 正式签名版。\n\n- 通用版：兼容更多 Android ABI\n- arm64-v8a：现代 ARM64 手机专用，体积更小\n- APK 已通过 apksigner 签名校验\n- 可直接覆盖安装同签名旧版本\n- 大型离线 ASR 模型按需在 App 内下载\n\n长期下载入口：Releases → Latest" \
+              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 仅发布通用 APK，不再额外生成 ARM64 专版\n- APK 已通过 apksigner 签名校验\n- 可直接覆盖安装同签名旧版本\n- 大型离线 ASR 模型继续按需在 App 内下载\n\n长期下载入口：Releases → Latest" \
               --latest
           fi
