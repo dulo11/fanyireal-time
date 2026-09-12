@@ -22,6 +22,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
@@ -58,10 +59,15 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String EXTRA_SHOW_ORIGINAL = "show_original";
     public static final String EXTRA_PREFER_OFFLINE = "prefer_offline";
     public static final String EXTRA_FONT_SIZE = "font_size";
+    public static final String EXTRA_ENABLE_OCR = "enable_ocr";
+    public static final String EXTRA_AUTO_MIC_FALLBACK = "auto_mic_fallback";
 
     private static final int NOTIFICATION_ID = 3401;
     private static final String CHANNEL_ID = "floating_translation";
     private static final int SAMPLE_RATE = 16000;
+    private static final int AUDIO_PRESENT_PEAK = 64;
+    private static final long SILENCE_FALLBACK_MS = 8000L;
+    private static final long LEVEL_UPDATE_MS = 500L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -71,6 +77,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private AudioRecord audioRecord;
     private SpeechRecognizer recognizer;
     private Translator translator;
+    private OcrCapture ocrCapture;
     private ParcelFileDescriptor readPipe;
     private ParcelFileDescriptor writePipe;
     private OutputStream speechOutput;
@@ -81,14 +88,28 @@ public class TranslationService extends Service implements RecognitionListener {
     private WindowManager.LayoutParams overlayParams;
     private TextView originalText;
     private TextView translatedText;
+    private TextView ocrOriginalText;
+    private TextView ocrTranslatedText;
+    private TextView inputLevelText;
     private TextView pauseControl;
+
     private boolean showOriginal;
     private boolean preferOffline;
+    private boolean enableOcr;
+    private boolean autoMicFallback;
     private volatile boolean paused;
+    private volatile boolean fallbackPosted;
+    private boolean micFallbackActivated;
     private String inputMode = INPUT_PLAYBACK;
     private String speechLanguage;
+    private String sourceMlTag;
     private String lastPartial = "";
+    private String lastOcrText = "";
     private Runnable partialTranslation;
+    private long playbackStartedAt;
+    private long lastAudibleAt;
+    private long lastLevelUiAt;
+    private int playbackRecognizerErrors;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -105,53 +126,56 @@ public class TranslationService extends Service implements RecognitionListener {
 
         inputMode = intent.getStringExtra(EXTRA_INPUT_MODE);
         if (!INPUT_MICROPHONE.equals(inputMode)) inputMode = INPUT_PLAYBACK;
-        int foregroundType = INPUT_MICROPHONE.equals(inputMode)
-            ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            : ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
-        startForeground(NOTIFICATION_ID, buildNotification("正在准备实时翻译"), foregroundType);
-        if (running) stopPipelineOnly();
         speechLanguage = intent.getStringExtra(EXTRA_SOURCE_SPEECH);
-        String sourceMl = intent.getStringExtra(EXTRA_SOURCE_MLKIT);
+        sourceMlTag = intent.getStringExtra(EXTRA_SOURCE_MLKIT);
         String targetMl = intent.getStringExtra(EXTRA_TARGET_MLKIT);
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
         preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, false);
+        enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, true);
+        autoMicFallback = intent.getBooleanExtra(EXTRA_AUTO_MIC_FALLBACK, true);
         paused = false;
+        fallbackPosted = false;
+        micFallbackActivated = false;
+        playbackRecognizerErrors = 0;
+        lastPartial = "";
+        lastOcrText = "";
         int fontSize = intent.getIntExtra(EXTRA_FONT_SIZE, 24);
-        Intent resultData = android.os.Build.VERSION.SDK_INT >= 33
-            ? intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class)
-            : intent.getParcelableExtra(EXTRA_RESULT_DATA);
-        int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
 
+        Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class);
+        int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         boolean playbackMode = INPUT_PLAYBACK.equals(inputMode);
-        if (!Settings.canDrawOverlays(this) || (playbackMode && resultData == null)
-            || sourceMl == null || targetMl == null) {
+        boolean projectionNeeded = playbackMode || (enableOcr && resultData != null);
+
+        int foregroundType = 0;
+        if (projectionNeeded) foregroundType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+        if (INPUT_MICROPHONE.equals(inputMode) || (playbackMode && autoMicFallback)) {
+            foregroundType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        }
+        if (foregroundType == 0) foregroundType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        startForeground(NOTIFICATION_ID, buildNotification("正在准备实时翻译"), foregroundType);
+
+        if (running || projection != null || translator != null) stopPipelineOnly();
+
+        if (!Settings.canDrawOverlays(this)
+            || (projectionNeeded && resultData == null)
+            || sourceMlTag == null || targetMl == null) {
             stopEverything();
             return START_NOT_STICKY;
         }
+
         createOverlay(fontSize);
         translator = Translation.getClient(new TranslatorOptions.Builder()
-            .setSourceLanguage(sourceMl)
+            .setSourceLanguage(sourceMlTag)
             .setTargetLanguage(targetMl)
             .build());
         showStatus("正在加载翻译模型……");
         translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
             .addOnSuccessListener(x -> {
-                if (playbackMode) startProjection(resultCode, resultData);
+                if (projectionNeeded) startProjection(resultCode, resultData);
                 else startMicrophoneMode();
             })
             .addOnFailureListener(e -> showStatus("模型不可用，请回到浮译重新下载\n" + safeMessage(e)));
         return START_NOT_STICKY;
-    }
-
-    private void startMicrophoneMode() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            showStatus("缺少录音权限");
-            return;
-        }
-        running = true;
-        startRecognizerSession();
-        showStatus("正在监听麦克风……\n电话翻译时请打开免提并尽量降低环境噪声");
-        updateNotification("麦克风/免提通话翻译中");
     }
 
     private void startProjection(int resultCode, Intent resultData) {
@@ -162,6 +186,37 @@ public class TranslationService extends Service implements RecognitionListener {
                 @Override public void onStop() { main.post(TranslationService.this::stopEverything); }
             }, main);
 
+            if (enableOcr) startOcr();
+            if (INPUT_MICROPHONE.equals(inputMode)) startMicrophoneMode();
+            else startPlaybackMode();
+        } catch (Exception e) {
+            showStatus("启动屏幕/声音捕获失败：" + safeMessage(e));
+        }
+    }
+
+    private void startOcr() {
+        if (projection == null || !enableOcr) return;
+        ocrCapture = new OcrCapture(this, sourceMlTag, new OcrCapture.Callback() {
+            @Override public void onText(String text) {
+                main.post(() -> handleOcrText(text));
+            }
+            @Override public void onError(Exception error) {
+                main.post(() -> {
+                    if (ocrTranslatedText != null && ocrTranslatedText.getText().toString().trim().isEmpty()) {
+                        ocrTranslatedText.setText("屏幕 OCR 暂不可用：" + safeMessage(error));
+                    }
+                });
+            }
+        });
+        ocrCapture.start(projection);
+    }
+
+    private void startPlaybackMode() {
+        try {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                showStatus("缺少录音权限");
+                return;
+            }
             AudioPlaybackCaptureConfiguration capture = new AudioPlaybackCaptureConfiguration.Builder(projection)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -174,30 +229,55 @@ public class TranslationService extends Service implements RecognitionListener {
                 .build();
             int min = Math.max(AudioRecord.getMinBufferSize(SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), SAMPLE_RATE);
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                showStatus("缺少录音权限"); return;
-            }
             audioRecord = new AudioRecord.Builder()
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(min * 2)
                 .setAudioPlaybackCaptureConfig(capture)
                 .build();
+
             running = true;
+            playbackStartedAt = SystemClock.elapsedRealtime();
+            lastAudibleAt = playbackStartedAt;
             startRecognizerSession();
             audioRecord.startRecording();
             worker.execute(this::captureLoop);
-            showStatus("等待其他 App 播放声音……");
-            updateNotification("正在翻译系统声音");
+            showStatus(enableOcr
+                ? "等待系统声音……\n屏幕 OCR 已同时开启"
+                : "等待其他 App 播放声音……");
+            updateInputLevel("系统声音输入：等待声音");
+            updateNotification("正在翻译系统声音 + 屏幕文字");
         } catch (Exception e) {
-            showStatus("启动失败：" + safeMessage(e));
+            if (autoMicFallback) {
+                showStatus("系统声音不可直接捕获，正在切换麦克风……");
+                main.postDelayed(() -> switchToMicrophoneFallback("系统声音捕获启动失败"), 250);
+            } else {
+                showStatus("启动系统声音失败：" + safeMessage(e));
+            }
         }
+    }
+
+    private void startMicrophoneMode() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            showStatus("缺少录音权限");
+            return;
+        }
+        running = true;
+        startRecognizerSession();
+        showStatus(enableOcr && projection != null
+            ? "正在监听麦克风……\n屏幕 OCR 已同时开启"
+            : "正在监听麦克风……\n电话翻译时请打开免提并尽量降低环境噪声");
+        updateInputLevel("麦克风输入：等待语音");
+        updateNotification("麦克风/免提 + 屏幕翻译中");
     }
 
     private void startRecognizerSession() {
         main.post(() -> {
-            if (!running) return;
+            if (!running || paused) return;
             closeSpeechPipe();
-            if (recognizer != null) recognizer.destroy();
+            if (recognizer != null) {
+                try { recognizer.destroy(); } catch (Exception ignored) {}
+                recognizer = null;
+            }
             try {
                 recognizer = SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
                     ? SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
@@ -208,6 +288,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage)
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline);
+
                 if (INPUT_PLAYBACK.equals(inputMode)) {
                     ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
                     readPipe = pipe[0];
@@ -223,7 +304,11 @@ public class TranslationService extends Service implements RecognitionListener {
                 }
                 recognizer.startListening(listen);
             } catch (Exception e) {
-                showStatus("设备端识别启动失败：" + safeMessage(e));
+                if (INPUT_PLAYBACK.equals(inputMode) && autoMicFallback) {
+                    switchToMicrophoneFallback("系统语音识别器不接受内部音频");
+                } else {
+                    showStatus("语音识别启动失败：" + safeMessage(e));
+                }
             }
         });
     }
@@ -231,39 +316,97 @@ public class TranslationService extends Service implements RecognitionListener {
     private void captureLoop() {
         short[] shorts = new short[1600];
         byte[] bytes = new byte[shorts.length * 2];
-        while (running && audioRecord != null) {
-            int count = audioRecord.read(shorts, 0, shorts.length, AudioRecord.READ_BLOCKING);
+        while (running && INPUT_PLAYBACK.equals(inputMode)) {
+            AudioRecord record = audioRecord;
+            if (record == null) break;
+            int count;
+            try {
+                count = record.read(shorts, 0, shorts.length, AudioRecord.READ_BLOCKING);
+            } catch (Exception e) {
+                break;
+            }
             if (count <= 0) continue;
             if (paused) continue;
+
+            int peak = 0;
             for (int i = 0; i < count; i++) {
+                int value = Math.abs((int) shorts[i]);
+                if (value > peak) peak = value;
                 bytes[i * 2] = (byte) (shorts[i] & 0xff);
                 bytes[i * 2 + 1] = (byte) ((shorts[i] >> 8) & 0xff);
             }
+
+            long now = SystemClock.elapsedRealtime();
+            if (peak >= AUDIO_PRESENT_PEAK) lastAudibleAt = now;
+            if (now - lastLevelUiAt >= LEVEL_UPDATE_MS) {
+                lastLevelUiAt = now;
+                final int currentPeak = peak;
+                main.post(() -> updateInputLevel(audioLevelLabel(currentPeak)));
+            }
+
+            if (autoMicFallback && !micFallbackActivated && !fallbackPosted
+                && now - playbackStartedAt >= SILENCE_FALLBACK_MS
+                && now - lastAudibleAt >= SILENCE_FALLBACK_MS) {
+                fallbackPosted = true;
+                main.post(() -> switchToMicrophoneFallback("连续 8 秒未检测到可捕获的系统声音"));
+                break;
+            }
+
             OutputStream output;
             synchronized (pipeLock) { output = speechOutput; }
             try {
                 if (output != null) output.write(bytes, 0, count * 2);
             } catch (IOException ignored) {
-                if (!paused) main.postDelayed(this::startRecognizerSession, 250);
+                if (!paused && INPUT_PLAYBACK.equals(inputMode)) {
+                    main.postDelayed(this::startRecognizerSession, 250);
+                }
             }
         }
+    }
+
+    private String audioLevelLabel(int peak) {
+        if (peak < AUDIO_PRESENT_PEAK) return "系统声音输入：▁ 近乎静音";
+        if (peak < 500) return "系统声音输入：▂ 有信号";
+        if (peak < 2000) return "系统声音输入：▃▅ 有声音";
+        if (peak < 8000) return "系统声音输入：▃▅▇ 正常";
+        return "系统声音输入：▃▅▇█ 较强";
+    }
+
+    private void switchToMicrophoneFallback(String reason) {
+        if (!running || !INPUT_PLAYBACK.equals(inputMode) || micFallbackActivated) return;
+        micFallbackActivated = true;
+        fallbackPosted = true;
+        inputMode = INPUT_MICROPHONE;
+        releaseAudioRecord();
+        closeSpeechPipe();
+        if (recognizer != null) {
+            try { recognizer.cancel(); } catch (Exception ignored) {}
+            try { recognizer.destroy(); } catch (Exception ignored) {}
+            recognizer = null;
+        }
+        updateInputLevel("已自动切换：麦克风/扬声器兜底");
+        showStatus(reason + "\n已自动改用麦克风，请保持视频/直播外放声音");
+        updateNotification("系统声音受限，已切换麦克风翻译");
+        startRecognizerSession();
     }
 
     @Override public void onPartialResults(Bundle results) {
         String text = bestText(results);
         if (text.isEmpty()) return;
+        playbackRecognizerErrors = 0;
         lastPartial = text;
-        if (showOriginal) originalText.setText(text);
+        if (showOriginal && originalText != null) originalText.setText("语音原文：" + text);
         if (partialTranslation != null) main.removeCallbacks(partialTranslation);
-        partialTranslation = () -> translate(text, false);
-        main.postDelayed(partialTranslation, 550);
+        partialTranslation = () -> translateVoice(text, false);
+        main.postDelayed(partialTranslation, 450);
     }
 
     @Override public void onResults(Bundle results) {
         String text = bestText(results);
         if (!text.isEmpty()) {
-            if (showOriginal) originalText.setText(text);
-            translate(text, true);
+            playbackRecognizerErrors = 0;
+            if (showOriginal && originalText != null) originalText.setText("语音原文：" + text);
+            translateVoice(text, true);
         }
     }
 
@@ -272,19 +415,42 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     @Override public void onEndOfSegmentedSession() {
-        if (running) main.postDelayed(this::startRecognizerSession, 300);
+        if (running && !paused) main.postDelayed(this::startRecognizerSession, 300);
     }
 
-    private void translate(String text, boolean committed) {
+    private void translateVoice(String text, boolean committed) {
         if (translator == null || text.isEmpty()) return;
         translator.translate(text)
             .addOnSuccessListener(value -> {
                 if (committed || text.equals(lastPartial)) {
-                    translatedText.setText(value);
+                    if (translatedText != null) translatedText.setText("语音译文：" + value);
                     saveHistory(text, value);
                 }
             })
-            .addOnFailureListener(e -> translatedText.setText("翻译失败：" + safeMessage(e)));
+            .addOnFailureListener(e -> {
+                if (translatedText != null) translatedText.setText("语音翻译失败：" + safeMessage(e));
+            });
+    }
+
+    private void handleOcrText(String text) {
+        if (!enableOcr || paused || translator == null || text == null) return;
+        String cleaned = text.trim();
+        if (cleaned.isEmpty() || cleaned.equals(lastOcrText)) return;
+        lastOcrText = cleaned;
+        if (showOriginal && ocrOriginalText != null) {
+            ocrOriginalText.setText("屏幕原文：" + cleaned);
+        }
+        translator.translate(cleaned)
+            .addOnSuccessListener(value -> {
+                if (!cleaned.equals(lastOcrText) || ocrTranslatedText == null) return;
+                ocrTranslatedText.setText("屏幕译文：" + value);
+                saveHistory(cleaned, value);
+            })
+            .addOnFailureListener(e -> {
+                if (ocrTranslatedText != null) {
+                    ocrTranslatedText.setText("屏幕翻译失败：" + safeMessage(e));
+                }
+            });
     }
 
     private String bestText(Bundle bundle) {
@@ -298,7 +464,7 @@ public class TranslationService extends Service implements RecognitionListener {
         windowManager = getSystemService(WindowManager.class);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(18), dp(12), dp(18), dp(12));
+        box.setPadding(dp(18), dp(10), dp(18), dp(10));
         box.setBackgroundResource(R.drawable.panel);
 
         LinearLayout controls = new LinearLayout(this);
@@ -311,18 +477,32 @@ public class TranslationService extends Service implements RecognitionListener {
         controls.addView(closeControl, new LinearLayout.LayoutParams(0, -2, 1));
         box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
 
-        originalText = overlayText(Math.max(14, fontSize - 4), Color.rgb(218, 209, 231));
+        inputLevelText = overlayText(12, Color.rgb(190, 165, 255));
+        inputLevelText.setMaxLines(1);
+        box.addView(inputLevelText, new LinearLayout.LayoutParams(-1, -2));
+
+        originalText = overlayText(Math.max(13, fontSize - 5), Color.rgb(218, 209, 231));
         translatedText = overlayText(fontSize, Color.WHITE);
         translatedText.setTypeface(null, 1);
         box.addView(originalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translatedText, new LinearLayout.LayoutParams(-1, -2));
         originalText.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
-        overlay = box;
 
+        ocrOriginalText = overlayText(Math.max(12, fontSize - 6), Color.rgb(205, 215, 235));
+        ocrTranslatedText = overlayText(Math.max(14, fontSize - 2), Color.WHITE);
+        ocrTranslatedText.setTypeface(null, 1);
+        ocrOriginalText.setVisibility(enableOcr && showOriginal ? View.VISIBLE : View.GONE);
+        ocrTranslatedText.setVisibility(enableOcr ? View.VISIBLE : View.GONE);
+        box.addView(ocrOriginalText, new LinearLayout.LayoutParams(-1, -2));
+        box.addView(ocrTranslatedText, new LinearLayout.LayoutParams(-1, -2));
+
+        overlay = box;
+        int windowFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            | WindowManager.LayoutParams.FLAG_SECURE;
         overlayParams = new WindowManager.LayoutParams(
             -1, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT);
+            windowFlags, PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         overlayParams.x = dp(12);
         overlayParams.y = dp(110);
@@ -333,8 +513,11 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private TextView overlayText(int size, int color) {
         TextView t = new TextView(this);
-        t.setTextSize(size); t.setTextColor(color); t.setGravity(Gravity.CENTER);
-        t.setMaxLines(4); t.setText(" ");
+        t.setTextSize(size);
+        t.setTextColor(color);
+        t.setGravity(Gravity.CENTER);
+        t.setMaxLines(4);
+        t.setText(" ");
         return t;
     }
 
@@ -343,6 +526,10 @@ public class TranslationService extends Service implements RecognitionListener {
         t.setText(value);
         t.setPadding(dp(8), dp(4), dp(8), dp(8));
         return t;
+    }
+
+    private void updateInputLevel(String value) {
+        if (inputLevelText != null) inputLevelText.setText(value);
     }
 
     private void togglePause() {
@@ -370,11 +557,16 @@ public class TranslationService extends Service implements RecognitionListener {
         final int[] originalY = new int[1];
         view.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                start[0] = event.getRawX(); start[1] = event.getRawY(); originalY[0] = overlayParams.y; return true;
+                start[0] = event.getRawX();
+                start[1] = event.getRawY();
+                originalY[0] = overlayParams.y;
+                return true;
             }
             if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                overlayParams.y = Math.max(0, originalY[0] + Math.round(start[1] - event.getRawY()));
-                windowManager.updateViewLayout(overlay, overlayParams); return true;
+                overlayParams.y = Math.max(0,
+                    originalY[0] + Math.round(start[1] - event.getRawY()));
+                windowManager.updateViewLayout(overlay, overlayParams);
+                return true;
             }
             return event.getAction() == MotionEvent.ACTION_UP;
         });
@@ -386,16 +578,38 @@ public class TranslationService extends Service implements RecognitionListener {
         });
     }
 
+    private void releaseAudioRecord() {
+        AudioRecord record = audioRecord;
+        audioRecord = null;
+        if (record != null) {
+            try { record.stop(); } catch (Exception ignored) {}
+            try { record.release(); } catch (Exception ignored) {}
+        }
+    }
+
     private void stopPipelineOnly() {
         running = false;
-        if (audioRecord != null) {
-            try { audioRecord.stop(); } catch (Exception ignored) {}
-            audioRecord.release(); audioRecord = null;
-        }
+        if (partialTranslation != null) main.removeCallbacks(partialTranslation);
+        releaseAudioRecord();
         closeSpeechPipe();
-        if (recognizer != null) { recognizer.cancel(); recognizer.destroy(); recognizer = null; }
-        if (projection != null) { projection.stop(); projection = null; }
-        if (translator != null) { translator.close(); translator = null; }
+        if (recognizer != null) {
+            try { recognizer.cancel(); } catch (Exception ignored) {}
+            try { recognizer.destroy(); } catch (Exception ignored) {}
+            recognizer = null;
+        }
+        if (ocrCapture != null) {
+            ocrCapture.stop();
+            ocrCapture = null;
+        }
+        MediaProjection currentProjection = projection;
+        projection = null;
+        if (currentProjection != null) {
+            try { currentProjection.stop(); } catch (Exception ignored) {}
+        }
+        if (translator != null) {
+            translator.close();
+            translator = null;
+        }
     }
 
     private void stopEverything() {
@@ -409,7 +623,9 @@ public class TranslationService extends Service implements RecognitionListener {
         synchronized (pipeLock) {
             try { if (speechOutput != null) speechOutput.close(); } catch (IOException ignored) {}
             try { if (readPipe != null) readPipe.close(); } catch (IOException ignored) {}
-            speechOutput = null; readPipe = null; writePipe = null;
+            speechOutput = null;
+            readPipe = null;
+            writePipe = null;
         }
     }
 
@@ -448,20 +664,47 @@ public class TranslationService extends Service implements RecognitionListener {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
-    @Override public void onDestroy() { stopPipelineOnly(); removeOverlay(); worker.shutdownNow(); super.onDestroy(); }
+    @Override public void onDestroy() {
+        stopPipelineOnly();
+        removeOverlay();
+        worker.shutdownNow();
+        super.onDestroy();
+    }
+
     @Override public IBinder onBind(Intent intent) { return null; }
     @Override public void onReadyForSpeech(Bundle params) {}
-    @Override public void onBeginningOfSpeech() {}
-    @Override public void onRmsChanged(float rmsdB) {}
+    @Override public void onBeginningOfSpeech() {
+        if (INPUT_MICROPHONE.equals(inputMode)) updateInputLevel("麦克风输入：检测到语音");
+    }
+    @Override public void onRmsChanged(float rmsdB) {
+        if (!INPUT_MICROPHONE.equals(inputMode)) return;
+        if (rmsdB < 1f) updateInputLevel("麦克风输入：▁");
+        else if (rmsdB < 4f) updateInputLevel("麦克风输入：▂▃");
+        else if (rmsdB < 8f) updateInputLevel("麦克风输入：▃▅▇");
+        else updateInputLevel("麦克风输入：▃▅▇█");
+    }
     @Override public void onBufferReceived(byte[] buffer) {}
     @Override public void onEndOfSpeech() {}
     @Override public void onEvent(int eventType, Bundle params) {}
+
     @Override public void onError(int error) {
         if (!running || paused) return;
-        if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+        if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
+            || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
             showStatus("当前语音包不可用，请在系统语音识别设置中下载：" + speechLanguage);
+            return;
+        }
+        if (INPUT_PLAYBACK.equals(inputMode) && autoMicFallback) {
+            playbackRecognizerErrors++;
+            if (playbackRecognizerErrors >= 3) {
+                switchToMicrophoneFallback("系统声音语音识别连续失败");
+                return;
+            }
         }
         main.postDelayed(this::startRecognizerSession, 600);
     }
-    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
 }
