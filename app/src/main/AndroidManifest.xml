@@ -29,6 +29,9 @@
             android:name=".RootCallActivity"
             android:exported="false" />
         <activity
+            android:name=".AsrHotwordActivity"
+            android:exported="false" />
+        <activity
             android:name=".AsrPrecisionActivity"
             android:exported="false" />
         <activity
