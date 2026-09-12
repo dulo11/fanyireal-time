@@ -25,18 +25,15 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
 import java.nio.ByteBuffer;
 
-/**
- * Periodically captures the current MediaProjection surface and runs fully on-device ML Kit OCR.
- * A single VirtualDisplay is created for the lifetime of a projection session to comply with
- * Android 14+ MediaProjection rules.
- */
+/** Periodically captures MediaProjection frames and performs fully on-device ML Kit OCR. */
 public final class OcrCapture {
     public interface Callback {
+        void onFrame(int width, int height);
         void onText(String text);
         void onError(Exception error);
     }
 
-    private static final long OCR_INTERVAL_MS = 1800L;
+    private static final long OCR_INTERVAL_MS = 1200L;
     private static final int MAX_OCR_WIDTH = 1080;
 
     private final Context context;
@@ -64,11 +61,14 @@ public final class OcrCapture {
         try {
             WindowManager wm = context.getSystemService(WindowManager.class);
             Rect bounds = wm.getMaximumWindowMetrics().getBounds();
-            int width = Math.max(1, bounds.width());
-            int height = Math.max(1, bounds.height());
-            int density = context.getResources().getDisplayMetrics().densityDpi;
+            int originalWidth = Math.max(1, bounds.width());
+            int originalHeight = Math.max(1, bounds.height());
+            float scale = Math.min(1f, MAX_OCR_WIDTH / (float) originalWidth);
+            int width = Math.max(1, Math.round(originalWidth * scale));
+            int height = Math.max(1, Math.round(originalHeight * scale));
+            int density = Math.max(1, Math.round(context.getResources().getDisplayMetrics().densityDpi * scale));
 
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
             imageReader.setOnImageAvailableListener(this::onImageAvailable, handler);
             virtualDisplay = projection.createVirtualDisplay(
                 "FloatingTranslator-OCR",
@@ -80,6 +80,9 @@ public final class OcrCapture {
                 null,
                 handler
             );
+            if (virtualDisplay == null) {
+                throw new IllegalStateException("VirtualDisplay 创建失败");
+            }
         } catch (Exception e) {
             callback.onError(e);
         }
@@ -100,10 +103,9 @@ public final class OcrCapture {
                 busy = false;
                 return;
             }
-            Bitmap prepared = downscale(bitmap);
-            if (prepared != bitmap) bitmap.recycle();
 
-            InputImage input = InputImage.fromBitmap(prepared, 0);
+            callback.onFrame(bitmap.getWidth(), bitmap.getHeight());
+            InputImage input = InputImage.fromBitmap(bitmap, 0);
             recognizer.process(input)
                 .addOnSuccessListener(result -> {
                     String text = normalize(result.getText());
@@ -111,7 +113,7 @@ public final class OcrCapture {
                 })
                 .addOnFailureListener(callback::onError)
                 .addOnCompleteListener(task -> {
-                    prepared.recycle();
+                    try { bitmap.recycle(); } catch (Exception ignored) {}
                     busy = false;
                 });
         } catch (Exception e) {
@@ -127,6 +129,7 @@ public final class OcrCapture {
         if (planes == null || planes.length == 0) return null;
         Image.Plane plane = planes[0];
         ByteBuffer buffer = plane.getBuffer();
+        buffer.rewind();
         int pixelStride = plane.getPixelStride();
         int rowStride = plane.getRowStride();
         int width = image.getWidth();
@@ -141,20 +144,13 @@ public final class OcrCapture {
         return cropped;
     }
 
-    private Bitmap downscale(Bitmap bitmap) {
-        if (bitmap.getWidth() <= MAX_OCR_WIDTH) return bitmap;
-        int targetHeight = Math.max(1,
-            Math.round(bitmap.getHeight() * (MAX_OCR_WIDTH / (float) bitmap.getWidth())));
-        return Bitmap.createScaledBitmap(bitmap, MAX_OCR_WIDTH, targetHeight, true);
-    }
-
     private static String normalize(String value) {
         if (value == null) return "";
         String text = value.replace('\u0000', ' ')
             .replaceAll("[\\t ]+", " ")
             .replaceAll("\\n{3,}", "\\n\\n")
             .trim();
-        if (text.length() > 1200) text = text.substring(0, 1200);
+        if (text.length() > 900) text = text.substring(0, 900);
         return text;
     }
 
