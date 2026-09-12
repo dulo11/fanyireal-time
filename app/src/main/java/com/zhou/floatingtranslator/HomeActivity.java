@@ -60,7 +60,7 @@ public final class HomeActivity extends Activity {
         version.setPadding(0, dp(2), 0, dp(3));
         root.addView(version);
 
-        TextView subtitle = text("实时语音翻译 · 离线 ASR · ROOT 通话 · 悬浮字幕", 14,
+        TextView subtitle = text("实时语音翻译 · 高精度快语速 · 离线 ASR · ROOT 通话", 14,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, 0, 0, dp(16));
         root.addView(subtitle);
@@ -73,7 +73,7 @@ public final class HomeActivity extends Activity {
 
         LinearLayout startCard = card(root);
         startCard.addView(sectionTitle("实时翻译"));
-        TextView startTip = text("常用功能放在这里；复杂选项收到详细设置里。", 13,
+        TextView startTip = text("当前优先准确率。快语速建议使用高精度模型，不要长期用 Vosk。", 13,
             Color.rgb(184, 174, 207));
         startTip.setPadding(0, dp(4), 0, dp(8));
         startCard.addView(startTip);
@@ -110,8 +110,9 @@ public final class HomeActivity extends Activity {
         recentCard.addView(copy, matchWrap());
 
         TextView note = text(
-            "常用亚洲语种已放在语言列表前面：中文、英语、日语、越南语、菲律宾语、马来语、韩语；同时还有泰语、印尼语等，文字翻译共覆盖 ML Kit 的 59 种语言。\n" +
-            "ASR：日语优先 Parakeet / ReazonSpeech；韩语可用 SenseVoice / Qwen3 / Whisper；越南语、马来语、菲律宾语、泰语、印尼语优先 Qwen3 / Whisper / Omnilingual。",
+            "快语速准确率优先：纯日语优先 Parakeet / ReazonSpeech；日英混说优先 Qwen3-ASR / Whisper Medium；" +
+            "韩语、越南语、马来语、菲律宾语、泰语、印尼语优先 Qwen3 / Whisper / Omnilingual。\n" +
+            "高精度·快语速模式会延长连续语音切段，并在强制切段时保留音频重叠以减少漏字。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(3), dp(12), dp(3), 0);
         root.addView(note);
@@ -161,6 +162,7 @@ public final class HomeActivity extends Activity {
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         String asr = preferences.getString("asr_mode", TranslationService.ASR_AUTO);
         String precision = preferences.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
+        String conversation = preferences.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
         int input = Math.min(2, preferences.getInt("input_mode", 0));
         boolean overlay = Settings.canDrawOverlays(this);
         String source = input == 2 ? "ROOT 通话/VoIP" : input == 1 ? "麦克风" : "系统内部声音";
@@ -171,6 +173,7 @@ public final class HomeActivity extends Activity {
             "声音：" + source + "\n" +
             "语言：" + LanguageOption.ALL[sourceIndex].label + " → " + LanguageOption.ALL[targetIndex].label + "\n" +
             "ASR：" + asrLabel(asr) + "\n" +
+            "对话模式：" + conversationLabel(conversation) + "\n" +
             "ASR 精度：" + precisionLabel(precision) + "\n" +
             "翻译：" + engineLabel(engine) + "\n" +
             memory.compact() + "\n" +
@@ -195,6 +198,12 @@ public final class HomeActivity extends Activity {
         if (SherpaSpeechEngine.PRECISION_FP32.equals(value)) return "FP32 原始权重";
         if (SherpaSpeechEngine.PRECISION_INT8.equals(value)) return "INT8 量化";
         return "自动（INT8 优先）";
+    }
+
+    private String conversationLabel(String value) {
+        if (SherpaSpeechEngine.PROFILE_LOW_LATENCY.equals(value)) return "低延迟";
+        if (SherpaSpeechEngine.PROFILE_BALANCED.equals(value)) return "均衡对话";
+        return "👑 高精度·快语速";
     }
 
     private void checkUpdate() {
