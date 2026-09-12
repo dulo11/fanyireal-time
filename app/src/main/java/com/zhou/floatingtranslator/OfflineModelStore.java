@@ -30,6 +30,7 @@ public final class OfflineModelStore implements AutoCloseable {
         void onError(String message);
     }
 
+    private static final int MAX_DOWNLOAD_ATTEMPTS = 3;
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -60,6 +61,26 @@ public final class OfflineModelStore implements AutoCloseable {
         return folderSize(baseDir());
     }
 
+    public long partialDownloadBytes() {
+        File[] files = baseDir().listFiles();
+        if (files == null) return 0L;
+        long total = 0L;
+        for (File file : files) {
+            if (file.getName().endsWith(".part")) total += folderSize(file);
+        }
+        return total;
+    }
+
+    public boolean clearPartialDownloads() {
+        File[] files = baseDir().listFiles();
+        if (files == null) return true;
+        boolean ok = true;
+        for (File file : files) {
+            if (file.getName().endsWith(".part")) ok &= deleteRecursively(file);
+        }
+        return ok;
+    }
+
     public void download(OfflineAsrModelCatalog.Model model, Callback callback) {
         if (model == null) {
             callback.onError("未知模型");
@@ -75,11 +96,16 @@ public final class OfflineModelStore implements AutoCloseable {
             File target = modelDir(model.id);
             File staging = new File(base, model.id + ".part");
             File archive = new File(base, model.id + ".tar.bz2.part");
+            boolean downloadCompleted = false;
             try {
                 deleteRecursively(staging);
                 if (!staging.mkdirs()) throw new IllegalStateException("无法创建临时目录");
-                postStatus(callback, "正在下载 " + model.name + "（" + model.approximateSize + "）……");
-                downloadFile(model.url, archive, callback);
+                long existing = archive.isFile() ? archive.length() : 0L;
+                postStatus(callback, existing > 0
+                    ? "发现未完成下载 " + human(existing) + "，正在断点续传 " + model.name + "……"
+                    : "正在下载 " + model.name + "（" + model.approximateSize + "，支持断点续传）……");
+                downloadFileWithRetry(model.url, archive, callback);
+                downloadCompleted = true;
                 if (closed) return;
                 postStatus(callback, "下载完成，正在解压 " + model.name + "……");
                 extractTarBz2(archive, staging);
@@ -99,13 +125,17 @@ public final class OfflineModelStore implements AutoCloseable {
                         out.write((model.id + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     }
                 }
-                // Archive is no longer needed after extraction.
                 if (archive.exists()) archive.delete();
                 main.post(() -> callback.onSuccess(target));
             } catch (Exception e) {
                 deleteRecursively(staging);
-                if (archive.exists()) archive.delete();
-                postError(callback, safe(e));
+                // 网络中断时保留已下载的压缩包，下次点击可 Range 续传。
+                // 如果已经完整下载但解压失败，则删除压缩包，避免反复使用损坏文件。
+                if (downloadCompleted && archive.exists()) archive.delete();
+                String tail = (!downloadCompleted && archive.isFile() && archive.length() > 0)
+                    ? "；已保留 " + human(archive.length()) + "，重新点下载会继续"
+                    : "";
+                postError(callback, safe(e) + tail);
             }
         });
     }
@@ -118,21 +148,60 @@ public final class OfflineModelStore implements AutoCloseable {
         return deleteRecursively(baseDir());
     }
 
+    private void downloadFileWithRetry(String address, File output, Callback callback) throws Exception {
+        Exception last = null;
+        for (int attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS && !closed; attempt++) {
+            try {
+                downloadFile(address, output, callback);
+                return;
+            } catch (Exception e) {
+                last = e;
+                if (attempt >= MAX_DOWNLOAD_ATTEMPTS) break;
+                int next = attempt + 1;
+                postStatus(callback, "网络中断：" + safe(e) + "；2 秒后自动断点重试 " + next + "/" + MAX_DOWNLOAD_ATTEMPTS);
+                try { Thread.sleep(2000L); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("下载已取消");
+                }
+            }
+        }
+        if (closed) throw new IllegalStateException("下载已取消");
+        throw last == null ? new IllegalStateException("模型下载失败") : last;
+    }
+
     private void downloadFile(String address, File output, Callback callback) throws Exception {
+        long existing = output.isFile() ? output.length() : 0L;
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(address).openConnection();
             connection.setInstanceFollowRedirects(true);
             connection.setConnectTimeout(20000);
             connection.setReadTimeout(45000);
-            connection.setRequestProperty("User-Agent", "FloatingTranslator/0.5.0 Android");
+            connection.setRequestProperty("User-Agent", "FloatingTranslator/0.5.1 Android");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            if (existing > 0) connection.setRequestProperty("Range", "bytes=" + existing + "-");
+
             int code = connection.getResponseCode();
+            if (code == 416 && existing > 0) {
+                // 服务器认为本地范围已超出文件长度，保险起见从头下载。
+                if (!output.delete()) throw new IllegalStateException("无法重置损坏的断点文件");
+                downloadFile(address, output, callback);
+                return;
+            }
             if (code < 200 || code >= 300) throw new IllegalStateException("模型下载 HTTP " + code);
-            long total = connection.getContentLengthLong();
-            long done = 0L;
+
+            boolean append = existing > 0 && code == HttpURLConnection.HTTP_PARTIAL;
+            long done = append ? existing : 0L;
+            long responseLength = connection.getContentLengthLong();
+            long total = responseLength > 0 ? done + responseLength : -1L;
+            if (!append && existing > 0) {
+                postStatus(callback, "下载源不支持断点续传，本次从头重新下载");
+            }
+
             int lastPercent = -1;
             try (InputStream in = new BufferedInputStream(connection.getInputStream(), 128 * 1024);
-                 OutputStream out = new BufferedOutputStream(new FileOutputStream(output), 128 * 1024)) {
+                 OutputStream out = new BufferedOutputStream(new FileOutputStream(output, append), 128 * 1024)) {
                 byte[] buffer = new byte[128 * 1024];
                 int n;
                 while (!closed && (n = in.read(buffer)) >= 0) {
@@ -140,11 +209,12 @@ public final class OfflineModelStore implements AutoCloseable {
                     out.write(buffer, 0, n);
                     done += n;
                     int percent = total > 0 ? (int) Math.min(100, done * 100L / total) : -1;
-                    if (percent != lastPercent && (percent < 0 || percent % 1 == 0)) {
+                    if (percent != lastPercent) {
                         lastPercent = percent;
                         final int p = percent;
                         final long d = done;
-                        main.post(() -> callback.onProgress(p, d, total));
+                        final long t = total;
+                        main.post(() -> callback.onProgress(p, d, t));
                     }
                 }
                 if (closed) throw new IllegalStateException("下载已取消");
@@ -278,10 +348,12 @@ public final class OfflineModelStore implements AutoCloseable {
     }
 
     public static String human(long bytes) {
-        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024L) return bytes + " B";
         double kb = bytes / 1024.0;
-        if (kb < 1024) return String.format(Locale.ROOT, "%.1f MB", kb);
-        return String.format(Locale.ROOT, "%.2f GB", kb / 1024.0);
+        if (kb < 1024.0) return String.format(Locale.ROOT, "%.1f KB", kb);
+        double mb = kb / 1024.0;
+        if (mb < 1024.0) return String.format(Locale.ROOT, "%.2f MB", mb);
+        return String.format(Locale.ROOT, "%.2f GB", mb / 1024.0);
     }
 
     private void postStatus(Callback callback, String message) {
