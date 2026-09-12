@@ -11,11 +11,12 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/** Global precision preference for sherpa-onnx ASR models. */
+/** Global precision and conversation-profile preferences for sherpa-onnx ASR models. */
 public final class AsrPrecisionActivity extends Activity {
     private static final String PREFS = "floating_translator";
     private SharedPreferences prefs;
     private TextView current;
+    private TextView conversationCurrent;
     private TextView models;
 
     @Override protected void onCreate(Bundle state) {
@@ -34,34 +35,59 @@ public final class AsrPrecisionActivity extends Activity {
         root.setPadding(dp(18), dp(24), dp(18), dp(30));
         scroll.addView(root);
 
-        TextView title = text("ASR 数值精度", 30, Color.WHITE);
+        TextView title = text("ASR 精度与快语速", 30, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
         TextView intro = text(
-            "FP32 是原始 32 位浮点权重，INT8 是 8 位量化权重。FP32 通常更占空间、内存和算力；INT8 更适合手机实时识别。" +
-            "量化可能带来少量精度损失，但“FP32 一定明显更准”并不成立，模型大小、训练数据和语种匹配往往影响更大。\n\n" +
-            "这里是全局偏好：普通直播翻译和 ROOT 通话翻译都会使用同一个设置。",
+            "这里分两件事：FP32 / INT8 是模型权重精度；“高精度·快语速”控制一句话如何切段。" +
+            "快速聊天时，过早切句通常比 INT8/FP32 差异更影响识别结果。\n\n" +
+            "普通直播和 ROOT 通话共用这些设置。",
             14, Color.rgb(205, 195, 222));
         intro.setPadding(0, dp(7), 0, dp(14));
         root.addView(intro);
 
+        LinearLayout conversationCard = card(root);
+        conversationCard.addView(section("对话识别模式"));
+        conversationCurrent = text("", 15, Color.rgb(190, 165, 255));
+        conversationCurrent.setPadding(0, dp(6), 0, dp(8));
+        conversationCard.addView(conversationCurrent);
+
+        Button accuracy = button("👑 高精度·快语速｜默认｜长句 + 约 0.9 秒重叠保护");
+        accuracy.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_ACCURACY));
+        conversationCard.addView(accuracy, params());
+
+        Button balanced = button("⚖ 均衡对话｜中等延迟｜约 0.45 秒重叠");
+        balanced.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_BALANCED));
+        conversationCard.addView(balanced, params());
+
+        Button low = button("⚡ 低延迟｜更快出字｜快语速更容易切断");
+        low.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_LOW_LATENCY));
+        conversationCard.addView(low, params());
+
+        TextView conversationTip = text(
+            "高精度模式会把连续讲话的强制切段从旧版约 4.2 秒延长到约 10 秒，静音结束判断也更宽松；" +
+            "必须强制切段时保留约 0.9 秒音频重叠，并自动去掉重复文字。ReazonSpeech 在高精度模式还会尝试 modified beam search。",
+            13, Color.rgb(184, 174, 207));
+        conversationTip.setPadding(0, dp(7), 0, 0);
+        conversationCard.addView(conversationTip);
+
         LinearLayout card = card(root);
-        card.addView(section("当前设置"));
+        card.addView(section("模型权重精度"));
         current = text("", 15, Color.rgb(190, 165, 255));
         current.setPadding(0, dp(6), 0, dp(8));
         card.addView(current);
 
         Button auto = button("自动｜INT8 优先，缺失时使用 FP32");
-        auto.setOnClickListener(v -> save(SherpaSpeechEngine.PRECISION_AUTO));
+        auto.setOnClickListener(v -> savePrecision(SherpaSpeechEngine.PRECISION_AUTO));
         card.addView(auto, params());
 
-        Button fp32 = button("FP32 原始权重｜精准优先 / 高内存占用");
-        fp32.setOnClickListener(v -> save(SherpaSpeechEngine.PRECISION_FP32));
+        Button fp32 = button("FP32 原始权重｜精度优先 / 高内存占用");
+        fp32.setOnClickListener(v -> savePrecision(SherpaSpeechEngine.PRECISION_FP32));
         card.addView(fp32, params());
 
-        Button int8 = button("INT8 量化｜手机实时 / 更快 / 更省内存");
-        int8.setOnClickListener(v -> save(SherpaSpeechEngine.PRECISION_INT8));
+        Button int8 = button("INT8 量化｜速度 / 内存优先");
+        int8.setOnClickListener(v -> savePrecision(SherpaSpeechEngine.PRECISION_INT8));
         card.addView(int8, params());
 
         LinearLayout modelCard = card(root);
@@ -71,9 +97,9 @@ public final class AsrPrecisionActivity extends Activity {
         modelCard.addView(models);
 
         TextView note = text(
-            "SenseVoice 当前约 1 GB 的完整包不是白下：里面同时有约 894 MB 的 FP32 和约 228 MB 的 INT8，切换精度后会真正加载对应文件。\n" +
-            "ReazonSpeech、Whisper Small、Whisper Medium 的现有完整包也同时带 FP32 + INT8。\n" +
-            "Parakeet 日语、Qwen3-ASR 0.6B、Omnilingual 300M 当前 App 一键下载包以 INT8 为主；即使选择 FP32，也会安全回退到 INT8，不会启动失败。",
+            "SenseVoice 完整包同时有 FP32 + INT8；ReazonSpeech、Whisper Small、Whisper Medium 的完整包也可切换。\n" +
+            "Parakeet 日语、Qwen3-ASR 0.6B、Omnilingual 300M 当前一键下载包以 INT8 为主；选择 FP32 时会安全回退。\n" +
+            "如果目标是快语速准确率，优先换更强模型 + 高精度快语速模式，再考虑把 INT8 切到 FP32。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(2), dp(6), dp(2), 0);
         root.addView(note);
@@ -82,15 +108,23 @@ public final class AsrPrecisionActivity extends Activity {
         return scroll;
     }
 
-    private void save(String value) {
+    private void savePrecision(String value) {
         prefs.edit().putString("asr_precision", value).apply();
         refresh();
-        toast("ASR 精度已保存：" + label(value));
+        toast("ASR 权重精度已保存：" + precisionLabel(value));
+    }
+
+    private void saveConversation(String value) {
+        prefs.edit().putString("asr_conversation_profile", value).apply();
+        refresh();
+        toast("对话识别模式已保存：" + conversationLabel(value));
     }
 
     private void refresh() {
         String selected = prefs.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
-        if (current != null) current.setText("当前：" + label(selected));
+        String profile = prefs.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
+        if (current != null) current.setText("当前：" + precisionLabel(selected));
+        if (conversationCurrent != null) conversationCurrent.setText("当前：" + conversationLabel(profile));
         if (models == null) return;
         OfflineModelStore store = new OfflineModelStore(this);
         StringBuilder out = new StringBuilder();
@@ -106,10 +140,16 @@ public final class AsrPrecisionActivity extends Activity {
         models.setText(out.toString().trim());
     }
 
-    private String label(String value) {
+    private String precisionLabel(String value) {
         if (SherpaSpeechEngine.PRECISION_FP32.equals(value)) return "FP32 原始权重";
         if (SherpaSpeechEngine.PRECISION_INT8.equals(value)) return "INT8 量化";
         return "自动（INT8 优先）";
+    }
+
+    private String conversationLabel(String value) {
+        if (SherpaSpeechEngine.PROFILE_LOW_LATENCY.equals(value)) return "低延迟";
+        if (SherpaSpeechEngine.PROFILE_BALANCED.equals(value)) return "均衡对话";
+        return "高精度·快语速";
     }
 
     private LinearLayout card(LinearLayout root) {
