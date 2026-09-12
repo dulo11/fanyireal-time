@@ -14,9 +14,7 @@ import com.google.mlkit.nl.translate.TranslatorOptions;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.InputStream;
@@ -38,31 +36,34 @@ import java.util.concurrent.Executors;
 
 /**
  * Unified translation layer. Cloud credentials are supplied by the user and stored via SecureConfig.
- * Auto mode tries configured high-quality cloud engines first and falls back to on-device ML Kit.
+ * AUTO is consumed through OfflineFirstTranslationRouter, so ML Kit runs first; if local translation
+ * fails, AUTO cloud fallback is intentionally focused on Baidu, Azure and Alibaba Cloud.
  */
 public final class TranslationRouter implements AutoCloseable {
     public static final String AUTO = "auto";
     public static final String MLKIT = "mlkit";
     public static final String BAIDU = "baidu";
-    public static final String YOUDAO = "youdao";
     public static final String AZURE = "azure";
+    public static final String ALIYUN = "aliyun";
+    public static final String YOUDAO = "youdao";
     public static final String DEEPL = "deepl";
     public static final String GOOGLE = "google";
     public static final String LIBRE = "libre";
 
     public static final String[] ENGINE_IDS = {
-        AUTO, MLKIT, BAIDU, YOUDAO, AZURE, DEEPL, GOOGLE, LIBRE
+        AUTO, MLKIT, BAIDU, AZURE, ALIYUN, YOUDAO, DEEPL, GOOGLE, LIBRE
     };
 
     public static final String[] ENGINE_LABELS = {
-        "自动（优先在线高质量，失败回退 ML Kit）",
+        "自动（ML Kit 离线优先；百度 / Azure / 阿里云兜底）",
         "ML Kit 本地离线",
         "百度翻译",
-        "有道智云",
         "Azure Translator",
-        "DeepL",
-        "Google Cloud Translation",
-        "LibreTranslate"
+        "阿里云机器翻译",
+        "有道智云（兼容备用）",
+        "DeepL（兼容备用）",
+        "Google Cloud Translation（兼容备用）",
+        "LibreTranslate（兼容备用）"
     };
 
     public interface Callback {
@@ -75,7 +76,6 @@ public final class TranslationRouter implements AutoCloseable {
         void onError(String message);
     }
 
-    private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final SecureConfig secure;
@@ -86,7 +86,6 @@ public final class TranslationRouter implements AutoCloseable {
     private volatile boolean closed;
 
     public TranslationRouter(Context context, String source, String target, String selectedEngine) {
-        this.context = context.getApplicationContext();
         this.secure = new SecureConfig(context);
         this.source = source;
         this.target = target;
@@ -107,13 +106,18 @@ public final class TranslationRouter implements AutoCloseable {
 
     public boolean isConfigured(String engine) {
         switch (engine) {
-            case MLKIT: return true;
+            case MLKIT:
+                return true;
             case BAIDU:
                 return secure.has(SecureConfig.BAIDU_APP_ID) && secure.has(SecureConfig.BAIDU_SECRET);
+            case AZURE:
+                // Single-service/global Translator resources can work without a region header.
+                return secure.has(SecureConfig.AZURE_KEY);
+            case ALIYUN:
+                return secure.has(SecureConfig.ALIYUN_ACCESS_KEY_ID)
+                    && secure.has(SecureConfig.ALIYUN_ACCESS_KEY_SECRET);
             case YOUDAO:
                 return hasYoudaoCredentials();
-            case AZURE:
-                return secure.has(SecureConfig.AZURE_KEY) && secure.has(SecureConfig.AZURE_REGION);
             case DEEPL:
                 return secure.has(SecureConfig.DEEPL_KEY);
             case GOOGLE:
@@ -137,8 +141,7 @@ public final class TranslationRouter implements AutoCloseable {
             return;
         }
         if (AUTO.equals(selectedEngine)) {
-            List<String> order = autoOrder();
-            translateAuto(cleaned, order, 0, callback, new ArrayList<>());
+            translateAuto(cleaned, autoOrder(), 0, callback, new ArrayList<>());
         } else {
             translateSingle(selectedEngine, cleaned, callback);
         }
@@ -169,21 +172,16 @@ public final class TranslationRouter implements AutoCloseable {
 
     private List<String> autoOrder() {
         List<String> list = new ArrayList<>();
-        boolean eastAsia = isEastAsianPair(source, target);
-        if (eastAsia) {
-            list.add(YOUDAO);
+        if (isEastAsianPair(source, target)) {
             list.add(BAIDU);
-            list.add(GOOGLE);
             list.add(AZURE);
-            list.add(DEEPL);
+            list.add(ALIYUN);
         } else {
-            list.add(DEEPL);
             list.add(AZURE);
-            list.add(GOOGLE);
+            list.add(ALIYUN);
             list.add(BAIDU);
-            list.add(YOUDAO);
         }
-        list.add(LIBRE);
+        // This last ML Kit matters only if TranslationRouter AUTO is called directly.
         list.add(MLKIT);
         return list;
     }
@@ -207,8 +205,9 @@ public final class TranslationRouter implements AutoCloseable {
                 String result;
                 switch (engine) {
                     case BAIDU: result = translateBaidu(text); break;
-                    case YOUDAO: result = translateYoudao(text); break;
                     case AZURE: result = translateAzure(text); break;
+                    case ALIYUN: result = translateAliyun(text); break;
+                    case YOUDAO: result = translateYoudao(text); break;
                     case DEEPL: result = translateDeepL(text); break;
                     case GOOGLE: result = translateGoogle(text); break;
                     case LIBRE: result = translateLibre(text); break;
@@ -248,7 +247,8 @@ public final class TranslationRouter implements AutoCloseable {
         JSONObject json = new JSONObject(postForm(
             "https://fanyi-api.baidu.com/api/trans/vip/translate", form, null));
         if (json.has("error_code")) {
-            throw new IllegalStateException("错误 " + json.optString("error_code") + " " + json.optString("error_msg"));
+            throw new IllegalStateException("错误 " + json.optString("error_code") + " "
+                + json.optString("error_msg"));
         }
         JSONArray arr = json.optJSONArray("trans_result");
         if (arr == null || arr.length() == 0) throw new IllegalStateException("没有翻译结果");
@@ -258,6 +258,29 @@ public final class TranslationRouter implements AutoCloseable {
             out.append(arr.getJSONObject(i).optString("dst"));
         }
         return out.toString();
+    }
+
+    private String translateAzure(String text) throws Exception {
+        String key = secure.get(SecureConfig.AZURE_KEY);
+        String region = secure.get(SecureConfig.AZURE_REGION);
+        String endpoint = "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0"
+            + "&from=" + url(source) + "&to=" + url(azureCode(target));
+        JSONArray body = new JSONArray();
+        body.put(new JSONObject().put("Text", text));
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", "application/json; charset=UTF-8");
+        headers.put("Ocp-Apim-Subscription-Key", key);
+        if (!region.trim().isEmpty()) headers.put("Ocp-Apim-Subscription-Region", region.trim());
+        String response = postRaw(endpoint, body.toString(), headers);
+        JSONArray arr = new JSONArray(response);
+        return arr.getJSONObject(0).getJSONArray("translations").getJSONObject(0).getString("text");
+    }
+
+    private String translateAliyun(String text) throws Exception {
+        return AliyunTranslationClient.translate(
+            secure.get(SecureConfig.ALIYUN_ACCESS_KEY_ID),
+            secure.get(SecureConfig.ALIYUN_ACCESS_KEY_SECRET),
+            source, target, text);
     }
 
     private String translateYoudao(String text) throws Exception {
@@ -285,22 +308,6 @@ public final class TranslationRouter implements AutoCloseable {
         JSONArray translation = json.optJSONArray("translation");
         if (translation != null && translation.length() > 0) return translation.optString(0);
         throw new IllegalStateException("没有翻译结果");
-    }
-
-    private String translateAzure(String text) throws Exception {
-        String key = secure.get(SecureConfig.AZURE_KEY);
-        String region = secure.get(SecureConfig.AZURE_REGION);
-        String endpoint = "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0"
-            + "&from=" + url(source) + "&to=" + url(azureCode(target));
-        JSONArray body = new JSONArray();
-        body.put(new JSONObject().put("Text", text));
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("Content-Type", "application/json; charset=UTF-8");
-        headers.put("Ocp-Apim-Subscription-Key", key);
-        headers.put("Ocp-Apim-Subscription-Region", region);
-        String response = postRaw(endpoint, body.toString(), headers);
-        JSONArray arr = new JSONArray(response);
-        return arr.getJSONObject(0).getJSONArray("translations").getJSONObject(0).getString("text");
     }
 
     private String translateDeepL(String text) throws Exception {
@@ -386,7 +393,8 @@ public final class TranslationRouter implements AutoCloseable {
                 form.put("channel", "1");
                 form.put("type", "1");
                 form.put("version", "v1");
-                JSONObject json = new JSONObject(postForm("https://openapi.youdao.com/speechtransapi", form, null));
+                JSONObject json = new JSONObject(postForm(
+                    "https://openapi.youdao.com/speechtransapi", form, null));
                 String code = json.optString("errorCode", "0");
                 if (!"0".equals(code)) throw new IllegalStateException("有道语音错误 " + code);
                 String original = json.optString("query", "");
@@ -425,19 +433,25 @@ public final class TranslationRouter implements AutoCloseable {
     private static void writeAscii(DataOutputStream d, String s) throws Exception {
         d.write(s.getBytes(StandardCharsets.US_ASCII));
     }
+
     private static void writeLeInt(DataOutputStream d, int v) throws Exception {
-        d.writeByte(v & 0xff); d.writeByte((v >> 8) & 0xff); d.writeByte((v >> 16) & 0xff); d.writeByte((v >> 24) & 0xff);
+        d.writeByte(v & 0xff);
+        d.writeByte((v >> 8) & 0xff);
+        d.writeByte((v >> 16) & 0xff);
+        d.writeByte((v >> 24) & 0xff);
     }
+
     private static void writeLeShort(DataOutputStream d, int v) throws Exception {
-        d.writeByte(v & 0xff); d.writeByte((v >> 8) & 0xff);
+        d.writeByte(v & 0xff);
+        d.writeByte((v >> 8) & 0xff);
     }
 
     private static String postForm(String endpoint, Map<String, String> form,
                                    Map<String, String> extraHeaders) throws Exception {
         StringBuilder body = new StringBuilder();
-        for (Map.Entry<String, String> e : form.entrySet()) {
+        for (Map.Entry<String, String> entry : form.entrySet()) {
             if (body.length() > 0) body.append('&');
-            body.append(url(e.getKey())).append('=').append(url(e.getValue()));
+            body.append(url(entry.getKey())).append('=').append(url(entry.getValue()));
         }
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
@@ -445,7 +459,8 @@ public final class TranslationRouter implements AutoCloseable {
         return postRaw(endpoint, body.toString(), headers);
     }
 
-    private static String postRaw(String endpoint, String body, Map<String, String> headers) throws Exception {
+    private static String postRaw(String endpoint, String body,
+                                  Map<String, String> headers) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
         conn.setConnectTimeout(8000);
         conn.setReadTimeout(12000);
@@ -454,8 +469,8 @@ public final class TranslationRouter implements AutoCloseable {
         conn.setUseCaches(false);
         conn.setRequestProperty("Accept", "application/json");
         if (headers != null) {
-            for (Map.Entry<String, String> e : headers.entrySet()) {
-                conn.setRequestProperty(e.getKey(), e.getValue());
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                conn.setRequestProperty(entry.getKey(), entry.getValue());
             }
         }
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
@@ -468,7 +483,8 @@ public final class TranslationRouter implements AutoCloseable {
         String response = readAll(stream);
         conn.disconnect();
         if (code < 200 || code >= 300) {
-            throw new IllegalStateException("HTTP " + code + (response.isEmpty() ? "" : " " + trimError(response)));
+            throw new IllegalStateException("HTTP " + code
+                + (response.isEmpty() ? "" : " " + trimError(response)));
         }
         return response;
     }
@@ -476,9 +492,10 @@ public final class TranslationRouter implements AutoCloseable {
     private static String readAll(InputStream stream) throws Exception {
         if (stream == null) return "";
         StringBuilder out = new StringBuilder();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = new BufferedReader(
+            new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = r.readLine()) != null) out.append(line);
+            while ((line = reader.readLine()) != null) out.append(line);
         }
         return out.toString();
     }
@@ -489,9 +506,9 @@ public final class TranslationRouter implements AutoCloseable {
     }
 
     private static String cleanInput(String value) {
-        String s = value == null ? "" : value.trim();
-        if (s.length() > 1800) s = s.substring(0, 1800);
-        return s;
+        String text = value == null ? "" : value.trim();
+        if (text.length() > 1800) text = text.substring(0, 1800);
+        return text;
     }
 
     private static String truncateForYoudao(String q) {
@@ -502,11 +519,14 @@ public final class TranslationRouter implements AutoCloseable {
     private static String md5(String value) throws Exception {
         return digest("MD5", value);
     }
+
     private static String sha256(String value) throws Exception {
         return digest("SHA-256", value);
     }
+
     private static String digest(String algorithm, String value) throws Exception {
-        byte[] bytes = MessageDigest.getInstance(algorithm).digest(value.getBytes(StandardCharsets.UTF_8));
+        byte[] bytes = MessageDigest.getInstance(algorithm)
+            .digest(value.getBytes(StandardCharsets.UTF_8));
         StringBuilder out = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) out.append(String.format(Locale.US, "%02x", b & 0xff));
         return out.toString();
@@ -542,7 +562,6 @@ public final class TranslationRouter implements AutoCloseable {
 
     private static String youdaoCode(String code) {
         if ("zh".equals(code)) return "zh-CHS";
-        if ("tl".equals(code)) return "tl";
         return code;
     }
 
@@ -556,7 +575,7 @@ public final class TranslationRouter implements AutoCloseable {
 
     private static String deepLSource(String code) {
         if ("zh".equals(code)) return "ZH";
-        if ("tl".equals(code)) return "EN"; // DeepL currently has no Filipino source code in classic API.
+        if ("tl".equals(code)) return "EN";
         return code.toUpperCase(Locale.US);
     }
 
@@ -584,7 +603,8 @@ public final class TranslationRouter implements AutoCloseable {
     private static String safe(Exception e) {
         if (e == null) return "未知错误";
         String message = e.getMessage();
-        return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
+        return message == null || message.trim().isEmpty()
+            ? e.getClass().getSimpleName() : message;
     }
 
     @Override public void close() {
