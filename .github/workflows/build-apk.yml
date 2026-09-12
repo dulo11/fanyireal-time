@@ -2,6 +2,8 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 permissions:
   contents: write
@@ -93,6 +95,6 @@ jobs:
               "$APK_NAME" FloatingTranslator-latest.apk \
               --target "$GITHUB_SHA" \
               --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 首页新增 App 实时 RAM/PSS：总占用、Java、Native、其他以及手机可用/总内存\n- RAM 每 2 秒刷新，加载大型 ONNX/ASR 后可以直接看到实际运行占用\n- 首页显示当前源语言→目标语言\n- 常用亚洲语种继续置顶：中英日韩、越南、菲律宾、马来，并覆盖泰语/印尼语等\n- ASR 推荐说明补充日韩及东南亚语言：Qwen3 / Whisper / Omnilingual 等\n- 保留 ROOT 通话、FP32/INT8 精度切换和 59 种 ML Kit 文字翻译\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
+              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- RAM 监控新增进程启动基线、当前增加量、本次峰值\n- 基线在 Application 启动早期采集，便于比较 Vosk / INT8 / FP32 / 大模型实际额外占用\n- 离线模型中心把已安装模型与未完成下载缓存分开统计\n- 新增一键清理未完成下载缓存，下载进行中会自动禁止清理\n- 修复 0 个高精度模型却显示残留 .part 文件为已安装占用的问题\n- 保留 ROOT 通话、FP32/INT8、日韩及东南亚常用语言和 59 种 ML Kit 翻译\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
               --latest
           fi
