@@ -14,7 +14,7 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
-/** Small Android Keystore backed store for user-supplied API credentials. */
+/** Android Keystore backed store for user-supplied API credentials. */
 public final class SecureConfig {
     public static final String BAIDU_APP_ID = "baidu_app_id";
     public static final String BAIDU_SECRET = "baidu_secret";
@@ -26,6 +26,11 @@ public final class SecureConfig {
     public static final String GOOGLE_KEY = "google_key";
     public static final String LIBRE_ENDPOINT = "libre_endpoint";
     public static final String LIBRE_KEY = "libre_key";
+
+    public static final String[] ALL_KEYS = {
+        BAIDU_APP_ID, BAIDU_SECRET, YOUDAO_APP_KEY, YOUDAO_SECRET,
+        AZURE_KEY, AZURE_REGION, DEEPL_KEY, GOOGLE_KEY, LIBRE_ENDPOINT, LIBRE_KEY
+    };
 
     private static final String PREFS = "floating_translator_secure_v1";
     private static final String KEY_ALIAS = "floating_translator_api_key_v1";
@@ -73,6 +78,18 @@ public final class SecureConfig {
         return !get(name).isEmpty();
     }
 
+    /** Clears every API credential/value stored by this app. */
+    public void clearAll() {
+        prefs.edit().clear().apply();
+    }
+
+    /** Returns only a count; never exposes secret values. */
+    public int configuredValueCount() {
+        int count = 0;
+        for (String key : ALL_KEYS) if (has(key)) count++;
+        return count;
+    }
+
     private SecretKey getOrCreateKey() throws Exception {
         KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
         keyStore.load(null);
@@ -86,7 +103,7 @@ public final class SecureConfig {
             KEY_ALIAS,
             KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_NONE)
             .setKeySize(256)
             .build());
         return generator.generateKey();
