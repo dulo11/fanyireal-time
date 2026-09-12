@@ -36,24 +36,19 @@ import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * FloatingTranslator 0.4.3 pipeline.
+ * FloatingTranslator 0.5.0 real-time pipeline.
  *
- * Audio source is always fixed by the user. The service never changes system-playback
- * capture to microphone on its own.
- *
- * ASR modes:
- *   AUTO   : Vosk offline -> Android SpeechRecognizer (microphone only) -> Youdao cloud
- *   VOSK   : Vosk only
- *   SYSTEM : Android SpeechRecognizer only
- *   YOUDAO : Youdao cloud speech only
- *
- * Vosk partial hypotheses are translated periodically, so fast/continuous speech no
- * longer has to wait for a long silence before any translation appears.
+ * Audio source is always fixed by the user and is never switched automatically.
+ * Optional high-accuracy ASR models are local sherpa-onnx model packs. AUTO selects
+ * a downloaded model appropriate to single-language vs mixed-language speech, then
+ * falls back to Vosk and finally system/Youdao where possible.
  */
 public class TranslationService extends Service implements RecognitionListener {
     public static final String ACTION_START = "com.zhou.floatingtranslator.START";
@@ -66,21 +61,32 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String EXTRA_INPUT_MODE = "input_mode";
     public static final String INPUT_PLAYBACK = "playback";
     public static final String INPUT_MICROPHONE = "microphone";
+
     public static final String EXTRA_ASR_MODE = "asr_mode";
     public static final String ASR_AUTO = "auto";
     public static final String ASR_VOSK = "vosk";
+    public static final String ASR_SENSEVOICE = OfflineAsrModelCatalog.SENSEVOICE;
+    public static final String ASR_REAZON = OfflineAsrModelCatalog.REAZON_JA;
+    public static final String ASR_PARAKEET = OfflineAsrModelCatalog.PARAKEET_JA;
+    public static final String ASR_WHISPER_SMALL = OfflineAsrModelCatalog.WHISPER_SMALL;
+    public static final String ASR_WHISPER_MEDIUM = OfflineAsrModelCatalog.WHISPER_MEDIUM;
+    public static final String ASR_QWEN3 = OfflineAsrModelCatalog.QWEN3_ASR;
+    public static final String ASR_OMNILINGUAL = OfflineAsrModelCatalog.OMNILINGUAL;
     public static final String ASR_SYSTEM = "system";
     public static final String ASR_YOUDAO = "youdao";
+
+    public static final String EXTRA_LANGUAGE_MODE = "language_mode";
     public static final String EXTRA_SOURCE_SPEECH = "source_speech";
     public static final String EXTRA_SOURCE_MLKIT = "source_mlkit";
     public static final String EXTRA_TARGET_MLKIT = "target_mlkit";
     public static final String EXTRA_ENGINE_ID = "engine_id";
     public static final String EXTRA_YOUDAO_SPEECH_FALLBACK = "youdao_speech_fallback";
     public static final String EXTRA_SHOW_ORIGINAL = "show_original";
+    public static final String EXTRA_SHOW_DIAGNOSTICS = "show_diagnostics";
     public static final String EXTRA_PREFER_OFFLINE = "prefer_offline";
     public static final String EXTRA_FONT_SIZE = "font_size";
     public static final String EXTRA_ENABLE_OCR = "enable_ocr";
-    public static final String EXTRA_AUTO_MIC_FALLBACK = "auto_mic_fallback";
+    public static final String EXTRA_AUTO_MIC_FALLBACK = "auto_mic_fallback"; // compatibility; ignored
 
     private static final String PREFS = "floating_translator";
     private static final int NOTIFICATION_ID = 3401;
@@ -94,10 +100,12 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService audioWorker = Executors.newSingleThreadExecutor();
+    private final Set<String> failedAutoModels = new HashSet<>();
 
     private MediaProjection projection;
     private AudioRecord audioRecord;
     private OfflineSpeechEngine offlineSpeech;
+    private SherpaSpeechEngine sherpaSpeech;
     private SpeechRecognizer systemRecognizer;
     private OfflineFirstTranslationRouter translator;
     private OcrCapture ocrCapture;
@@ -112,16 +120,19 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private String inputMode = INPUT_PLAYBACK;
     private String asrMode = ASR_AUTO;
+    private String activeAsrMode = ASR_AUTO;
+    private String languageMode = SherpaSpeechEngine.LANG_SINGLE;
     private String speechLanguage = "en-US";
     private String sourceMlTag = "en";
     private String targetMlTag = "zh";
     private String engineId = TranslationRouter.AUTO;
     private boolean showOriginal;
+    private boolean showDiagnostics;
     private boolean enableOcr;
     private boolean allowYoudaoSpeech;
     private boolean preferOffline;
+    private boolean failedAutoVosk;
 
-    private long lastSpeechTextAt;
     private long lastLevelUiAt;
     private long cloudChunkStartedAt;
     private long lastStreamTranslateAt;
@@ -130,7 +141,6 @@ public class TranslationService extends Service implements RecognitionListener {
     private boolean ocrBusy;
     private String lastOcrText = "";
     private String pendingOcrText = "";
-    private String lastSpeechText = "";
     private String lastStreamTranslated = "";
 
     private boolean speechTranslationBusy;
@@ -160,17 +170,16 @@ public class TranslationService extends Service implements RecognitionListener {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
         String action = intent.getAction();
-
         if (ACTION_STOP.equals(action)) {
             stopEverything();
             return START_NOT_STICKY;
         }
         if (ACTION_UI_VISIBLE.equals(action)) {
-            setUiVisible(true);
+            if (running) setUiVisible(true); else stopSelf();
             return START_NOT_STICKY;
         }
         if (ACTION_UI_HIDDEN.equals(action)) {
-            setUiVisible(false);
+            if (running) setUiVisible(false); else stopSelf();
             return START_NOT_STICKY;
         }
         if (!ACTION_START.equals(action)) return START_NOT_STICKY;
@@ -180,11 +189,14 @@ public class TranslationService extends Service implements RecognitionListener {
         inputMode = intent.getStringExtra(EXTRA_INPUT_MODE);
         if (!INPUT_MICROPHONE.equals(inputMode)) inputMode = INPUT_PLAYBACK;
         asrMode = normalizeAsr(intent.getStringExtra(EXTRA_ASR_MODE));
+        activeAsrMode = asrMode;
+        languageMode = normalizeLanguageMode(intent.getStringExtra(EXTRA_LANGUAGE_MODE));
         speechLanguage = value(intent.getStringExtra(EXTRA_SOURCE_SPEECH), "en-US");
         sourceMlTag = value(intent.getStringExtra(EXTRA_SOURCE_MLKIT), "en");
         targetMlTag = value(intent.getStringExtra(EXTRA_TARGET_MLKIT), "zh");
         engineId = value(intent.getStringExtra(EXTRA_ENGINE_ID), TranslationRouter.AUTO);
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
+        showDiagnostics = intent.getBooleanExtra(EXTRA_SHOW_DIAGNOSTICS, true);
         enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, false);
         allowYoudaoSpeech = intent.getBooleanExtra(EXTRA_YOUDAO_SPEECH_FALLBACK, true);
         preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, true);
@@ -210,20 +222,22 @@ public class TranslationService extends Service implements RecognitionListener {
         audioCaptureStarted = false;
         cloudSpeechMode = false;
         cloudRequestBusy = false;
-        lastSpeechText = "";
+        failedAutoVosk = false;
+        failedAutoModels.clear();
         lastStreamTranslated = "";
         lastOcrText = "";
         pendingOcrText = "";
         speechTranslationBusy = false;
         pendingSpeechText = "";
         pendingSpeechFinal = false;
+        synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
         createOverlay(fontSize);
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
         setDiagTranslation(translator.selectedEngineName());
         setDiagAudio(fixedSourceLabel() + " · 等待声音");
-        setDiagSpeech("ASR：" + asrLabel(asrMode) + " · 准备中");
+        setDiagSpeech("ASR：" + asrLabel(asrMode) + " · " + languageModeLabel() + " · 准备中");
         setDiagScreen(enableOcr ? "等待屏幕捕获" : "OCR 已关闭");
         showStatus("固定声音来源：" + fixedSourceLabel() + "\n正在准备 " + asrLabel(asrMode));
 
@@ -232,16 +246,41 @@ public class TranslationService extends Service implements RecognitionListener {
         return START_NOT_STICKY;
     }
 
+    public static String modelIdForAsr(String mode) {
+        return OfflineAsrModelCatalog.find(mode) == null ? null : mode;
+    }
+
     private String normalizeAsr(String mode) {
-        if (ASR_VOSK.equals(mode) || ASR_SYSTEM.equals(mode) || ASR_YOUDAO.equals(mode)) return mode;
+        if (ASR_VOSK.equals(mode) || ASR_SYSTEM.equals(mode) || ASR_YOUDAO.equals(mode)
+            || OfflineAsrModelCatalog.find(mode) != null) return mode;
         return ASR_AUTO;
     }
 
+    private String normalizeLanguageMode(String mode) {
+        if (SherpaSpeechEngine.LANG_JA_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_ZH_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_KO_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_AUTO.equals(mode)) return mode;
+        return SherpaSpeechEngine.LANG_SINGLE;
+    }
+
     private String asrLabel(String mode) {
-        if (ASR_VOSK.equals(mode)) return "Vosk 内置离线 ASR";
+        if (ASR_VOSK.equals(mode)) return "Vosk 离线 ASR";
         if (ASR_SYSTEM.equals(mode)) return "Android 系统 SpeechRecognizer";
         if (ASR_YOUDAO.equals(mode)) return "有道云语音 ASR";
-        return "自动 ASR（Vosk→系统→有道）";
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(mode);
+        if (model != null) return model.name;
+        return "自动推荐 ASR";
+    }
+
+    private String languageModeLabel() {
+        switch (languageMode) {
+            case SherpaSpeechEngine.LANG_JA_EN: return "日语+英语混合";
+            case SherpaSpeechEngine.LANG_ZH_EN: return "中文+英语混合";
+            case SherpaSpeechEngine.LANG_KO_EN: return "韩语+英语混合";
+            case SherpaSpeechEngine.LANG_AUTO: return "自动多语言";
+            default: return "单语言 " + sourceMlTag;
+        }
     }
 
     private String fixedSourceLabel() {
@@ -274,107 +313,211 @@ public class TranslationService extends Service implements RecognitionListener {
     private void prepareSpeechEngine() {
         if (!running) return;
         switch (asrMode) {
-            case ASR_VOSK:
-                startVosk(false);
-                break;
-            case ASR_SYSTEM:
-                startSystemFixed();
-                break;
-            case ASR_YOUDAO:
-                startYoudaoFixed();
-                break;
-            case ASR_AUTO:
+            case ASR_VOSK: startVosk(false); break;
+            case ASR_SYSTEM: startSystemFixed(); break;
+            case ASR_YOUDAO: startYoudaoFixed(); break;
+            case ASR_AUTO: prepareAutoAsr(); break;
             default:
-                if (OfflineSpeechEngine.supports(sourceMlTag)) startVosk(true);
-                else fallbackFromVosk("该语言暂无 Vosk 离线模型");
+                if (OfflineAsrModelCatalog.find(asrMode) != null) startSherpa(asrMode, false);
+                else prepareAutoAsr();
                 break;
         }
     }
 
-    private void startVosk(boolean allowFallback) {
+    private void prepareAutoAsr() {
+        if (!running || !ASR_AUTO.equals(asrMode)) return;
+        String selected = bestInstalledSherpaForCurrentMode();
+        if (selected != null) {
+            startSherpa(selected, true);
+            return;
+        }
+        if (!failedAutoVosk && OfflineSpeechEngine.supports(sourceMlTag)) {
+            startVosk(true);
+            return;
+        }
+        fallbackAutoSystemOrCloud("本机高精度模型/Vosk 暂不可用");
+    }
+
+    private String bestInstalledSherpaForCurrentMode() {
+        OfflineModelStore store = new OfflineModelStore(this);
+        try {
+            String[] order;
+            boolean mixed = !SherpaSpeechEngine.LANG_SINGLE.equals(languageMode);
+            if (mixed) {
+                order = new String[]{ASR_QWEN3, ASR_WHISPER_SMALL, ASR_WHISPER_MEDIUM,
+                    ASR_SENSEVOICE, ASR_OMNILINGUAL};
+            } else if ("ja".equals(sourceMlTag)) {
+                order = new String[]{ASR_REAZON, ASR_PARAKEET, ASR_SENSEVOICE,
+                    ASR_WHISPER_SMALL, ASR_QWEN3, ASR_WHISPER_MEDIUM, ASR_OMNILINGUAL};
+            } else if ("zh".equals(sourceMlTag) || "ko".equals(sourceMlTag) || "en".equals(sourceMlTag)) {
+                order = new String[]{ASR_SENSEVOICE, ASR_WHISPER_SMALL, ASR_QWEN3,
+                    ASR_WHISPER_MEDIUM, ASR_OMNILINGUAL};
+            } else {
+                order = new String[]{ASR_QWEN3, ASR_WHISPER_SMALL, ASR_WHISPER_MEDIUM, ASR_OMNILINGUAL};
+            }
+            for (String id : order) {
+                if (!failedAutoModels.contains(id) && store.isInstalled(id)) return id;
+            }
+            return null;
+        } finally {
+            store.close();
+        }
+    }
+
+    private void startSherpa(String modelId, boolean allowAutoFallback) {
+        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
+        if (meta == null) {
+            if (allowAutoFallback) { failedAutoModels.add(modelId); prepareAutoAsr(); }
+            return;
+        }
+        stopRawRecognitionEngines(false);
+        setDiagSpeech("ASR：正在加载 " + meta.name + " · " + languageModeLabel());
+        sherpaSpeech = new SherpaSpeechEngine(this, modelId, languageMode, sourceMlTag,
+            new SherpaSpeechEngine.Callback() {
+                @Override public void onStatus(String message) {
+                    setDiagSpeech("ASR：" + message);
+                    updateNotification(message);
+                }
+
+                @Override public void onReady(String engineName) {
+                    if (!running) return;
+                    activeAsrMode = modelId;
+                    setDiagSpeech("ASR：" + engineName + " · " + languageModeLabel() + " · 离线");
+                    showStatus(engineName + " 已就绪，声音来源保持 " + fixedSourceLabel());
+                    startRawAudioCapture();
+                }
+
+                @Override public void onText(String text, String detectedLanguage) {
+                    if (!running || paused || text == null || text.trim().isEmpty()) return;
+                    String cleaned = text.trim();
+                    String lang = detectedLanguage == null || detectedLanguage.isEmpty() ? "" : " · " + detectedLanguage;
+                    setDiagSpeech("ASR：" + meta.name + lang + " · " + preview(cleaned));
+                    if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+                    queueSpeechTranslation(cleaned, true);
+                }
+
+                @Override public void onError(String message) {
+                    if (!running) return;
+                    setDiagSpeech("ASR：" + meta.name + " 失败 · " + message);
+                    if (allowAutoFallback && ASR_AUTO.equals(asrMode)) {
+                        failedAutoModels.add(modelId);
+                        closeSherpa();
+                        prepareAutoAsr();
+                    } else {
+                        showStatus(meta.name + " 失败：" + message + "\n声音来源不会自动改变；可回 App 换 ASR。 ");
+                    }
+                }
+            });
+        sherpaSpeech.prepare();
+    }
+
+    private void startVosk(boolean allowAutoFallback) {
+        stopRawRecognitionEngines(false);
         if (!OfflineSpeechEngine.supports(sourceMlTag)) {
-            if (allowFallback) fallbackFromVosk("该语言暂无 Vosk 离线模型");
-            else {
+            if (allowAutoFallback) {
+                failedAutoVosk = true;
+                prepareAutoAsr();
+            } else {
                 setDiagSpeech("Vosk 不支持当前语言");
-                showStatus("Vosk 暂不支持当前语言，请在 ASR 设置选择其他方式");
+                showStatus("Vosk 暂不支持当前语言，请选择其他 ASR");
             }
             return;
         }
-        setDiagSpeech("ASR：Vosk 离线模型准备中");
+        if (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
+            setDiagSpeech("ASR：Vosk · 注意：固定单语言模型，不擅长混合语");
+        } else {
+            setDiagSpeech("ASR：Vosk 离线模型准备中");
+        }
         offlineSpeech = new OfflineSpeechEngine(this, sourceMlTag, new OfflineSpeechEngine.Callback() {
             @Override public void onStatus(String message) {
                 setDiagSpeech("ASR：" + message);
-                showStatus(message);
                 updateNotification(message);
             }
 
             @Override public void onReady(String engineName) {
                 if (!running) return;
+                activeAsrMode = ASR_VOSK;
                 setDiagSpeech("ASR：" + engineName + " · " + sourceMlTag + " · 流式");
                 showStatus("Vosk 离线 ASR 已就绪，开始流式识别");
                 startRawAudioCapture();
             }
 
-            @Override public void onPartial(String text) {
-                onOfflineSpeechText(text, false);
-            }
-
-            @Override public void onFinal(String text) {
-                onOfflineSpeechText(text, true);
-            }
+            @Override public void onPartial(String text) { onVoskText(text, false); }
+            @Override public void onFinal(String text) { onVoskText(text, true); }
 
             @Override public void onError(String message) {
                 if (!running) return;
                 setDiagSpeech("ASR：Vosk 失败 · " + message);
-                if (allowFallback) fallbackFromVosk(message);
-                else showStatus("Vosk ASR 失败：" + message);
+                if (allowAutoFallback && ASR_AUTO.equals(asrMode)) {
+                    failedAutoVosk = true;
+                    closeVosk();
+                    prepareAutoAsr();
+                } else showStatus("Vosk ASR 失败：" + message);
             }
         });
         offlineSpeech.prepare();
     }
 
-    private void fallbackFromVosk(String reason) {
+    private void onVoskText(String text, boolean committed) {
+        if (!running || paused || text == null) return;
+        String cleaned = text.trim();
+        if (cleaned.isEmpty()) return;
+        long now = SystemClock.elapsedRealtime();
+        setDiagSpeech("ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned));
+        if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+        if (committed) {
+            lastStreamTranslated = "";
+            queueSpeechTranslation(cleaned, true);
+            return;
+        }
+        if (cleaned.length() < 3 || cleaned.equals(lastStreamTranslated)
+            || now - lastStreamTranslateAt < STREAM_TRANSLATE_INTERVAL_MS) return;
+        lastStreamTranslateAt = now;
+        lastStreamTranslated = cleaned;
+        queueSpeechTranslation(cleaned, false);
+    }
+
+    private void fallbackAutoSystemOrCloud(String reason) {
         if (!running || !ASR_AUTO.equals(asrMode)) return;
         if (INPUT_MICROPHONE.equals(inputMode) && SpeechRecognizer.isRecognitionAvailable(this)) {
-            setDiagSpeech("ASR：Vosk 不可用 → 系统 SpeechRecognizer");
-            showStatus(reason + "\n声音来源保持麦克风，改用系统 SpeechRecognizer");
+            activeAsrMode = ASR_SYSTEM;
+            setDiagSpeech("ASR：高精度离线不可用 → 系统 SpeechRecognizer");
+            showStatus(reason + "\n声音来源保持麦克风，使用系统 SpeechRecognizer");
             startSystemRecognizer();
             return;
         }
         if (canUseYoudaoSpeech()) {
+            activeAsrMode = ASR_YOUDAO;
             cloudSpeechMode = true;
-            setDiagSpeech("ASR：Vosk 不可用 → 有道云语音");
-            showStatus(reason + "\n声音来源保持不变，改用有道云 ASR");
+            setDiagSpeech("ASR：离线不可用 → 有道云语音");
+            showStatus(reason + "\n声音来源保持不变，使用有道云 ASR");
             startRawAudioCapture();
             return;
         }
-        if (INPUT_PLAYBACK.equals(inputMode) && SpeechRecognizer.isRecognitionAvailable(this)) {
-            setDiagSpeech("ASR：系统识别器仅支持麦克风");
-            showStatus(reason + "\n当前声音固定为系统内部声音，系统 SpeechRecognizer 无法直接读取它。请手动改为麦克风，或配置有道云 ASR。");
-            return;
-        }
-        setDiagSpeech("ASR：无可用备用识别器");
-        showStatus(reason + "\n没有可用的备用 ASR");
+        setDiagSpeech("ASR：没有可用识别器");
+        showStatus(reason + "\n没有可用备用 ASR。可以到模型中心下载 SenseVoice / ReazonSpeech / Whisper / Qwen3。");
     }
 
     private void startSystemFixed() {
+        activeAsrMode = ASR_SYSTEM;
         if (!INPUT_MICROPHONE.equals(inputMode)) {
             setDiagSpeech("ASR：系统 SpeechRecognizer 需要麦克风");
-            showStatus("你固定选择了系统内部声音，但 Android SpeechRecognizer 只能稳定读取麦克风。\n请把声音来源改成“麦克风识别手机外放”，或者 ASR 改为 Vosk/有道。");
+            showStatus("固定声音是系统内部声音，但 Android SpeechRecognizer 不能直接读取它。请手动换麦克风，或改用本地 ASR。");
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             setDiagSpeech("ASR：系统 SpeechRecognizer 不可用");
-            showStatus("系统没有可用的 SpeechRecognizer 服务，请选择 Vosk 离线 ASR");
+            showStatus("系统没有可用 SpeechRecognizer，请选择本地 ASR");
             return;
         }
         startSystemRecognizer();
     }
 
     private void startYoudaoFixed() {
+        activeAsrMode = ASR_YOUDAO;
         if (!canUseYoudaoSpeech()) {
             setDiagSpeech("ASR：有道云未配置 Key");
-            showStatus("有道云 ASR 需要 AppKey + AppSecret，请到 API 备用设置填写");
+            showStatus("有道云 ASR 需要 AppKey + AppSecret，请到 API 安全中心填写");
             return;
         }
         cloudSpeechMode = true;
@@ -398,11 +541,8 @@ public class TranslationService extends Service implements RecognitionListener {
                 .setSampleRate(SAMPLE_RATE)
                 .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
                 .build();
-            int min = Math.max(
-                AudioRecord.getMinBufferSize(SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT),
-                SAMPLE_RATE * 2
-            );
+            int min = Math.max(AudioRecord.getMinBufferSize(SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), SAMPLE_RATE * 2);
 
             AudioRecord record;
             if (INPUT_PLAYBACK.equals(inputMode)) {
@@ -429,13 +569,12 @@ public class TranslationService extends Service implements RecognitionListener {
                 try { record.release(); } catch (Exception ignored) {}
                 throw new IllegalStateException("AudioRecord 初始化失败");
             }
-
             audioRecord = record;
             audioCaptureStarted = true;
             int generation = ++captureGeneration;
             record.startRecording();
             setDiagAudio(fixedSourceLabel() + " · 采集已启动");
-            updateNotification(fixedSourceLabel() + " · " + asrLabel(asrMode));
+            updateNotification(fixedSourceLabel() + " · " + asrLabel(activeAsrMode));
             audioWorker.execute(() -> audioLoop(record, generation));
         } catch (Exception e) {
             audioCaptureStarted = false;
@@ -456,44 +595,20 @@ public class TranslationService extends Service implements RecognitionListener {
                 break;
             }
             if (count <= 0 || paused) continue;
-
             int peak = shortsToBytes(shorts, count, bytes);
             long now = SystemClock.elapsedRealtime();
             updateAudioLevel(peak, now);
 
-            OfflineSpeechEngine speech = offlineSpeech;
-            if (speech != null && speech.isReady()) {
-                speech.acceptPcm(bytes, count * 2);
+            OfflineSpeechEngine vosk = offlineSpeech;
+            SherpaSpeechEngine sherpa = sherpaSpeech;
+            if (vosk != null && vosk.isReady()) {
+                vosk.acceptPcm(bytes, count * 2);
+            } else if (sherpa != null && sherpa.isReady()) {
+                sherpa.acceptPcm(bytes, count * 2, peak);
             } else if (cloudSpeechMode) {
                 appendCloudAudio(bytes, count * 2, peak, now);
             }
         }
-    }
-
-    private void onOfflineSpeechText(String text, boolean committed) {
-        if (!running || paused || text == null) return;
-        String cleaned = text.trim();
-        if (cleaned.isEmpty()) return;
-        long now = SystemClock.elapsedRealtime();
-        lastSpeechTextAt = now;
-        setDiagSpeech("ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned));
-        if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
-
-        if (committed) {
-            lastSpeechText = cleaned;
-            lastStreamTranslated = "";
-            queueSpeechTranslation(cleaned, true);
-            return;
-        }
-
-        // Continuous/fast speech may not produce a Vosk endpoint for a long time.
-        // Translate the latest partial every ~1.2 s instead of waiting for silence.
-        if (cleaned.length() < 3) return;
-        if (cleaned.equals(lastStreamTranslated)) return;
-        if (now - lastStreamTranslateAt < STREAM_TRANSLATE_INTERVAL_MS) return;
-        lastStreamTranslateAt = now;
-        lastStreamTranslated = cleaned;
-        queueSpeechTranslation(cleaned, false);
     }
 
     private void queueSpeechTranslation(String text, boolean finalResult) {
@@ -519,24 +634,16 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void translatePart(List<String> parts, int index, StringBuilder out,
                                String original, boolean finalResult) {
-        if (!running) {
-            finishSpeechTranslation();
-            return;
-        }
+        if (!running) { finishSpeechTranslation(); return; }
         if (index >= parts.size()) {
             String translated = out.toString().trim();
-            setDiagTranslation((finalResult ? "最终" : "流式") + " · ML Kit 离线优先");
             if (translatedText != null) translatedText.setText("译文：" + translated);
             saveHistory(original, translated);
             finishSpeechTranslation();
             return;
         }
-
         OfflineFirstTranslationRouter current = translator;
-        if (current == null) {
-            finishSpeechTranslation();
-            return;
-        }
+        if (current == null) { finishSpeechTranslation(); return; }
         if (index == 0) setDiagTranslation("翻译中 · " + (finalResult ? "完整句" : "流式片段"));
         String part = parts.get(index);
         current.translate(part, new OfflineFirstTranslationRouter.Callback() {
@@ -547,7 +654,6 @@ public class TranslationService extends Service implements RecognitionListener {
                     + (parts.size() > 1 ? " · 分段 " + (index + 1) + "/" + parts.size() : ""));
                 translatePart(parts, index + 1, out, original, finalResult);
             }
-
             @Override public void onError(String message) {
                 setDiagTranslation("翻译失败：" + message);
                 if (translatedText != null) translatedText.setText("翻译失败：" + message);
@@ -586,9 +692,7 @@ public class TranslationService extends Service implements RecognitionListener {
         for (int i = Math.min(maxChars, text.length() - 1); i >= min; i--) {
             char c = text.charAt(i - 1);
             if (c == '。' || c == '！' || c == '？' || c == '!' || c == '?' || c == ';' || c == '；'
-                || c == '、' || c == '，' || c == ',' || Character.isWhitespace(c)) {
-                return i;
-            }
+                || c == '、' || c == '，' || c == ',' || Character.isWhitespace(c)) return i;
         }
         return Math.min(maxChars, text.length());
     }
@@ -617,13 +721,10 @@ public class TranslationService extends Service implements RecognitionListener {
                 cloudRequestBusy = false;
                 String text = original == null ? "" : original.trim();
                 if (text.isEmpty()) return;
-                lastSpeechTextAt = SystemClock.elapsedRealtime();
                 setDiagSpeech("ASR：有道云 · " + preview(text));
                 if (showOriginal && originalText != null) originalText.setText("原文：" + text);
-                // ASR may be cloud, but text translation still follows the app's ML Kit-first router.
                 queueSpeechTranslation(text, true);
             }
-
             @Override public void onError(String message) {
                 cloudRequestBusy = false;
                 setDiagSpeech("ASR：有道云失败 · " + message);
@@ -638,12 +739,11 @@ public class TranslationService extends Service implements RecognitionListener {
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             if (ASR_AUTO.equals(asrMode) && canUseYoudaoSpeech()) {
+                activeAsrMode = ASR_YOUDAO;
                 cloudSpeechMode = true;
                 setDiagSpeech("ASR：系统不可用 → 有道云");
                 startRawAudioCapture();
-            } else {
-                setDiagSpeech("ASR：系统 SpeechRecognizer 不可用");
-            }
+            } else setDiagSpeech("ASR：系统 SpeechRecognizer 不可用");
             return;
         }
         main.post(() -> {
@@ -654,15 +754,18 @@ public class TranslationService extends Service implements RecognitionListener {
                 systemRecognizer.setRecognitionListener(this);
                 Intent listen = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage)
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
                     .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline);
-                setDiagSpeech("ASR：系统 SpeechRecognizer · 麦克风");
+                if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
+                    listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
+                }
+                setDiagSpeech("ASR：系统 SpeechRecognizer · 麦克风 · " + languageModeLabel());
                 systemRecognizer.startListening(listen);
             } catch (Exception e) {
                 setDiagSpeech("ASR：系统启动失败 · " + safe(e));
                 if (ASR_AUTO.equals(asrMode) && canUseYoudaoSpeech()) {
+                    activeAsrMode = ASR_YOUDAO;
                     cloudSpeechMode = true;
                     startRawAudioCapture();
                 }
@@ -679,9 +782,7 @@ public class TranslationService extends Service implements RecognitionListener {
             @Override public void onText(String text) {
                 if (!uiVisible) main.post(() -> handleOcrText(text));
             }
-            @Override public void onError(Exception error) {
-                setDiagScreen("OCR 错误：" + safe(error));
-            }
+            @Override public void onError(Exception error) { setDiagScreen("OCR 错误：" + safe(error)); }
         });
         ocrCapture.start(projection);
         ocrCapture.setPaused(uiVisible);
@@ -695,10 +796,7 @@ public class TranslationService extends Service implements RecognitionListener {
             setDiagScreen("OCR 忽略非目标语言界面文字");
             return;
         }
-        if (ocrBusy) {
-            pendingOcrText = cleaned;
-            return;
-        }
+        if (ocrBusy) { pendingOcrText = cleaned; return; }
         lastOcrText = cleaned;
         ocrBusy = true;
         setDiagScreen("OCR 识别到目标语言文字");
@@ -732,7 +830,8 @@ public class TranslationService extends Service implements RecognitionListener {
         for (String raw : lines) {
             String line = raw.trim();
             if (line.isEmpty()) continue;
-            if (line.startsWith("诊断") || line.startsWith("原文：") || line.startsWith("译文：")
+            if (line.startsWith("翻译：") || line.startsWith("声音：") || line.startsWith("ASR：")
+                || line.startsWith("屏幕：") || line.startsWith("原文：") || line.startsWith("译文：")
                 || line.startsWith("屏幕原文：") || line.startsWith("屏幕译文：")
                 || line.equals("暂停") || line.equals("继续") || line.equals("关闭")) continue;
             if (out.length() > 0) out.append('\n');
@@ -753,9 +852,9 @@ public class TranslationService extends Service implements RecognitionListener {
             else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '\u00c0' && c <= '\u024f')) latin++;
         }
         switch (language) {
-            case "ja": return kana >= 2;
-            case "zh": return han >= 2 && kana == 0;
-            case "ko": return hangul >= 2;
+            case "ja": return kana >= 2 || (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && latin >= 4);
+            case "zh": return (han >= 2 && kana == 0) || (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && latin >= 4);
+            case "ko": return hangul >= 2 || (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && latin >= 4);
             case "en": return latin >= 4 && kana == 0 && hangul == 0;
             case "vi": case "fr": case "de": case "es": case "pt": case "it": case "nl":
                 return latin >= 4 && kana == 0 && hangul == 0;
@@ -778,13 +877,13 @@ public class TranslationService extends Service implements RecognitionListener {
     private void updateAudioLevel(int peak, long now) {
         if (now - lastLevelUiAt < LEVEL_UPDATE_MS) return;
         lastLevelUiAt = now;
-        String value;
-        if (peak < AUDIO_PRESENT_PEAK) value = fixedSourceLabel() + "：▁ 近乎静音";
-        else if (peak < 500) value = fixedSourceLabel() + "：▂ 有信号";
-        else if (peak < 2500) value = fixedSourceLabel() + "：▃▅ 有声音";
-        else if (peak < 9000) value = fixedSourceLabel() + "：▃▅▇ 正常";
-        else value = fixedSourceLabel() + "：▃▅▇█ 较强";
-        setDiagAudio(value);
+        String v;
+        if (peak < AUDIO_PRESENT_PEAK) v = fixedSourceLabel() + "：▁ 近乎静音";
+        else if (peak < 500) v = fixedSourceLabel() + "：▂ 有信号";
+        else if (peak < 2500) v = fixedSourceLabel() + "：▃▅ 有声音";
+        else if (peak < 9000) v = fixedSourceLabel() + "：▃▅▇ 正常";
+        else v = fixedSourceLabel() + "：▃▅▇█ 较强";
+        setDiagAudio(v);
     }
 
     private void createOverlay(int fontSize) {
@@ -808,6 +907,7 @@ public class TranslationService extends Service implements RecognitionListener {
         diagnosticsText = overlayText(11, Color.rgb(200, 180, 255));
         diagnosticsText.setMaxLines(5);
         diagnosticsText.setGravity(Gravity.START);
+        diagnosticsText.setVisibility(showDiagnostics ? View.VISIBLE : View.GONE);
         box.addView(diagnosticsText, new LinearLayout.LayoutParams(-1, -2));
 
         originalText = overlayText(Math.max(13, fontSize - 5), Color.rgb(220, 215, 235));
@@ -825,15 +925,10 @@ public class TranslationService extends Service implements RecognitionListener {
         box.addView(ocrOriginalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(ocrTranslatedText, new LinearLayout.LayoutParams(-1, -2));
 
-        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
         overlayParams = new WindowManager.LayoutParams(
-            getResources().getDisplayMetrics().widthPixels - dp(24),
-            -2,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            flags,
-            PixelFormat.TRANSLUCENT
-        );
+            getResources().getDisplayMetrics().widthPixels - dp(24), -2,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         overlayParams.y = dp(110);
         overlay = box;
@@ -866,10 +961,7 @@ public class TranslationService extends Service implements RecognitionListener {
             if (overlayParams == null || windowManager == null || overlay == null) return false;
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
-                    start[0] = event.getRawX();
-                    start[1] = event.getRawY();
-                    originalY[0] = overlayParams.y;
-                    return true;
+                    start[0] = event.getRawX(); start[1] = event.getRawY(); originalY[0] = overlayParams.y; return true;
                 case MotionEvent.ACTION_MOVE:
                     overlayParams.y = Math.max(0, originalY[0] + Math.round(start[1] - event.getRawY()));
                     try { windowManager.updateViewLayout(overlay, overlayParams); } catch (Exception ignored) {}
@@ -893,55 +985,57 @@ public class TranslationService extends Service implements RecognitionListener {
         if (pauseControl != null) pauseControl.setText(paused ? "继续" : "暂停");
         if (ocrCapture != null) ocrCapture.setPaused(paused || uiVisible);
         if (paused) {
+            SherpaSpeechEngine s = sherpaSpeech;
+            if (s != null) s.flush();
             setDiagSpeech("ASR：已暂停");
             showStatus("翻译已暂停");
         } else {
-            setDiagSpeech("ASR：" + asrLabel(asrMode) + " · 已恢复");
+            setDiagSpeech("ASR：" + asrLabel(activeAsrMode) + " · 已恢复");
             showStatus("实时翻译已继续");
-            if (ASR_SYSTEM.equals(asrMode) || (ASR_AUTO.equals(asrMode) && systemRecognizer != null)) {
-                startSystemRecognizer();
-            }
+            if (ASR_SYSTEM.equals(activeAsrMode)) startSystemRecognizer();
         }
     }
 
     private void showStatus(String value) {
-        main.post(() -> {
-            if (translatedText != null) translatedText.setText(value);
-        });
+        main.post(() -> { if (translatedText != null) translatedText.setText(value); });
     }
 
-    private void setDiagTranslation(String value) {
-        diagTranslation = value;
-        main.post(this::renderDiagnostics);
-    }
-    private void setDiagAudio(String value) {
-        diagAudio = value;
-        main.post(this::renderDiagnostics);
-    }
-    private void setDiagSpeech(String value) {
-        diagSpeech = value;
-        main.post(this::renderDiagnostics);
-    }
-    private void setDiagScreen(String value) {
-        diagScreen = value;
-        main.post(this::renderDiagnostics);
-    }
+    private void setDiagTranslation(String value) { diagTranslation = value; main.post(this::renderDiagnostics); }
+    private void setDiagAudio(String value) { diagAudio = value; main.post(this::renderDiagnostics); }
+    private void setDiagSpeech(String value) { diagSpeech = value; main.post(this::renderDiagnostics); }
+    private void setDiagScreen(String value) { diagScreen = value; main.post(this::renderDiagnostics); }
 
     private void renderDiagnostics() {
         if (diagnosticsText == null) return;
-        diagnosticsText.setText(
-            "翻译：" + diagTranslation
-                + "\n声音：" + diagAudio
-                + "\n" + diagSpeech
-                + "\n屏幕：" + diagScreen
-        );
+        diagnosticsText.setVisibility(showDiagnostics ? View.VISIBLE : View.GONE);
+        if (!showDiagnostics) return;
+        diagnosticsText.setText("翻译：" + diagTranslation + "\n声音：" + diagAudio + "\n" + diagSpeech
+            + "\n屏幕：" + diagScreen);
     }
 
     private void saveHistory(String original, String translated) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putString("last_original", original)
-            .putString("last_translation", translated)
-            .apply();
+            .putString("last_translation", translated).apply();
+    }
+
+    private void stopRawRecognitionEngines(boolean stopAudio) {
+        if (stopAudio) stopAudioCapture();
+        closeVosk();
+        closeSherpa();
+        cloudSpeechMode = false;
+    }
+
+    private void closeVosk() {
+        OfflineSpeechEngine s = offlineSpeech;
+        offlineSpeech = null;
+        if (s != null) try { s.close(); } catch (Exception ignored) {}
+    }
+
+    private void closeSherpa() {
+        SherpaSpeechEngine s = sherpaSpeech;
+        sherpaSpeech = null;
+        if (s != null) try { s.close(); } catch (Exception ignored) {}
     }
 
     private void stopAudioCapture() {
@@ -968,26 +1062,25 @@ public class TranslationService extends Service implements RecognitionListener {
         running = false;
         stopAudioCapture();
         destroySystemRecognizer();
-        if (offlineSpeech != null) {
-            try { offlineSpeech.close(); } catch (Exception ignored) {}
-            offlineSpeech = null;
-        }
+        closeVosk();
+        closeSherpa();
         if (ocrCapture != null) {
             try { ocrCapture.stop(); } catch (Exception ignored) {}
             ocrCapture = null;
         }
         MediaProjection p = projection;
         projection = null;
-        if (p != null) {
-            try { p.stop(); } catch (Exception ignored) {}
-        }
+        if (p != null) try { p.stop(); } catch (Exception ignored) {}
         if (translator != null) {
             try { translator.close(); } catch (Exception ignored) {}
             translator = null;
         }
         synchronized (cloudPcm) { cloudPcm.reset(); }
-        cloudRequestBusy = false;
         cloudSpeechMode = false;
+        cloudRequestBusy = false;
+        audioCaptureStarted = false;
+        ocrBusy = false;
+        pendingOcrText = "";
         speechTranslationBusy = false;
         pendingSpeechText = "";
         pendingSpeechFinal = false;
@@ -1023,12 +1116,11 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private Notification buildNotification(String message) {
-        PendingIntent pending = PendingIntent.getActivity(
-            this, 0, new Intent(this, MainActivity.class),
+        PendingIntent pending = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("浮译 0.4.3")
+            .setContentTitle("浮译 0.5.0")
             .setContentText(message)
             .setContentIntent(pending)
             .setOngoing(true)
@@ -1049,13 +1141,8 @@ public class TranslationService extends Service implements RecognitionListener {
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
-    @Override public void onReadyForSpeech(Bundle params) {
-        setDiagSpeech("ASR：系统 SpeechRecognizer 已就绪");
-    }
-
-    @Override public void onBeginningOfSpeech() {
-        setDiagAudio("固定·麦克风外放：检测到语音");
-    }
+    @Override public void onReadyForSpeech(Bundle params) { setDiagSpeech("ASR：系统 SpeechRecognizer 已就绪"); }
+    @Override public void onBeginningOfSpeech() { setDiagAudio("固定·麦克风外放：检测到语音"); }
 
     @Override public void onRmsChanged(float rmsdB) {
         long now = SystemClock.elapsedRealtime();
@@ -1079,19 +1166,17 @@ public class TranslationService extends Service implements RecognitionListener {
             || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
         if (!transientError && ASR_AUTO.equals(asrMode) && canUseYoudaoSpeech()) {
             destroySystemRecognizer();
+            activeAsrMode = ASR_YOUDAO;
             cloudSpeechMode = true;
             setDiagSpeech("ASR：系统失败 → 有道云");
             startRawAudioCapture();
-        } else {
-            main.postDelayed(this::startSystemRecognizer, transientError ? 450 : 900);
-        }
+        } else main.postDelayed(this::startSystemRecognizer, transientError ? 450 : 900);
     }
 
     @Override public void onResults(Bundle results) {
         String text = bestText(results);
         if (!text.isEmpty()) {
             if (showOriginal && originalText != null) originalText.setText("原文：" + text);
-            lastSpeechTextAt = SystemClock.elapsedRealtime();
             setDiagSpeech("ASR：系统最终 · " + preview(text));
             queueSpeechTranslation(text, true);
         }
@@ -1102,7 +1187,6 @@ public class TranslationService extends Service implements RecognitionListener {
         String text = bestText(partialResults);
         if (text.isEmpty()) return;
         long now = SystemClock.elapsedRealtime();
-        lastSpeechTextAt = now;
         setDiagSpeech("ASR：系统流式 · " + preview(text));
         if (showOriginal && originalText != null) originalText.setText("原文：" + text);
         if (text.length() >= 3 && now - lastStreamTranslateAt >= STREAM_TRANSLATE_INTERVAL_MS
