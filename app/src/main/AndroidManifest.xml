@@ -23,6 +23,9 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
         <activity
+            android:name=".ModelManagerActivity"
+            android:exported="false" />
+        <activity
             android:name=".ApiSettingsActivity"
             android:exported="false" />
         <activity
