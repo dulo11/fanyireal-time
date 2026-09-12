@@ -41,7 +41,9 @@ public class MainActivity extends Activity {
     private Spinner targetSpinner;
     private Spinner inputModeSpinner;
     private Spinner asrModeSpinner;
+    private Spinner languageModeSpinner;
     private CheckBox showOriginal;
+    private CheckBox showDiagnostics;
     private CheckBox preferOffline;
     private CheckBox enableOcr;
     private SeekBar fontSize;
@@ -52,13 +54,14 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!preferences.getBoolean("v043_migrated", false)) {
+        if (!preferences.getBoolean("v050_migrated", false)) {
             preferences.edit()
-                .putBoolean("v043_migrated", true)
+                .putBoolean("v050_migrated", true)
                 .putBoolean("prefer_offline", true)
                 .putBoolean("enable_ocr", false)
                 .putBoolean("auto_mic_fallback", false)
-                .putString("asr_mode", TranslationService.ASR_AUTO)
+                .putBoolean("show_diagnostics", true)
+                .putString("language_mode", SherpaSpeechEngine.LANG_SINGLE)
                 .apply();
         }
         setContentView(buildUi());
@@ -72,11 +75,11 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("浮译 0.4.3", 34, Color.WHITE);
+        TextView title = text("浮译 0.5.0", 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
-        TextView subtitle = text("固定声音来源 · ASR 可选 · 流式识别翻译 · 离线优先", 15,
+        TextView subtitle = text("固定声音来源 · 多离线 ASR · 日英混合 · 模型可下载删除 · 离线优先", 15,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -91,11 +94,11 @@ public class MainActivity extends Activity {
         card.addView(engineStatus);
         updateEngineStatus();
 
-        Button engineSettings = secondaryButton("⚙ 翻译引擎 / API 备用设置");
+        Button engineSettings = secondaryButton("⚙ 翻译引擎 / API 安全中心");
         engineSettings.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
         card.addView(engineSettings, matchWrap());
 
-        Button modelManager = secondaryButton("📦 离线模型管理 / 删除下载包");
+        Button modelManager = secondaryButton("📦 离线模型中心 / 下载 / 删除 / 默认");
         modelManager.setOnClickListener(v -> startActivity(new Intent(this, ModelManagerActivity.class)));
         card.addView(modelManager, matchWrap());
 
@@ -104,36 +107,59 @@ public class MainActivity extends Activity {
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "系统内部声音（直播/视频）",
-                "麦克风识别手机外放"
+                "系统内部声音｜直播/视频｜不会自动切麦克风",
+                "麦克风识别手机外放｜App 禁止内录时手动选"
             }));
         inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         card.addView(inputModeSpinner, matchWrap());
 
-        card.addView(label("语音识别 ASR（全部显示，可固定选择）"));
+        card.addView(label("语音识别 ASR（备注直接显示；可固定选择）"));
         asrModeSpinner = new Spinner(this);
         asrModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "自动：Vosk 离线 → 系统识别 → 有道云",
-                "Vosk 内置离线 ASR",
-                "Android 系统 SpeechRecognizer",
-                "有道云语音 ASR（需 AppKey/AppSecret）"
+                "自动推荐｜按语言/混合模式选已下载高精度模型 → Vosk → 系统/有道",
+                "Vosk｜省电★★★★★｜速度快｜模型小｜日语快语速一般",
+                "SenseVoice INT8｜中英日韩粤｜速度快｜日英混合★★★★｜均衡推荐",
+                "ReazonSpeech 日语｜日语直播★★★★★｜日语专项｜不推荐日英混说",
+                "NVIDIA Parakeet 日语 0.6B INT8｜快语速/长句★★★★★｜较吃性能",
+                "Whisper Small INT8｜多语言｜日英混合★★★★★｜准确率高｜耗电中等",
+                "Whisper Medium INT8｜多语言高精度｜日英混合★★★★★｜耗电/内存高",
+                "Qwen3-ASR 0.6B INT8｜多语言高精度｜日英混合★★★★★｜模型约 1GB",
+                "Omnilingual ASR 300M INT8｜1600+语言｜小语种优先｜覆盖最广",
+                "Android 系统 SpeechRecognizer｜手机自带服务｜仅麦克风较稳定",
+                "有道云语音 ASR｜联网备用｜需 AppKey/AppSecret"
             }));
         asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
         asrModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         card.addView(asrModeSpinner, matchWrap());
 
+        card.addView(label("识别语言模式（同一句日语+英语请选择混合）"));
+        languageModeSpinner = new Spinner(this);
+        languageModeSpinner.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item,
+            new String[]{
+                "单语言｜按下面“原语言”识别",
+                "日语 + 英语（混合）★ 日本直播推荐",
+                "中文 + 英语（混合）",
+                "韩语 + 英语（混合）",
+                "自动多语言｜Qwen3 / Whisper / SenseVoice 推荐"
+            }));
+        languageModeSpinner.setSelection(languageModeIndex(preferences.getString(
+            "language_mode", SherpaSpeechEngine.LANG_SINGLE)));
+        languageModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
+        card.addView(languageModeSpinner, matchWrap());
+
         TextView asrInfo = text(
-            "已接入：Vosk 离线 ASR、Android 系统 SpeechRecognizer、有道云语音 ASR。\n" +
-            "未接入：sherpa-onnx / Whisper（后续大模型页再加入，不假装已经可用）。\n" +
-            "注意：系统 SpeechRecognizer 只能稳定用于麦克风；系统内部声音建议选 Vosk 或有道云。",
+            "纯日语：ReazonSpeech / Parakeet → SenseVoice → Vosk。\n" +
+            "日英混合：Qwen3-ASR / Whisper → SenseVoice。不要在一句话中间来回切 ASR 模型。\n" +
+            "高精度模型需先到“离线模型中心”下载；模型可删除，不会影响 App 设置。",
             13, Color.rgb(184, 174, 207));
         asrInfo.setPadding(0, dp(4), 0, dp(8));
         card.addView(asrInfo);
 
-        card.addView(label("原语言"));
+        card.addView(label("原语言（混合模式下代表主要语言）"));
         sourceSpinner = spinner();
         sourceSpinner.setSelection(preferences.getInt("source_index", 2));
         card.addView(sourceSpinner, matchWrap());
@@ -148,12 +174,17 @@ public class MainActivity extends Activity {
             int source = sourceSpinner.getSelectedItemPosition();
             sourceSpinner.setSelection(targetSpinner.getSelectedItemPosition());
             targetSpinner.setSelection(source);
-            saveSettings();
+            saveSettings(true);
         });
         card.addView(swap, matchWrap());
 
-        showOriginal = check("同时显示原文", preferences.getBoolean("show_original", true));
+        showOriginal = check("显示原文（关闭后只显示译文）",
+            preferences.getBoolean("show_original", true));
         card.addView(showOriginal);
+
+        showDiagnostics = check("显示悬浮窗诊断信息（声音 / ASR / 翻译 / OCR）",
+            preferences.getBoolean("show_diagnostics", true));
+        card.addView(showDiagnostics);
 
         enableOcr = check("开启屏幕 OCR（直播语音建议关闭）",
             preferences.getBoolean("enable_ocr", false));
@@ -168,6 +199,10 @@ public class MainActivity extends Activity {
         fontSize.setMax(18);
         fontSize.setProgress(preferences.getInt("font_size", 8));
         card.addView(fontSize, matchWrap());
+
+        Button save = secondaryButton("💾 保存当前全部设置");
+        save.setOnClickListener(v -> saveSettings(true));
+        card.addView(save, matchWrap());
 
         Button overlay = secondaryButton("① 授予悬浮窗权限");
         overlay.setOnClickListener(v -> openOverlaySettings());
@@ -198,7 +233,7 @@ public class MainActivity extends Activity {
         card.addView(copy, matchWrap());
 
         status = text(
-            "0.4.3：声音来源固定；ASR 可固定选择；Vosk 的中间识别结果也会流式翻译，不再必须等对方停下来才出译文。",
+            "0.5.0：声音来源固定；高精度 ASR 可下载/删除；支持日英混合识别模式；设置可显式保存。",
             14, Color.rgb(201, 190, 221));
         status.setPadding(0, dp(12), 0, 0);
         card.addView(status);
@@ -209,13 +244,11 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "日语直播推荐：系统内部声音 + Vosk 内置离线 ASR + 日语→中文 + OCR 关闭。\n" +
-            "如果某个 App 禁止内录，再手动切成“麦克风识别手机外放”。\n\n" +
-            "快语速/长句：现在每约 1.2 秒会对最新稳定的 Vosk partial 做一次流式翻译，最终结果出来后再覆盖成完整译文；长文本还会分段翻译后合并。",
+            "日语直播准确度优先：系统内部声音 + ReazonSpeech/Parakeet；如果一句里经常夹英语，改用 Qwen3-ASR 或 Whisper，并把识别语言模式设为“日语 + 英语”。\n" +
+            "目前文字翻译仍是 ML Kit 本地离线优先；NLLB/OPUS-MT 会作为后续文字翻译大模型加入，不在本版假装已接入。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(4), dp(20), dp(4), 0);
         root.addView(note);
-
         return scroll;
     }
 
@@ -230,8 +263,15 @@ public class MainActivity extends Activity {
 
     private int asrIndex(String mode) {
         if (TranslationService.ASR_VOSK.equals(mode)) return 1;
-        if (TranslationService.ASR_SYSTEM.equals(mode)) return 2;
-        if (TranslationService.ASR_YOUDAO.equals(mode)) return 3;
+        if (TranslationService.ASR_SENSEVOICE.equals(mode)) return 2;
+        if (TranslationService.ASR_REAZON.equals(mode)) return 3;
+        if (TranslationService.ASR_PARAKEET.equals(mode)) return 4;
+        if (TranslationService.ASR_WHISPER_SMALL.equals(mode)) return 5;
+        if (TranslationService.ASR_WHISPER_MEDIUM.equals(mode)) return 6;
+        if (TranslationService.ASR_QWEN3.equals(mode)) return 7;
+        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return 8;
+        if (TranslationService.ASR_SYSTEM.equals(mode)) return 9;
+        if (TranslationService.ASR_YOUDAO.equals(mode)) return 10;
         return 0;
     }
 
@@ -239,9 +279,35 @@ public class MainActivity extends Activity {
         int pos = asrModeSpinner == null ? 0 : asrModeSpinner.getSelectedItemPosition();
         switch (pos) {
             case 1: return TranslationService.ASR_VOSK;
-            case 2: return TranslationService.ASR_SYSTEM;
-            case 3: return TranslationService.ASR_YOUDAO;
+            case 2: return TranslationService.ASR_SENSEVOICE;
+            case 3: return TranslationService.ASR_REAZON;
+            case 4: return TranslationService.ASR_PARAKEET;
+            case 5: return TranslationService.ASR_WHISPER_SMALL;
+            case 6: return TranslationService.ASR_WHISPER_MEDIUM;
+            case 7: return TranslationService.ASR_QWEN3;
+            case 8: return TranslationService.ASR_OMNILINGUAL;
+            case 9: return TranslationService.ASR_SYSTEM;
+            case 10: return TranslationService.ASR_YOUDAO;
             default: return TranslationService.ASR_AUTO;
+        }
+    }
+
+    private int languageModeIndex(String mode) {
+        if (SherpaSpeechEngine.LANG_JA_EN.equals(mode)) return 1;
+        if (SherpaSpeechEngine.LANG_ZH_EN.equals(mode)) return 2;
+        if (SherpaSpeechEngine.LANG_KO_EN.equals(mode)) return 3;
+        if (SherpaSpeechEngine.LANG_AUTO.equals(mode)) return 4;
+        return 0;
+    }
+
+    private String selectedLanguageMode() {
+        int pos = languageModeSpinner == null ? 0 : languageModeSpinner.getSelectedItemPosition();
+        switch (pos) {
+            case 1: return SherpaSpeechEngine.LANG_JA_EN;
+            case 2: return SherpaSpeechEngine.LANG_ZH_EN;
+            case 3: return SherpaSpeechEngine.LANG_KO_EN;
+            case 4: return SherpaSpeechEngine.LANG_AUTO;
+            default: return SherpaSpeechEngine.LANG_SINGLE;
         }
     }
 
@@ -261,14 +327,11 @@ public class MainActivity extends Activity {
         translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
             .addOnSuccessListener(x -> status.setText("✅ ML Kit 离线翻译模型已就绪"))
             .addOnFailureListener(e -> status.setText("❌ 模型下载失败：" + safe(e)))
-            .addOnCompleteListener(t -> {
-                button.setEnabled(true);
-                translator.close();
-            });
+            .addOnCompleteListener(t -> { button.setEnabled(true); translator.close(); });
     }
 
     private void testTranslationEngine(Button button) {
-        saveSettings();
+        saveSettings(false);
         LanguageOption source = (LanguageOption) sourceSpinner.getSelectedItem();
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         if (source.mlKitTag.equals(target.mlKitTag)) {
@@ -284,15 +347,12 @@ public class MainActivity extends Activity {
         router.translate(sample, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 status.setText("✅ " + engineName + "\n原文：" + sample + "\n译文：" + translated);
-                preferences.edit()
-                    .putString("last_original", sample)
-                    .putString("last_translation", translated)
-                    .apply();
+                preferences.edit().putString("last_original", sample)
+                    .putString("last_translation", translated).apply();
                 updateHistory();
                 button.setEnabled(true);
                 router.close();
             }
-
             @Override public void onError(String message) {
                 status.setText("❌ 翻译引擎测试失败：" + message);
                 button.setEnabled(true);
@@ -304,7 +364,7 @@ public class MainActivity extends Activity {
     private String sampleFor(String language) {
         switch (language) {
             case "zh": return "你好，这是离线翻译测试。";
-            case "ja": return "こんにちは、今日はいい天気ですね。";
+            case "ja": return "今日は online meeting があるので、three o'clock に来てください。";
             case "vi": return "Xin chào, hôm nay thời tiết rất đẹp.";
             case "tl": return "Kumusta, maganda ang panahon ngayon.";
             case "ms": return "Helo, cuaca hari ini sangat baik.";
@@ -314,7 +374,7 @@ public class MainActivity extends Activity {
     }
 
     private void startCapture() {
-        saveSettings();
+        saveSettings(false);
         if (!Settings.canDrawOverlays(this)) {
             toast("请先授予悬浮窗权限");
             openOverlaySettings();
@@ -336,8 +396,20 @@ public class MainActivity extends Activity {
         boolean microphoneMode = inputModeSpinner.getSelectedItemPosition() == 1;
         String asr = selectedAsrMode();
         if (TranslationService.ASR_SYSTEM.equals(asr) && !microphoneMode) {
-            toast("系统 SpeechRecognizer 只能用于麦克风，请改声音来源或改用 Vosk");
+            toast("系统 SpeechRecognizer 只能稳定用于麦克风，请改声音来源或换离线 ASR");
             return;
+        }
+
+        String optionalModelId = TranslationService.modelIdForAsr(asr);
+        if (optionalModelId != null) {
+            OfflineModelStore store = new OfflineModelStore(this);
+            boolean installed = store.isInstalled(optionalModelId);
+            store.close();
+            if (!installed) {
+                toast("这个高精度模型还没下载，已打开离线模型中心");
+                startActivity(new Intent(this, ModelManagerActivity.class));
+                return;
+            }
         }
 
         boolean needsProjection = !microphoneMode || enableOcr.isChecked();
@@ -350,8 +422,7 @@ public class MainActivity extends Activity {
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         Intent captureIntent;
         if (Build.VERSION.SDK_INT >= 34) {
-            captureIntent = manager.createScreenCaptureIntent(
-                MediaProjectionConfig.createConfigForDefaultDisplay());
+            captureIntent = manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay());
         } else {
             captureIntent = manager.createScreenCaptureIntent();
         }
@@ -384,12 +455,14 @@ public class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_INPUT_MODE,
                 microphone ? TranslationService.INPUT_MICROPHONE : TranslationService.INPUT_PLAYBACK)
             .putExtra(TranslationService.EXTRA_ASR_MODE, asr)
+            .putExtra(TranslationService.EXTRA_LANGUAGE_MODE, selectedLanguageMode())
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
             .putExtra(TranslationService.EXTRA_ENGINE_ID, engine)
             .putExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, youdaoSpeech)
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
+            .putExtra(TranslationService.EXTRA_SHOW_DIAGNOSTICS, showDiagnostics.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
             .putExtra(TranslationService.EXTRA_ENABLE_OCR, enableOcr.isChecked())
             .putExtra(TranslationService.EXTRA_AUTO_MIC_FALLBACK, false)
@@ -399,18 +472,23 @@ public class MainActivity extends Activity {
     }
 
     private String asrLabel(String asr) {
-        if (TranslationService.ASR_VOSK.equals(asr)) return "Vosk 离线 ASR";
+        if (TranslationService.ASR_VOSK.equals(asr)) return "Vosk";
+        if (TranslationService.ASR_SENSEVOICE.equals(asr)) return "SenseVoice";
+        if (TranslationService.ASR_REAZON.equals(asr)) return "ReazonSpeech";
+        if (TranslationService.ASR_PARAKEET.equals(asr)) return "Parakeet 日语";
+        if (TranslationService.ASR_WHISPER_SMALL.equals(asr)) return "Whisper Small";
+        if (TranslationService.ASR_WHISPER_MEDIUM.equals(asr)) return "Whisper Medium";
+        if (TranslationService.ASR_QWEN3.equals(asr)) return "Qwen3-ASR";
+        if (TranslationService.ASR_OMNILINGUAL.equals(asr)) return "Omnilingual ASR";
         if (TranslationService.ASR_SYSTEM.equals(asr)) return "系统 SpeechRecognizer";
         if (TranslationService.ASR_YOUDAO.equals(asr)) return "有道云 ASR";
-        return "自动 ASR";
+        return "自动推荐 ASR";
     }
 
     private void requestRuntimePermissions() {
         if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(new String[]{
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.POST_NOTIFICATIONS
-            }, REQUEST_PERMISSIONS);
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS},
+                REQUEST_PERMISSIONS);
         } else {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_PERMISSIONS);
         }
@@ -425,17 +503,22 @@ public class MainActivity extends Activity {
         super.onResume();
         updateEngineStatus();
         if (history != null) updateHistory();
+        try { startService(new Intent(this, TranslationService.class).setAction(TranslationService.ACTION_UI_VISIBLE)); }
+        catch (Exception ignored) {}
     }
 
     @Override protected void onPause() {
-        saveSettings();
+        saveSettings(false);
+        try { startService(new Intent(this, TranslationService.class).setAction(TranslationService.ACTION_UI_HIDDEN)); }
+        catch (Exception ignored) {}
         super.onPause();
     }
 
     private void updateEngineStatus() {
         if (engineStatus == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
-        engineStatus.setText("当前翻译：" + engineLabel(engine));
+        engineStatus.setText("当前翻译：" + engineLabel(engine) + "\n默认 ASR："
+            + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
     }
 
     private String engineLabel(String engine) {
@@ -443,36 +526,39 @@ public class MainActivity extends Activity {
         return TranslationRouter.engineLabel(engine);
     }
 
-    private void saveSettings() {
+    private void saveSettings(boolean notify) {
         if (sourceSpinner == null) return;
         preferences.edit()
             .putInt("source_index", sourceSpinner.getSelectedItemPosition())
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
             .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
             .putString("asr_mode", selectedAsrMode())
+            .putString("language_mode", selectedLanguageMode())
             .putBoolean("show_original", showOriginal.isChecked())
+            .putBoolean("show_diagnostics", showDiagnostics.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
             .putBoolean("enable_ocr", enableOcr.isChecked())
             .putBoolean("auto_mic_fallback", false)
             .putInt("font_size", fontSize.getProgress())
             .apply();
+        updateEngineStatus();
+        if (notify && status != null) {
+            status.setText("✅ 当前声音来源、ASR、语言模式、显示选项和字幕设置已保存");
+            toast("设置已保存");
+        }
     }
 
     private void updateHistory() {
         if (history == null) return;
         String original = preferences.getString("last_original", "");
         String translated = preferences.getString("last_translation", "");
-        history.setText(translated.isEmpty()
-            ? "最近译文：暂无"
+        history.setText(translated.isEmpty() ? "最近译文：暂无"
             : "最近原文：" + original + "\n最近译文：" + translated);
     }
 
     private void copyLastTranslation() {
         String translated = preferences.getString("last_translation", "");
-        if (translated.isEmpty()) {
-            toast("还没有可复制的译文");
-            return;
-        }
+        if (translated.isEmpty()) { toast("还没有可复制的译文"); return; }
         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
         clipboard.setPrimaryClip(ClipData.newPlainText("浮译译文", translated));
         toast("已复制");
