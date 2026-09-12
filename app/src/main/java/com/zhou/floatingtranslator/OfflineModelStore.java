@@ -57,8 +57,15 @@ public final class OfflineModelStore implements AutoCloseable {
         return folderSize(modelDir(modelId));
     }
 
+    /** Counts only completed model folders containing .ready; .part files are excluded. */
     public long allInstalledBytes() {
-        return folderSize(baseDir());
+        File[] files = baseDir().listFiles();
+        if (files == null) return 0L;
+        long total = 0L;
+        for (File file : files) {
+            if (file.isDirectory() && new File(file, ".ready").isFile()) total += folderSize(file);
+        }
+        return total;
     }
 
     public long partialDownloadBytes() {
@@ -129,8 +136,6 @@ public final class OfflineModelStore implements AutoCloseable {
                 main.post(() -> callback.onSuccess(target));
             } catch (Exception e) {
                 deleteRecursively(staging);
-                // 网络中断时保留已下载的压缩包，下次点击可 Range 续传。
-                // 如果已经完整下载但解压失败，则删除压缩包，避免反复使用损坏文件。
                 if (downloadCompleted && archive.exists()) archive.delete();
                 String tail = (!downloadCompleted && archive.isFile() && archive.length() > 0)
                     ? "；已保留 " + human(archive.length()) + "，重新点下载会继续"
@@ -184,7 +189,6 @@ public final class OfflineModelStore implements AutoCloseable {
 
             int code = connection.getResponseCode();
             if (code == 416 && existing > 0) {
-                // 服务器认为本地范围已超出文件长度，保险起见从头下载。
                 if (!output.delete()) throw new IllegalStateException("无法重置损坏的断点文件");
                 downloadFile(address, output, callback);
                 return;
