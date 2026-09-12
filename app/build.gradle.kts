@@ -3,7 +3,6 @@ plugins {
 }
 
 val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
-val abiOnly = System.getenv("ANDROID_ABI_ONLY")
 
 android {
     namespace = "com.zhou.floatingtranslator"
@@ -13,13 +12,8 @@ android {
         applicationId = "com.zhou.floatingtranslator"
         minSdk = 33
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.5.1"
-        if (!abiOnly.isNullOrBlank()) {
-            ndk {
-                abiFilters.add(abiOnly)
-            }
-        }
+        versionCode = 12
+        versionName = "0.5.2"
     }
 
     buildFeatures {
