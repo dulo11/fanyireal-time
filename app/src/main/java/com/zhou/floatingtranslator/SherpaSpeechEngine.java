@@ -24,7 +24,7 @@ import java.util.concurrent.Executors;
 
 /**
  * Non-streaming high-accuracy sherpa-onnx ASR with lightweight voice segmentation.
- * The existing AudioRecord owns the audio source; this class never changes it.
+ * The existing AudioRecord/ROOT bridge owns the audio source; this class never changes it.
  */
 public final class SherpaSpeechEngine implements AutoCloseable {
     public static final String LANG_SINGLE = "single";
@@ -32,6 +32,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     public static final String LANG_ZH_EN = "zh_en";
     public static final String LANG_KO_EN = "ko_en";
     public static final String LANG_AUTO = "auto";
+
+    public static final String PRECISION_AUTO = "auto";
+    public static final String PRECISION_FP32 = "fp32";
+    public static final String PRECISION_INT8 = "int8";
 
     public interface Callback {
         void onStatus(String message);
@@ -50,6 +54,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private final String modelId;
     private final String languageMode;
     private final String sourceLanguage;
+    private final String precision;
     private final Callback callback;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -58,6 +63,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private volatile OfflineRecognizer recognizer;
     private volatile boolean ready;
     private volatile boolean closed;
+    private volatile String loadedPrecision = "";
     private boolean inSpeech;
     private long segmentMs;
     private long silenceMs;
@@ -68,6 +74,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         this.modelId = modelId;
         this.languageMode = languageMode == null ? LANG_SINGLE : languageMode;
         this.sourceLanguage = sourceLanguage == null ? "ja" : sourceLanguage;
+        String saved = this.context.getSharedPreferences("floating_translator", Context.MODE_PRIVATE)
+            .getString("asr_precision", PRECISION_AUTO);
+        this.precision = normalizePrecision(saved);
         this.callback = callback;
     }
 
@@ -91,7 +100,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         store.close();
         worker.execute(() -> {
             try {
-                postStatus("正在加载 " + meta.name + "……");
+                postStatus("正在加载 " + meta.name + " · " + requestedPrecisionLabel(meta));
                 OfflineRecognizer r = buildRecognizer(meta, modelDir);
                 if (closed) {
                     r.release();
@@ -99,7 +108,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 }
                 recognizer = r;
                 ready = true;
-                main.post(() -> callback.onReady(meta.name));
+                String suffix = loadedPrecision.isEmpty() ? "" : " · " + loadedPrecision;
+                main.post(() -> callback.onReady(meta.name + suffix));
             } catch (Throwable e) {
                 postError("模型加载失败：" + safe(e));
             }
@@ -134,7 +144,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             speech.reset();
             segmentMs = 0L;
             silenceMs = 0L;
-            // Forced endpoints keep listening, so fast continuous speech is not lost.
             inSpeech = voiced;
             if (segment.length >= SAMPLE_RATE) decode(segment);
         }
@@ -175,11 +184,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         });
     }
 
-    /**
-     * JitPack's Android AAR exposes sherpa-onnx's Kotlin API. Kotlin data classes
-     * with all-default constructor values are callable from Java with no-arg
-     * constructors and ordinary generated setters.
-     */
     private OfflineRecognizer buildRecognizer(OfflineAsrModelCatalog.Model meta, File installedDir) {
         File root = OfflineModelStore.findPayloadRoot(installedDir, meta.archiveRootHint);
         if (root == null) throw new IllegalStateException("模型目录不存在");
@@ -191,7 +195,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
 
         switch (modelId) {
             case OfflineAsrModelCatalog.SENSEVOICE: {
-                File onnx = require(findNamed(root, "model.int8.onnx", "model.onnx"), "SenseVoice model");
+                File onnx = require(findNamedPreferred(root, "model.onnx", "model.int8.onnx"), "SenseVoice model");
+                markPrecision(onnx);
                 File tokens = require(findTokens(root), "tokens.txt");
                 OfflineSenseVoiceModelConfig cfg = new OfflineSenseVoiceModelConfig();
                 cfg.setModel(onnx.getAbsolutePath());
@@ -203,9 +208,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 break;
             }
             case OfflineAsrModelCatalog.REAZON_JA: {
-                File encoder = require(findContains(root, "encoder", ".onnx", true), "Reazon encoder");
-                File decoder = require(findContains(root, "decoder", ".onnx", false), "Reazon decoder");
-                File joiner = require(findContains(root, "joiner", ".onnx", true), "Reazon joiner");
+                File encoder = require(findContainsPreferred(root, "encoder", ".onnx"), "Reazon encoder");
+                File decoder = require(findContainsPreferred(root, "decoder", ".onnx"), "Reazon decoder");
+                File joiner = require(findContainsPreferred(root, "joiner", ".onnx"), "Reazon joiner");
+                markPrecision(encoder);
                 File tokens = require(findTokens(root), "tokens.txt");
                 OfflineTransducerModelConfig cfg = new OfflineTransducerModelConfig();
                 cfg.setEncoder(encoder.getAbsolutePath());
@@ -218,6 +224,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             }
             case OfflineAsrModelCatalog.PARAKEET_JA: {
                 File onnx = require(findNamed(root, "model.int8.onnx", "model.onnx"), "Parakeet model");
+                markPrecision(onnx);
                 File tokens = require(findTokens(root), "tokens.txt");
                 OfflineNemoEncDecCtcModelConfig cfg = new OfflineNemoEncDecCtcModelConfig();
                 cfg.setModel(onnx.getAbsolutePath());
@@ -228,8 +235,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             }
             case OfflineAsrModelCatalog.WHISPER_SMALL:
             case OfflineAsrModelCatalog.WHISPER_MEDIUM: {
-                File encoder = require(findContains(root, "encoder", ".onnx", true), "Whisper encoder");
-                File decoder = require(findContains(root, "decoder", ".onnx", true), "Whisper decoder");
+                File encoder = require(findContainsPreferred(root, "encoder", ".onnx"), "Whisper encoder");
+                File decoder = require(findContainsPreferred(root, "decoder", ".onnx"), "Whisper decoder");
+                markPrecision(encoder);
                 File tokens = require(findTokens(root), "Whisper tokens");
                 OfflineWhisperModelConfig cfg = new OfflineWhisperModelConfig();
                 cfg.setEncoder(encoder.getAbsolutePath());
@@ -245,6 +253,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 File conv = require(findContains(root, "conv_frontend", ".onnx", false), "Qwen3 conv_frontend");
                 File encoder = require(findContains(root, "encoder", ".onnx", true), "Qwen3 encoder");
                 File decoder = require(findContains(root, "decoder", ".onnx", true), "Qwen3 decoder");
+                markPrecision(encoder);
                 File tokenizer = require(findDirectoryNamed(root, "tokenizer"), "Qwen3 tokenizer");
                 OfflineQwen3AsrModelConfig cfg = new OfflineQwen3AsrModelConfig();
                 cfg.setConvFrontend(conv.getAbsolutePath());
@@ -259,6 +268,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             }
             case OfflineAsrModelCatalog.OMNILINGUAL: {
                 File onnx = require(findNamed(root, "model.int8.onnx", "model.onnx"), "Omnilingual model");
+                markPrecision(onnx);
                 File tokens = require(findTokens(root), "tokens.txt");
                 OfflineOmnilingualAsrCtcModelConfig cfg = new OfflineOmnilingualAsrCtcModelConfig();
                 cfg.setModel(onnx.getAbsolutePath());
@@ -274,14 +284,22 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         OfflineRecognizerConfig config = new OfflineRecognizerConfig();
         config.setModelConfig(model);
         config.setDecodingMethod("greedy_search");
-        // null AssetManager tells sherpa to load the absolute file paths above.
         return new OfflineRecognizer(null, config);
+    }
+
+    private String requestedPrecisionLabel(OfflineAsrModelCatalog.Model meta) {
+        if (PRECISION_FP32.equals(precision)) {
+            return meta.supportsFp32 ? "请求 FP32 原始权重" : "请求 FP32，但该下载包只有 INT8，将自动回退";
+        }
+        if (PRECISION_INT8.equals(precision)) return "请求 INT8 手机优化";
+        return "自动精度（INT8 优先）";
     }
 
     private int recommendedThreads(String id) {
         if (OfflineAsrModelCatalog.QWEN3_ASR.equals(id)
             || OfflineAsrModelCatalog.WHISPER_MEDIUM.equals(id)
             || OfflineAsrModelCatalog.PARAKEET_JA.equals(id)) return 4;
+        if (PRECISION_FP32.equals(precision)) return 4;
         return 2;
     }
 
@@ -297,7 +315,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     private String whisperLanguage() {
-        // Empty means language auto-detection for multilingual Whisper.
         if (!LANG_SINGLE.equals(languageMode)) return "";
         switch (sourceLanguage) {
             case "zh": return "zh";
@@ -319,6 +336,54 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             samples[i] = value / 32768f;
         }
         return samples;
+    }
+
+    private File findNamedPreferred(File root, String fp32Name, String int8Name) {
+        if (PRECISION_FP32.equals(precision)) {
+            File fp32 = findNamed(root, fp32Name);
+            if (fp32 != null) return fp32;
+            return findNamed(root, int8Name);
+        }
+        File int8 = findNamed(root, int8Name);
+        if (int8 != null) return int8;
+        return findNamed(root, fp32Name);
+    }
+
+    private File findContainsPreferred(File root, String contains, String suffix) {
+        if (PRECISION_FP32.equals(precision)) {
+            File fp32 = findContainsExactPrecision(root, contains, suffix, false);
+            if (fp32 != null) return fp32;
+            return findContainsExactPrecision(root, contains, suffix, true);
+        }
+        File int8 = findContainsExactPrecision(root, contains, suffix, true);
+        if (int8 != null) return int8;
+        return findContainsExactPrecision(root, contains, suffix, false);
+    }
+
+    private static File findContainsExactPrecision(File root, String contains, String suffix, boolean int8) {
+        String c = contains.toLowerCase(Locale.ROOT);
+        String s = suffix.toLowerCase(Locale.ROOT);
+        return OfflineModelStore.findFirst(root, f -> {
+            String n = f.getName().toLowerCase(Locale.ROOT);
+            if (!f.isFile() || !n.contains(c) || !n.endsWith(s)) return false;
+            boolean isInt8 = n.contains("int8");
+            return int8 == isInt8;
+        });
+    }
+
+    private void markPrecision(File file) {
+        if (file == null) return;
+        loadedPrecision = file.getName().toLowerCase(Locale.ROOT).contains("int8")
+            ? "INT8"
+            : "FP32";
+        if (PRECISION_FP32.equals(precision) && "INT8".equals(loadedPrecision)) {
+            loadedPrecision += "（该模型包无 FP32，已回退）";
+        }
+    }
+
+    private static String normalizePrecision(String value) {
+        if (PRECISION_FP32.equals(value) || PRECISION_INT8.equals(value)) return value;
+        return PRECISION_AUTO;
     }
 
     private static File findNamed(File root, String... names) {
