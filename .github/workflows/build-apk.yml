@@ -2,6 +2,9 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -93,6 +96,6 @@ jobs:
               "$APK_NAME" FloatingTranslator-latest.apk \
               --target "$GITHUB_SHA" \
               --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 仅发布通用 APK，不再额外生成 ARM64 专版\n- APK 已通过 apksigner 签名校验\n- 可直接覆盖安装同签名旧版本\n- 大型离线 ASR 模型继续按需在 App 内下载\n\n长期下载入口：Releases → Latest" \
+              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- ROOT 通话/VoIP：按 App 保存 ALSA/tinycap PCM 配置\n- 常见通话 App 与任意自定义包名均可建立独立 ROOT 配置\n- ROOT PCM 直接接入现有离线/云端 ASR 与字幕翻译链路\n- 不自动修改 SELinux、audio_policy 或系统音频文件\n- 仅发布通用 APK\n- APK 已通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
               --latest
           fi
