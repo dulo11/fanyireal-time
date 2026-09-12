@@ -22,6 +22,10 @@ android {
         }
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     signingConfigs {
         if (!releaseKeystorePath.isNullOrBlank()) {
             create("release") {
