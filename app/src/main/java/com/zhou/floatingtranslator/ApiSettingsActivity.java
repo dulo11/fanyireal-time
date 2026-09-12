@@ -5,8 +5,6 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.InputType;
-import android.view.Gravity;
-import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -41,11 +39,11 @@ public class ApiSettingsActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         secure = new SecureConfig(this);
-        setTitle("浮译 0.4.0 · 翻译引擎");
+        setTitle("浮译 0.4.1 · 翻译引擎");
         setContentView(buildUi());
     }
 
-    private View buildUi() {
+    private android.view.View buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(Color.rgb(17, 13, 30));
         LinearLayout root = new LinearLayout(this);
@@ -53,21 +51,23 @@ public class ApiSettingsActivity extends Activity {
         root.setPadding(dp(20), dp(24), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("0.4.0 多引擎设置", 28, Color.WHITE);
+        TextView title = text("0.4.1 翻译引擎设置", 28, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
+
         TextView note = text(
-            "API 密钥由你自己填写，并通过 Android Keystore 加密保存在本机。\n" +
-            "自动模式会优先使用已配置的在线高质量引擎，失败后再回退 ML Kit。",
+            "默认推荐“自动”：先使用 ML Kit 本地离线翻译，只有本地失败时才尝试你已经配置的在线引擎。\n" +
+            "API Key 都是可选备用，不填也不影响 Vosk 离线语音 + ML Kit 离线翻译。",
             14, Color.rgb(201, 190, 221));
         note.setPadding(0, dp(5), 0, dp(18));
         root.addView(note);
 
         root.addView(label("默认翻译引擎"));
+        String[] labels = TranslationRouter.ENGINE_LABELS.clone();
+        if (labels.length > 0) labels[0] = "自动（ML Kit 离线优先，失败再用在线备用）";
         engineSpinner = new Spinner(this);
         engineSpinner.setAdapter(new ArrayAdapter<>(this,
-            android.R.layout.simple_spinner_dropdown_item,
-            TranslationRouter.ENGINE_LABELS));
+            android.R.layout.simple_spinner_dropdown_item, labels));
         String current = prefs.getString("engine_id", TranslationRouter.AUTO);
         int selected = 0;
         for (int i = 0; i < TranslationRouter.ENGINE_IDS.length; i++) {
@@ -78,38 +78,45 @@ public class ApiSettingsActivity extends Activity {
         root.addView(engineSpinner, matchWrap());
 
         youdaoSpeechFallback = new CheckBox(this);
-        youdaoSpeechFallback.setText("系统没有语音识别服务时，允许使用有道语音翻译兜底");
+        youdaoSpeechFallback.setText("离线语音和系统识别都不可用时，允许有道云语音最后兜底");
         youdaoSpeechFallback.setTextColor(Color.WHITE);
         youdaoSpeechFallback.setChecked(prefs.getBoolean("youdao_speech_fallback", true));
         root.addView(youdaoSpeechFallback);
 
-        root.addView(section("百度翻译"));
+        TextView offline = text(
+            "离线语音无需 Key：首次使用会自动下载对应 Vosk 小模型，之后断网可用。\n" +
+            "当前支持：" + OfflineSpeechEngine.supportedSummary(),
+            13, Color.rgb(180, 220, 200));
+        offline.setPadding(0, dp(8), 0, dp(12));
+        root.addView(offline);
+
+        root.addView(section("百度翻译（可选备用）"));
         baiduAppId = field("百度 APPID", false, SecureConfig.BAIDU_APP_ID);
         baiduSecret = field("百度密钥", true, SecureConfig.BAIDU_SECRET);
         root.addView(baiduAppId, matchWrap());
         root.addView(baiduSecret, matchWrap());
 
-        root.addView(section("有道智云"));
+        root.addView(section("有道智云（可选备用 / 云语音兜底）"));
         youdaoAppKey = field("有道 AppKey / 应用ID", false, SecureConfig.YOUDAO_APP_KEY);
         youdaoSecret = field("有道 AppSecret / 应用密钥", true, SecureConfig.YOUDAO_SECRET);
         root.addView(youdaoAppKey, matchWrap());
         root.addView(youdaoSecret, matchWrap());
 
-        root.addView(section("Azure Translator"));
+        root.addView(section("Azure Translator（可选备用）"));
         azureKey = field("Azure Subscription Key", true, SecureConfig.AZURE_KEY);
         azureRegion = field("Azure Region，例如 japaneast / eastasia", false, SecureConfig.AZURE_REGION);
         root.addView(azureKey, matchWrap());
         root.addView(azureRegion, matchWrap());
 
-        root.addView(section("DeepL"));
+        root.addView(section("DeepL（可选备用）"));
         deepLKey = field("DeepL API Key", true, SecureConfig.DEEPL_KEY);
         root.addView(deepLKey, matchWrap());
 
-        root.addView(section("Google Cloud Translation"));
+        root.addView(section("Google Cloud Translation（可选备用）"));
         googleKey = field("Google Cloud API Key", true, SecureConfig.GOOGLE_KEY);
         root.addView(googleKey, matchWrap());
 
-        root.addView(section("LibreTranslate"));
+        root.addView(section("LibreTranslate（可选备用）"));
         libreEndpoint = field("Endpoint，例如 https://你的服务/", false, SecureConfig.LIBRE_ENDPOINT);
         libreKey = field("API Key（没有可留空）", true, SecureConfig.LIBRE_KEY);
         root.addView(libreEndpoint, matchWrap());
@@ -165,7 +172,7 @@ public class ApiSettingsActivity extends Activity {
             secure.put(SecureConfig.GOOGLE_KEY, googleKey.getText().toString());
             secure.put(SecureConfig.LIBRE_ENDPOINT, libreEndpoint.getText().toString());
             secure.put(SecureConfig.LIBRE_KEY, libreKey.getText().toString());
-            status.setText("✅ 已保存。密钥保存在本机加密存储中。");
+            status.setText("✅ 已保存。在线 Key 仅作为你主动选择或离线失败后的备用。");
             toast("已保存");
         } catch (Exception e) {
             status.setText("❌ 保存失败：" + safe(e));
@@ -175,11 +182,12 @@ public class ApiSettingsActivity extends Activity {
     private void testCurrent(Button button) {
         save();
         int pos = engineSpinner.getSelectedItemPosition();
-        String engine = TranslationRouter.ENGINE_IDS[Math.max(0, Math.min(pos, TranslationRouter.ENGINE_IDS.length - 1))];
-        TranslationRouter router = new TranslationRouter(this, "en", "zh", engine);
+        String engine = TranslationRouter.ENGINE_IDS[
+            Math.max(0, Math.min(pos, TranslationRouter.ENGINE_IDS.length - 1))];
+        OfflineFirstTranslationRouter router = new OfflineFirstTranslationRouter(this, "en", "zh", engine);
         button.setEnabled(false);
-        status.setText("正在测试 " + TranslationRouter.engineLabel(engine) + "……");
-        router.translate("Hello, nice to meet you.", new TranslationRouter.Callback() {
+        status.setText("正在测试……");
+        router.translate("Hello, nice to meet you.", new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 status.setText("✅ " + engineName + " 正常\n" + translated);
                 button.setEnabled(true);
