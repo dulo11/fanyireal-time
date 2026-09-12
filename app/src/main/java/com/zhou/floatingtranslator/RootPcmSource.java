@@ -80,7 +80,7 @@ public final class RootPcmSource implements AutoCloseable {
             captureProcess = process;
 
             long deadline = System.currentTimeMillis() + 4000L;
-            while (running && (wav.length() < 44 || !wav.isFile()) && System.currentTimeMillis() < deadline) {
+            while (running && (!wav.isFile() || wav.length() < 44) && System.currentTimeMillis() < deadline) {
                 if (!process.isAlive()) break;
                 sleep(80);
             }
@@ -190,7 +190,6 @@ public final class RootPcmSource implements AutoCloseable {
             if (ascii(chunk, 0, "data")) return p + 8;
             p += 8 + size + (size & 1L);
         }
-        // tinycap normally emits the canonical 44-byte WAV header.
         if (raf.length() >= 44) return 44;
         throw new IllegalStateException("找不到 WAV data 区");
     }
@@ -212,11 +211,11 @@ public final class RootPcmSource implements AutoCloseable {
 
     private String runRoot(String command, int timeoutSeconds) throws Exception {
         Process process = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
-        byte[] bytes = process.getInputStream().readAllBytes();
         if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly();
             throw new IllegalStateException("ROOT 命令超时");
         }
+        byte[] bytes = process.getInputStream().readAllBytes();
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
