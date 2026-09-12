@@ -75,7 +75,7 @@ public final class SecureConfig {
             byte[] encrypted = Base64.decode(parts[1], Base64.NO_WRAP);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), new GCMParameterSpec(128, iv));
-            return new String(cipher.doFinal(encrypted, StandardCharsets.UTF_8));
+            return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
         } catch (Exception e) {
             return "";
         }
