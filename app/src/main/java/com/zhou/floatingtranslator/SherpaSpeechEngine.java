@@ -23,7 +23,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Non-streaming high-accuracy sherpa-onnx ASR with lightweight voice segmentation.
+ * Non-streaming high-accuracy sherpa-onnx ASR with adaptive voice segmentation.
  * The existing AudioRecord/ROOT bridge owns the audio source; this class never changes it.
  */
 public final class SherpaSpeechEngine implements AutoCloseable {
@@ -37,6 +37,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     public static final String PRECISION_FP32 = "fp32";
     public static final String PRECISION_INT8 = "int8";
 
+    public static final String PROFILE_ACCURACY = "accuracy";
+    public static final String PROFILE_BALANCED = "balanced";
+    public static final String PROFILE_LOW_LATENCY = "low_latency";
+
     public interface Callback {
         void onStatus(String message);
         void onReady(String engineName);
@@ -46,15 +50,13 @@ public final class SherpaSpeechEngine implements AutoCloseable {
 
     private static final int SAMPLE_RATE = 16000;
     private static final int SPEECH_PEAK = 120;
-    private static final long END_SILENCE_MS = 550L;
-    private static final long MIN_SEGMENT_MS = 450L;
-    private static final long FORCE_SEGMENT_MS = 4200L;
 
     private final Context context;
     private final String modelId;
     private final String languageMode;
     private final String sourceLanguage;
     private final String precision;
+    private final String conversationProfile;
     private final Callback callback;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -65,8 +67,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private volatile boolean closed;
     private volatile String loadedPrecision = "";
     private boolean inSpeech;
+    private boolean currentSegmentHasOverlap;
     private long segmentMs;
     private long silenceMs;
+    private String lastRawText = "";
 
     public SherpaSpeechEngine(Context context, String modelId, String languageMode,
                               String sourceLanguage, Callback callback) {
@@ -77,6 +81,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         String saved = this.context.getSharedPreferences("floating_translator", Context.MODE_PRIVATE)
             .getString("asr_precision", PRECISION_AUTO);
         this.precision = normalizePrecision(saved);
+        String profile = this.context.getSharedPreferences("floating_translator", Context.MODE_PRIVATE)
+            .getString("asr_conversation_profile", PROFILE_ACCURACY);
+        this.conversationProfile = normalizeProfile(profile);
         this.callback = callback;
     }
 
@@ -100,7 +107,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         store.close();
         worker.execute(() -> {
             try {
-                postStatus("正在加载 " + meta.name + " · " + requestedPrecisionLabel(meta));
+                postStatus("正在加载 " + meta.name + " · " + requestedPrecisionLabel(meta)
+                    + " · " + profileLabel());
                 OfflineRecognizer r = buildRecognizer(meta, modelDir);
                 if (closed) {
                     r.release();
@@ -109,7 +117,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 recognizer = r;
                 ready = true;
                 String suffix = loadedPrecision.isEmpty() ? "" : " · " + loadedPrecision;
-                main.post(() -> callback.onReady(meta.name + suffix));
+                main.post(() -> callback.onReady(meta.name + suffix + " · " + profileLabel()));
             } catch (Throwable e) {
                 postError("模型加载失败：" + safe(e));
             }
@@ -125,6 +133,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         if (voiced) {
             if (!inSpeech) {
                 inSpeech = true;
+                currentSegmentHasOverlap = false;
                 segmentMs = 0L;
                 silenceMs = 0L;
                 speech.reset();
@@ -138,29 +147,39 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         speech.write(pcm, 0, length);
         segmentMs += frameMs;
 
-        if ((silenceMs >= END_SILENCE_MS && segmentMs >= MIN_SEGMENT_MS)
-            || segmentMs >= FORCE_SEGMENT_MS) {
-            byte[] segment = speech.toByteArray();
-            speech.reset();
-            segmentMs = 0L;
-            silenceMs = 0L;
-            inSpeech = voiced;
-            if (segment.length >= SAMPLE_RATE) decode(segment);
-        }
+        boolean naturalEnd = silenceMs >= endSilenceMs() && segmentMs >= minSegmentMs();
+        boolean forcedEnd = segmentMs >= forceSegmentMs();
+        if (!naturalEnd && !forcedEnd) return;
+
+        byte[] segment = speech.toByteArray();
+        boolean segmentNeedsDedupe = currentSegmentHasOverlap;
+        boolean keepOverlap = forcedEnd && !naturalEnd && voiced && overlapMs() > 0L;
+        byte[] overlap = keepOverlap ? tailPcm(segment, overlapMs()) : new byte[0];
+
+        speech.reset();
+        if (overlap.length > 0) speech.write(overlap, 0, overlap.length);
+        currentSegmentHasOverlap = overlap.length > 0;
+        segmentMs = pcmDurationMs(overlap.length);
+        silenceMs = 0L;
+        inSpeech = keepOverlap;
+
+        if (segment.length >= SAMPLE_RATE) decode(segment, segmentNeedsDedupe);
     }
 
     public synchronized void flush() {
         if (speech.size() >= SAMPLE_RATE) {
             byte[] segment = speech.toByteArray();
+            boolean segmentNeedsDedupe = currentSegmentHasOverlap;
             speech.reset();
             segmentMs = 0L;
             silenceMs = 0L;
             inSpeech = false;
-            decode(segment);
+            currentSegmentHasOverlap = false;
+            decode(segment, segmentNeedsDedupe);
         }
     }
 
-    private void decode(byte[] pcm) {
+    private void decode(byte[] pcm, boolean dedupeOverlap) {
         worker.execute(() -> {
             OfflineRecognizer r = recognizer;
             if (closed || r == null) return;
@@ -171,8 +190,11 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 stream.acceptWaveform(samples, SAMPLE_RATE);
                 r.decode(stream);
                 OfflineRecognizerResult result = r.getResult(stream);
-                String text = result == null || result.getText() == null ? "" : result.getText().trim();
+                String raw = result == null || result.getText() == null ? "" : result.getText().trim();
                 String lang = result == null || result.getLang() == null ? "" : result.getLang().trim();
+                if (raw.isEmpty()) return;
+                String text = dedupeOverlap ? stripRepeatedOverlap(lastRawText, raw) : raw;
+                lastRawText = raw;
                 if (!text.isEmpty()) main.post(() -> callback.onText(text, lang));
             } catch (Throwable e) {
                 postError("识别失败：" + safe(e));
@@ -261,7 +283,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 cfg.setDecoder(decoder.getAbsolutePath());
                 cfg.setTokenizer(tokenizer.getAbsolutePath());
                 cfg.setMaxTotalLen(512);
-                cfg.setMaxNewTokens(160);
+                cfg.setMaxNewTokens(PROFILE_ACCURACY.equals(conversationProfile) ? 220 : 160);
                 model.setQwen3Asr(cfg);
                 model.setModelType("qwen3_asr");
                 break;
@@ -283,8 +305,74 @@ public final class SherpaSpeechEngine implements AutoCloseable {
 
         OfflineRecognizerConfig config = new OfflineRecognizerConfig();
         config.setModelConfig(model);
-        config.setDecodingMethod("greedy_search");
+        if (PROFILE_ACCURACY.equals(conversationProfile)
+            && OfflineAsrModelCatalog.REAZON_JA.equals(modelId)) {
+            config.setDecodingMethod("modified_beam_search");
+        } else {
+            config.setDecodingMethod("greedy_search");
+        }
         return new OfflineRecognizer(null, config);
+    }
+
+    private long endSilenceMs() {
+        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 360L;
+        if (PROFILE_BALANCED.equals(conversationProfile)) return 560L;
+        return 780L;
+    }
+
+    private long minSegmentMs() {
+        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 320L;
+        if (PROFILE_BALANCED.equals(conversationProfile)) return 480L;
+        return 700L;
+    }
+
+    private long forceSegmentMs() {
+        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 3600L;
+        if (PROFILE_BALANCED.equals(conversationProfile)) return 6500L;
+        return 10000L;
+    }
+
+    private long overlapMs() {
+        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 0L;
+        if (PROFILE_BALANCED.equals(conversationProfile)) return 450L;
+        return 900L;
+    }
+
+    private String profileLabel() {
+        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return "低延迟";
+        if (PROFILE_BALANCED.equals(conversationProfile)) return "均衡对话";
+        return "高精度·快语速";
+    }
+
+    private static long pcmDurationMs(int bytes) {
+        if (bytes <= 0) return 0L;
+        return Math.round((bytes / 2.0) * 1000.0 / SAMPLE_RATE);
+    }
+
+    private static byte[] tailPcm(byte[] pcm, long durationMs) {
+        if (pcm == null || pcm.length == 0 || durationMs <= 0L) return new byte[0];
+        long wanted = Math.round(SAMPLE_RATE * 2.0 * durationMs / 1000.0);
+        int count = (int) Math.min((long) pcm.length, Math.max(0L, wanted));
+        count -= count % 2;
+        if (count <= 0) return new byte[0];
+        byte[] out = new byte[count];
+        System.arraycopy(pcm, pcm.length - count, out, 0, count);
+        return out;
+    }
+
+    /** Removes the exact text duplicated by the forced audio overlap. */
+    private static String stripRepeatedOverlap(String previous, String current) {
+        if (previous == null || current == null) return current == null ? "" : current.trim();
+        String a = previous.trim();
+        String b = current.trim();
+        if (a.isEmpty() || b.isEmpty()) return b;
+        int max = Math.min(32, Math.min(a.length(), b.length()));
+        for (int n = max; n >= 2; n--) {
+            if (a.regionMatches(a.length() - n, b, 0, n)) {
+                return b.substring(n).trim();
+            }
+        }
+        return b;
     }
 
     private String requestedPrecisionLabel(OfflineAsrModelCatalog.Model meta) {
@@ -296,6 +384,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     private int recommendedThreads(String id) {
+        if (PROFILE_ACCURACY.equals(conversationProfile)) return 4;
         if (OfflineAsrModelCatalog.QWEN3_ASR.equals(id)
             || OfflineAsrModelCatalog.WHISPER_MEDIUM.equals(id)
             || OfflineAsrModelCatalog.PARAKEET_JA.equals(id)) return 4;
@@ -321,6 +410,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             case "ja": return "ja";
             case "ko": return "ko";
             case "vi": return "vi";
+            case "tl": return "tl";
+            case "ms": return "ms";
+            case "th": return "th";
+            case "id": return "id";
             case "en": return "en";
             default: return "";
         }
@@ -386,6 +479,11 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         return PRECISION_AUTO;
     }
 
+    private static String normalizeProfile(String value) {
+        if (PROFILE_BALANCED.equals(value) || PROFILE_LOW_LATENCY.equals(value)) return value;
+        return PROFILE_ACCURACY;
+    }
+
     private static File findNamed(File root, String... names) {
         for (String name : names) {
             File found = OfflineModelStore.findFirst(root,
@@ -447,6 +545,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         closed = true;
         ready = false;
         speech.reset();
+        lastRawText = "";
+        currentSegmentHasOverlap = false;
         OfflineRecognizer r = recognizer;
         recognizer = null;
         if (r != null) {
