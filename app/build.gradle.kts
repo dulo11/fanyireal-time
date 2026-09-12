@@ -12,8 +12,8 @@ android {
         applicationId = "com.zhou.floatingtranslator"
         minSdk = 33
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.4.3"
+        versionCode = 10
+        versionName = "0.5.0"
     }
 
     signingConfigs {
@@ -54,4 +54,8 @@ dependencies {
 
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
+
+    // High-accuracy optional offline ASR runtime. Model packs are downloaded separately.
+    implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
+    implementation("org.apache.commons:commons-compress:1.27.1")
 }
