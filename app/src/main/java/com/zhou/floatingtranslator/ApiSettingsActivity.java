@@ -23,17 +23,21 @@ import java.util.List;
 
 public class ApiSettingsActivity extends Activity {
     private static final String PREFS = "floating_translator";
+    private static final String PREF_AZURE_PROFILE_COUNT = "azure_profile_count";
 
     private SharedPreferences prefs;
     private SecureConfig secure;
     private Spinner engineSpinner;
+    private Spinner azureStrategySpinner;
     private CheckBox youdaoSpeechFallback;
     private CheckBox showSecrets;
 
     private EditText baiduAppId;
     private EditText baiduSecret;
-    private final EditText[] azureKeys = new EditText[4];
-    private final EditText[] azureRegions = new EditText[4];
+    private final List<EditText> azureKeys = new ArrayList<>();
+    private final List<EditText> azureRegions = new ArrayList<>();
+    private final List<LinearLayout> azureRows = new ArrayList<>();
+    private LinearLayout azureContainer;
     private EditText aliyunAccessKeyId;
     private EditText aliyunAccessKeySecret;
     private EditText youdaoAppKey;
@@ -67,7 +71,7 @@ public class ApiSettingsActivity extends Activity {
 
         TextView note = text(
             "默认推荐“自动”：ML Kit 本地离线优先；只有本地失败时才依次尝试已配置的百度、Azure、阿里云。\n" +
-            "Azure 可保存 1-4 共四套资源；当前资源出现配额/限流/订阅错误时会自动切下一套。所有 Key 使用 Android Keystore + AES/GCM 加密。",
+            "Azure 改为账号池：需要几套就点“添加账号”，不再限制 1-4。可选轮番使用，或只在配额/限流/订阅错误后自动切换。所有 Key 使用 Android Keystore + AES/GCM 加密。",
             14, Color.rgb(201, 190, 221));
         note.setPadding(0, dp(5), 0, dp(16));
         root.addView(note);
@@ -111,20 +115,55 @@ public class ApiSettingsActivity extends Activity {
         root.addView(baiduAppId, matchWrap());
         root.addView(baiduSecret, matchWrap());
 
-        root.addView(section("Azure Translator 账号 1-4（自动切换）"));
+        root.addView(section("Azure Translator 账号池（可继续添加）"));
         TextView azureTip = text(
-            "按 1 → 2 → 3 → 4 使用。成功后会记住当前账号；遇到 HTTP 401/403/429、quota/exceeded/limit 等配额或订阅错误时自动尝试下一套。Region 单服务 Translator 通常可留空。",
+            "模式一：当前账号正常就一直用，出现 HTTP 401/403/429、quota/exceeded/limit/subscription/rate 等错误后切下一个。\n" +
+            "模式二：轮番使用，每次翻译成功后自动换到下一套；如果某套额度用完，也会直接跳过并继续下一套。Region 单服务 Translator 通常可留空。",
             12, Color.rgb(174, 164, 198));
         root.addView(azureTip);
-        for (int slot = 1; slot <= 4; slot++) {
-            root.addView(label("Azure 账号 " + slot));
-            azureKeys[slot - 1] = field("账号" + slot + " · Subscription Key", true,
-                SecureConfig.azureKeyName(slot));
-            azureRegions[slot - 1] = field("账号" + slot + " · Region（可留空）", false,
-                SecureConfig.azureRegionName(slot));
-            root.addView(azureKeys[slot - 1], matchWrap());
-            root.addView(azureRegions[slot - 1], matchWrap());
-        }
+
+        root.addView(label("Azure 切换策略"));
+        azureStrategySpinner = new Spinner(this);
+        azureStrategySpinner.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item,
+            new String[]{
+                "额度/限流出错后再切换",
+                "轮番使用｜每次成功后切下一个"
+            }));
+        String rotationMode = prefs.getString(TranslationRouter.PREF_AZURE_ROTATION_MODE,
+            TranslationRouter.AZURE_ROUND_ROBIN);
+        azureStrategySpinner.setSelection(TranslationRouter.AZURE_ROTATE_ON_LIMIT.equals(rotationMode) ? 0 : 1);
+        azureStrategySpinner.setBackgroundColor(Color.rgb(51, 45, 73));
+        root.addView(azureStrategySpinner, matchWrap());
+
+        azureContainer = new LinearLayout(this);
+        azureContainer.setOrientation(LinearLayout.VERTICAL);
+        root.addView(azureContainer);
+
+        int savedCount = Math.max(1, prefs.getInt(PREF_AZURE_PROFILE_COUNT, 1));
+        int highestConfigured = secure.highestConfiguredAzureSlot();
+        int initialCount = Math.max(savedCount, Math.max(1, highestConfigured));
+        prefs.edit().putInt(PREF_AZURE_PROFILE_COUNT, initialCount).apply();
+        for (int slot = 1; slot <= initialCount; slot++) addAzureProfileRow(slot);
+
+        LinearLayout azureButtons = new LinearLayout(this);
+        azureButtons.setOrientation(LinearLayout.HORIZONTAL);
+        Button addAzure = button("＋ 添加 Azure 账号");
+        addAzure.setOnClickListener(v -> {
+            int slot = azureKeys.size() + 1;
+            addAzureProfileRow(slot);
+            prefs.edit().putInt(PREF_AZURE_PROFILE_COUNT, azureKeys.size()).apply();
+            toast("已添加 Azure 账号 " + slot);
+        });
+        Button removeAzure = button("－ 删除最后一个");
+        removeAzure.setOnClickListener(v -> removeLastAzureProfile());
+        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, -2, 1f);
+        left.setMargins(0, dp(6), dp(4), dp(6));
+        LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, -2, 1f);
+        right.setMargins(dp(4), dp(6), 0, dp(6));
+        azureButtons.addView(addAzure, left);
+        azureButtons.addView(removeAzure, right);
+        root.addView(azureButtons);
 
         root.addView(section("阿里云机器翻译（主力在线备用）"));
         aliyunAccessKeyId = field("阿里云 AccessKey ID", false, SecureConfig.ALIYUN_ACCESS_KEY_ID);
@@ -185,6 +224,66 @@ public class ApiSettingsActivity extends Activity {
         return scroll;
     }
 
+    private void addAzureProfileRow(int slot) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(10), dp(8), dp(10), dp(8));
+        row.setBackgroundColor(Color.rgb(34, 30, 49));
+
+        TextView title = label("Azure 账号 " + slot);
+        row.addView(title);
+        EditText key = field("账号" + slot + " · Subscription Key", true,
+            SecureConfig.azureKeyName(slot));
+        EditText region = field("账号" + slot + " · Region（可留空）", false,
+            SecureConfig.azureRegionName(slot));
+        row.addView(key, matchWrap());
+        row.addView(region, matchWrap());
+
+        azureKeys.add(key);
+        azureRegions.add(region);
+        azureRows.add(row);
+        azureContainer.addView(row, matchWrap());
+
+        if (showSecrets != null && showSecrets.isChecked()) applySecretVisibility(true);
+    }
+
+    private void removeLastAzureProfile() {
+        if (azureKeys.size() <= 1) {
+            toast("至少保留一个 Azure 输入位；不用时留空即可");
+            return;
+        }
+        int slot = azureKeys.size();
+        boolean hasValue = !azureKeys.get(slot - 1).getText().toString().trim().isEmpty()
+            || !azureRegions.get(slot - 1).getText().toString().trim().isEmpty();
+        if (hasValue || secure.has(SecureConfig.azureKeyName(slot))) {
+            new AlertDialog.Builder(this)
+                .setTitle("删除 Azure 账号 " + slot + "？")
+                .setMessage("会同时删除这套账号在本机加密保存的 Key / Region。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (d, w) -> removeLastAzureProfileNow())
+                .show();
+        } else {
+            removeLastAzureProfileNow();
+        }
+    }
+
+    private void removeLastAzureProfileNow() {
+        int slot = azureKeys.size();
+        if (slot <= 1) return;
+        secure.put(SecureConfig.azureKeyName(slot), "");
+        secure.put(SecureConfig.azureRegionName(slot), "");
+        LinearLayout row = azureRows.remove(slot - 1);
+        azureContainer.removeView(row);
+        azureKeys.remove(slot - 1);
+        azureRegions.remove(slot - 1);
+        prefs.edit()
+            .putInt(PREF_AZURE_PROFILE_COUNT, azureKeys.size())
+            .putInt(TranslationRouter.PREF_AZURE_ACTIVE_SLOT, 1)
+            .apply();
+        refreshConfiguredSummary();
+        toast("已删除最后一个 Azure 账号位");
+    }
+
     private EditText field(String hint, boolean secretField, String key) {
         EditText edit = new EditText(this);
         edit.setHint(hint);
@@ -203,7 +302,7 @@ public class ApiSettingsActivity extends Activity {
     private void applySecretVisibility(boolean show) {
         List<EditText> fields = new ArrayList<>();
         fields.add(baiduSecret);
-        for (EditText field : azureKeys) fields.add(field);
+        fields.addAll(azureKeys);
         fields.add(aliyunAccessKeySecret);
         fields.add(youdaoSecret);
         fields.add(deepLKey);
@@ -222,17 +321,22 @@ public class ApiSettingsActivity extends Activity {
     private void save(boolean finishAfter) {
         int pos = engineSpinner.getSelectedItemPosition();
         if (pos < 0 || pos >= TranslationRouter.ENGINE_IDS.length) pos = 0;
+        String azureMode = azureStrategySpinner.getSelectedItemPosition() == 0
+            ? TranslationRouter.AZURE_ROTATE_ON_LIMIT : TranslationRouter.AZURE_ROUND_ROBIN;
         prefs.edit()
             .putString("engine_id", TranslationRouter.ENGINE_IDS[pos])
             .putBoolean("youdao_speech_fallback", youdaoSpeechFallback.isChecked())
+            .putInt(PREF_AZURE_PROFILE_COUNT, azureKeys.size())
+            .putString(TranslationRouter.PREF_AZURE_ROTATION_MODE, azureMode)
             .apply();
 
         try {
             secure.put(SecureConfig.BAIDU_APP_ID, baiduAppId.getText().toString());
             secure.put(SecureConfig.BAIDU_SECRET, baiduSecret.getText().toString());
-            for (int slot = 1; slot <= 4; slot++) {
-                secure.put(SecureConfig.azureKeyName(slot), azureKeys[slot - 1].getText().toString());
-                secure.put(SecureConfig.azureRegionName(slot), azureRegions[slot - 1].getText().toString());
+            for (int i = 0; i < azureKeys.size(); i++) {
+                int slot = i + 1;
+                secure.put(SecureConfig.azureKeyName(slot), azureKeys.get(i).getText().toString());
+                secure.put(SecureConfig.azureRegionName(slot), azureRegions.get(i).getText().toString());
             }
             secure.put(SecureConfig.ALIYUN_ACCESS_KEY_ID, aliyunAccessKeyId.getText().toString());
             secure.put(SecureConfig.ALIYUN_ACCESS_KEY_SECRET, aliyunAccessKeySecret.getText().toString());
@@ -243,7 +347,9 @@ public class ApiSettingsActivity extends Activity {
             secure.put(SecureConfig.LIBRE_ENDPOINT, libreEndpoint.getText().toString());
             secure.put(SecureConfig.LIBRE_KEY, libreKey.getText().toString());
             refreshConfiguredSummary();
-            status.setText("✅ 已加密保存。Azure 账号1-4已启用自动切换逻辑。");
+            status.setText("✅ 已加密保存。Azure 账号池：" + secure.configuredAzureProfileCount()
+                + " 套；策略：" + (TranslationRouter.AZURE_ROUND_ROBIN.equals(azureMode)
+                ? "轮番使用" : "额度/限流后切换") + "。");
             toast("已保存");
             if (finishAfter) finish();
         } catch (Exception e) {
@@ -275,12 +381,12 @@ public class ApiSettingsActivity extends Activity {
     private void confirmClearAll() {
         new AlertDialog.Builder(this)
             .setTitle("清空全部 API 密钥？")
-            .setMessage("会删除本机保存的百度、Azure 1-4、阿里云及其他兼容 API 配置。离线模型不会删除。")
+            .setMessage("会删除本机保存的百度、全部 Azure 账号、阿里云及其他兼容 API 配置。离线模型不会删除。")
             .setNegativeButton("取消", null)
             .setPositiveButton("清空", (dialog, which) -> {
                 secure.clearAll();
                 clearFields();
-                prefs.edit().remove("azure_active_slot").apply();
+                prefs.edit().remove(TranslationRouter.PREF_AZURE_ACTIVE_SLOT).apply();
                 refreshConfiguredSummary();
                 if (status != null) status.setText("✅ 已清空全部 API 配置");
                 toast("API 密钥已清空");
@@ -292,8 +398,8 @@ public class ApiSettingsActivity extends Activity {
         List<EditText> fields = new ArrayList<>();
         fields.add(baiduAppId);
         fields.add(baiduSecret);
-        for (EditText field : azureKeys) fields.add(field);
-        for (EditText field : azureRegions) fields.add(field);
+        fields.addAll(azureKeys);
+        fields.addAll(azureRegions);
         fields.add(aliyunAccessKeyId);
         fields.add(aliyunAccessKeySecret);
         fields.add(youdaoAppKey);
