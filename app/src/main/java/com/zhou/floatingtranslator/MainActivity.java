@@ -2,6 +2,7 @@ package com.zhou.floatingtranslator;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -50,18 +51,19 @@ public class MainActivity extends Activity {
     private TextView engineStatus;
     private TextView status;
     private TextView history;
+    private UpdateChecker updateChecker;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!preferences.getBoolean("v050_migrated", false)) {
+        if (!preferences.getBoolean("v051_migrated", false)) {
             preferences.edit()
-                .putBoolean("v050_migrated", true)
-                .putBoolean("prefer_offline", true)
-                .putBoolean("enable_ocr", false)
+                .putBoolean("v051_migrated", true)
+                .putBoolean("prefer_offline", preferences.getBoolean("prefer_offline", true))
+                .putBoolean("enable_ocr", preferences.getBoolean("enable_ocr", false))
                 .putBoolean("auto_mic_fallback", false)
-                .putBoolean("show_diagnostics", true)
-                .putString("language_mode", SherpaSpeechEngine.LANG_SINGLE)
+                .putBoolean("show_diagnostics", preferences.getBoolean("show_diagnostics", true))
+                .putString("language_mode", preferences.getString("language_mode", SherpaSpeechEngine.LANG_SINGLE))
                 .apply();
         }
         setContentView(buildUi());
@@ -75,11 +77,11 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("浮译 0.5.0", 34, Color.WHITE);
+        TextView title = text("浮译 " + BuildConfig.VERSION_NAME, 34, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
-        TextView subtitle = text("固定声音来源 · 多离线 ASR · 日英混合 · 模型可下载删除 · 离线优先", 15,
+        TextView subtitle = text("固定声音来源 · 高精度离线 ASR · 历史/SRT · 断点下载 · ROOT 通话实验", 15,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -98,9 +100,21 @@ public class MainActivity extends Activity {
         engineSettings.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
         card.addView(engineSettings, matchWrap());
 
-        Button modelManager = secondaryButton("📦 离线模型中心 / 下载 / 删除 / 默认");
+        Button modelManager = secondaryButton("📦 离线模型中心 / 断点下载 / 删除 / 默认");
         modelManager.setOnClickListener(v -> startActivity(new Intent(this, ModelManagerActivity.class)));
         card.addView(modelManager, matchWrap());
+
+        Button historyButton = secondaryButton("📝 翻译历史 / 导出 TXT / SRT");
+        historyButton.setOnClickListener(v -> startActivity(new Intent(this, HistoryActivity.class)));
+        card.addView(historyButton, matchWrap());
+
+        Button rootCall = secondaryButton("☎ ROOT 通话翻译实验室");
+        rootCall.setOnClickListener(v -> startActivity(new Intent(this, RootCallActivity.class)));
+        card.addView(rootCall, matchWrap());
+
+        Button update = secondaryButton("⬆ 检查 APP 更新");
+        update.setOnClickListener(v -> checkUpdate(update));
+        card.addView(update, matchWrap());
 
         card.addView(label("固定声音来源（选中后一直使用，绝不自动切换）"));
         inputModeSpinner = new Spinner(this);
@@ -108,18 +122,18 @@ public class MainActivity extends Activity {
             android.R.layout.simple_spinner_dropdown_item,
             new String[]{
                 "系统内部声音｜直播/视频｜不会自动切麦克风",
-                "麦克风识别手机外放｜App 禁止内录时手动选"
+                "麦克风识别手机外放｜通话外放/禁止内录时手动选"
             }));
         inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         card.addView(inputModeSpinner, matchWrap());
 
-        card.addView(label("语音识别 ASR（备注直接显示；可固定选择）"));
+        card.addView(label("语音识别 ASR（可固定选择）"));
         asrModeSpinner = new Spinner(this);
         asrModeSpinner.setAdapter(new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "自动推荐｜按语言/混合模式选已下载高精度模型 → Vosk → 系统/有道",
+                "自动推荐｜已下载高精度模型 → Vosk → 系统/有道",
                 "Vosk｜省电★★★★★｜速度快｜模型小｜日语快语速一般",
                 "SenseVoice INT8｜中英日韩粤｜速度快｜日英混合★★★★｜均衡推荐",
                 "ReazonSpeech 日语｜日语直播★★★★★｜日语专项｜不推荐日英混说",
@@ -153,8 +167,8 @@ public class MainActivity extends Activity {
 
         TextView asrInfo = text(
             "纯日语：ReazonSpeech / Parakeet → SenseVoice → Vosk。\n" +
-            "日英混合：Qwen3-ASR / Whisper → SenseVoice。不要在一句话中间来回切 ASR 模型。\n" +
-            "高精度模型需先到“离线模型中心”下载；模型可删除，不会影响 App 设置。",
+            "日英混合：Qwen3-ASR / Whisper → SenseVoice。\n" +
+            "高精度模型需先在“离线模型中心”下载；0.5.1 下载中断后重新点会从断点继续。",
             13, Color.rgb(184, 174, 207));
         asrInfo.setPadding(0, dp(4), 0, dp(8));
         card.addView(asrInfo);
@@ -233,7 +247,7 @@ public class MainActivity extends Activity {
         card.addView(copy, matchWrap());
 
         status = text(
-            "0.5.0：声音来源固定；高精度 ASR 可下载/删除；支持日英混合识别模式；设置可显式保存。",
+            "0.5.1：修复模型容量单位；高精度模型支持断点续传/自动重试；新增历史/SRT、更新检测、ROOT 通话诊断。",
             14, Color.rgb(201, 190, 221));
         status.setPadding(0, dp(12), 0, 0);
         card.addView(status);
@@ -244,8 +258,8 @@ public class MainActivity extends Activity {
         updateHistory();
 
         TextView note = text(
-            "日语直播准确度优先：系统内部声音 + ReazonSpeech/Parakeet；如果一句里经常夹英语，改用 Qwen3-ASR 或 Whisper，并把识别语言模式设为“日语 + 英语”。\n" +
-            "目前文字翻译仍是 ML Kit 本地离线优先；NLLB/OPUS-MT 会作为后续文字翻译大模型加入，不在本版假装已接入。",
+            "日语直播准确度优先：系统内部声音 + ReazonSpeech/Parakeet；日英混合用 Qwen3-ASR 或 Whisper。\n" +
+            "通话翻译：无 ROOT 先用外放 + 麦克风；有 KernelSU/Magisk 可进入 ROOT 通话实验室扫描本机音频路由。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(4), dp(20), dp(4), 0);
         root.addView(note);
@@ -371,6 +385,41 @@ public class MainActivity extends Activity {
             case "ko": return "안녕하세요. 오늘 날씨가 좋네요.";
             default: return "Hello, it is nice to meet you.";
         }
+    }
+
+    private void checkUpdate(Button button) {
+        if (updateChecker != null) updateChecker.close();
+        updateChecker = new UpdateChecker(this);
+        button.setEnabled(false);
+        status.setText("正在检查 GitHub Releases 最新版本……");
+        updateChecker.check(BuildConfig.VERSION_NAME, new UpdateChecker.Callback() {
+            @Override public void onResult(String latestVersion, String pageUrl, String apkUrl, boolean newer) {
+                button.setEnabled(true);
+                if (newer) {
+                    status.setText("发现新版本 v" + latestVersion);
+                    new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("发现浮译 v" + latestVersion)
+                        .setMessage("当前版本：v" + BuildConfig.VERSION_NAME + "\n可以打开固定 latest APK 下载链接更新。")
+                        .setNegativeButton("稍后", null)
+                        .setNeutralButton("版本页面", (d, w) -> openUrl(pageUrl))
+                        .setPositiveButton("下载最新版", (d, w) -> openUrl(apkUrl))
+                        .show();
+                } else {
+                    status.setText("✅ 当前已是最新版本 v" + BuildConfig.VERSION_NAME);
+                    toast("已经是最新版");
+                }
+            }
+
+            @Override public void onError(String message) {
+                button.setEnabled(true);
+                status.setText("检查更新失败：" + message + "\n如果当前网络无法访问 GitHub，可开代理后重试。");
+            }
+        });
+    }
+
+    private void openUrl(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Exception e) { toast("无法打开链接：" + safe(e)); }
     }
 
     private void startCapture() {
@@ -503,6 +552,7 @@ public class MainActivity extends Activity {
         super.onResume();
         updateEngineStatus();
         if (history != null) updateHistory();
+        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(1, preferences.getInt("input_mode", 0)));
         try { startService(new Intent(this, TranslationService.class).setAction(TranslationService.ACTION_UI_VISIBLE)); }
         catch (Exception ignored) {}
     }
@@ -514,11 +564,17 @@ public class MainActivity extends Activity {
         super.onPause();
     }
 
+    @Override protected void onDestroy() {
+        if (updateChecker != null) updateChecker.close();
+        super.onDestroy();
+    }
+
     private void updateEngineStatus() {
         if (engineStatus == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         engineStatus.setText("当前翻译：" + engineLabel(engine) + "\n默认 ASR："
-            + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
+            + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO))
+            + "\n历史：" + HistoryStore.count(this) + " 条");
     }
 
     private String engineLabel(String engine) {
