@@ -2,6 +2,8 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -93,6 +95,6 @@ jobs:
               "$APK_NAME" FloatingTranslator-latest.apk \
               --target "$GITHUB_SHA" \
               --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 新增 ASR 精度中心：自动 / FP32 / INT8\n- SenseVoice、ReazonSpeech、Whisper 完整模型包可真正切换 FP32 与 INT8\n- 修正 SenseVoice 模型大小说明：完整包约 1 GB，内含 FP32 + INT8\n- FP32 不可用的模型会安全回退 INT8，不会因精度设置启动失败\n- ROOT 通话与普通直播翻译共用同一 ASR 精度设置\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
+              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 首页新增 App 实时 RAM/PSS：总占用、Java、Native、其他以及手机可用/总内存\n- RAM 每 2 秒刷新，加载大型 ONNX/ASR 后可以直接看到实际运行占用\n- 首页显示当前源语言→目标语言\n- 常用亚洲语种继续置顶：中英日韩、越南、菲律宾、马来，并覆盖泰语/印尼语等\n- ASR 推荐说明补充日韩及东南亚语言：Qwen3 / Whisper / Omnilingual 等\n- 保留 ROOT 通话、FP32/INT8 精度切换和 59 种 ML Kit 文字翻译\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
               --latest
           fi
