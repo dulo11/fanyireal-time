@@ -78,7 +78,10 @@ public final class TranslationRouter implements AutoCloseable {
     }
 
     private static final String PREFS = "floating_translator";
-    private static final String PREF_AZURE_ACTIVE_SLOT = "azure_active_slot";
+    public static final String PREF_AZURE_ACTIVE_SLOT = "azure_active_slot";
+    public static final String PREF_AZURE_ROTATION_MODE = "azure_rotation_mode";
+    public static final String AZURE_ROTATE_ON_LIMIT = "on_limit";
+    public static final String AZURE_ROUND_ROBIN = "round_robin";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService network = Executors.newSingleThreadExecutor();
@@ -187,7 +190,6 @@ public final class TranslationRouter implements AutoCloseable {
             list.add(ALIYUN);
             list.add(BAIDU);
         }
-        // This last ML Kit matters only if TranslationRouter AUTO is called directly.
         list.add(MLKIT);
         return list;
     }
@@ -270,26 +272,28 @@ public final class TranslationRouter implements AutoCloseable {
     }
 
     /**
-     * Azure supports up to four locally encrypted profiles. The last successful slot is tried first.
-     * If Azure reports quota/rate/auth subscription failures (typically HTTP 401/403/429), the next
-     * configured slot is tried automatically. Normal connectivity errors are surfaced immediately so
-     * a temporary network outage does not incorrectly mark/cycle through every account.
+     * Azure account pool has no fixed UI slot limit. Every configured profile is discovered from the
+     * encrypted store. Two modes are supported: use one until quota/rate/auth failure, or round-robin
+     * after every successful translation. Quota-like failures always advance to the next profile.
      */
     private String translateAzure(String text) throws Exception {
+        List<Integer> slots = secure.configuredAzureSlots();
+        if (slots.isEmpty()) throw new IllegalStateException("未配置 Azure 账号");
+
         String endpoint = "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0"
             + "&from=" + url(source) + "&to=" + url(azureCode(target));
         JSONArray body = new JSONArray();
         body.put(new JSONObject().put("Text", text));
 
-        int startSlot = Math.max(1, Math.min(4, prefs.getInt(PREF_AZURE_ACTIVE_SLOT, 1)));
+        int preferred = prefs.getInt(PREF_AZURE_ACTIVE_SLOT, slots.get(0));
+        int startIndex = slots.indexOf(preferred);
+        if (startIndex < 0) startIndex = 0;
         List<String> errors = new ArrayList<>();
-        boolean foundConfigured = false;
 
-        for (int offset = 0; offset < 4; offset++) {
-            int slot = ((startSlot - 1 + offset) % 4) + 1;
+        for (int attempt = 0; attempt < slots.size(); attempt++) {
+            int index = (startIndex + attempt) % slots.size();
+            int slot = slots.get(index);
             String key = secure.get(SecureConfig.azureKeyName(slot));
-            if (key.isEmpty()) continue;
-            foundConfigured = true;
             String region = secure.get(SecureConfig.azureRegionName(slot));
 
             Map<String, String> headers = new LinkedHashMap<>();
@@ -305,34 +309,33 @@ public final class TranslationRouter implements AutoCloseable {
                 String translated = arr.getJSONObject(0)
                     .getJSONArray("translations").getJSONObject(0).getString("text");
                 lastAzureSlot = slot;
-                prefs.edit().putInt(PREF_AZURE_ACTIVE_SLOT, slot).apply();
+
+                String mode = prefs.getString(PREF_AZURE_ROTATION_MODE, AZURE_ROUND_ROBIN);
+                int nextSlot = slot;
+                if (AZURE_ROUND_ROBIN.equals(mode) && slots.size() > 1) {
+                    nextSlot = slots.get((index + 1) % slots.size());
+                }
+                prefs.edit().putInt(PREF_AZURE_ACTIVE_SLOT, nextSlot).apply();
                 return translated;
             } catch (Exception e) {
                 String message = safe(e);
                 errors.add("账号" + slot + "：" + message);
                 if (!shouldRotateAzure(message)) throw e;
-                int next = nextConfiguredAzureSlot(slot);
-                if (next > 0) prefs.edit().putInt(PREF_AZURE_ACTIVE_SLOT, next).apply();
+                if (slots.size() > 1) {
+                    int nextSlot = slots.get((index + 1) % slots.size());
+                    prefs.edit().putInt(PREF_AZURE_ACTIVE_SLOT, nextSlot).apply();
+                }
             }
         }
 
-        if (!foundConfigured) throw new IllegalStateException("未配置 Azure 账号1-4");
-        throw new IllegalStateException("Azure 账号1-4 均不可用：" + String.join("；", errors));
-    }
-
-    private int nextConfiguredAzureSlot(int current) {
-        for (int step = 1; step <= 4; step++) {
-            int slot = ((current - 1 + step) % 4) + 1;
-            if (secure.has(SecureConfig.azureKeyName(slot))) return slot;
-        }
-        return -1;
+        throw new IllegalStateException("Azure 已配置账号均不可用：" + String.join("；", errors));
     }
 
     private static boolean shouldRotateAzure(String message) {
         String m = message == null ? "" : message.toLowerCase(Locale.ROOT);
         return m.contains("http 401") || m.contains("http 403") || m.contains("http 429")
             || m.contains("quota") || m.contains("exceed") || m.contains("limit")
-            || m.contains("subscription") || m.contains("rate");
+            || m.contains("subscription") || m.contains("rate") || m.contains("too many requests");
     }
 
     private String translateAliyun(String text) throws Exception {
