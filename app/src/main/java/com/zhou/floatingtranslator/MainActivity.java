@@ -2,7 +2,10 @@ package com.zhou.floatingtranslator;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.media.projection.MediaProjectionManager;
@@ -34,11 +37,17 @@ public class MainActivity extends Activity {
     private Spinner sourceSpinner;
     private Spinner targetSpinner;
     private CheckBox showOriginal;
+    private CheckBox preferOffline;
     private SeekBar fontSize;
     private TextView status;
+    private TextView history;
+    private SharedPreferences preferences;
+
+    private static final String PREFS = "floating_translator";
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
         setContentView(buildUi());
         requestRuntimePermissions();
     }
@@ -64,25 +73,40 @@ public class MainActivity extends Activity {
 
         card.addView(label("声音语言"));
         sourceSpinner = spinner();
-        sourceSpinner.setSelection(1);
+        sourceSpinner.setSelection(preferences.getInt("source_index", 1));
         card.addView(sourceSpinner, matchWrap());
 
         card.addView(label("翻译为"));
         targetSpinner = spinner();
-        targetSpinner.setSelection(0);
+        targetSpinner.setSelection(preferences.getInt("target_index", 0));
         card.addView(targetSpinner, matchWrap());
+
+        Button swap = secondaryButton("⇄ 一键互换语言");
+        swap.setOnClickListener(v -> {
+            int source = sourceSpinner.getSelectedItemPosition();
+            sourceSpinner.setSelection(targetSpinner.getSelectedItemPosition());
+            targetSpinner.setSelection(source);
+            saveSettings();
+        });
+        card.addView(swap, matchWrap());
 
         showOriginal = new CheckBox(this);
         showOriginal.setText("同时显示原文");
         showOriginal.setTextColor(Color.WHITE);
-        showOriginal.setChecked(true);
+        showOriginal.setChecked(preferences.getBoolean("show_original", true));
         card.addView(showOriginal);
+
+        preferOffline = new CheckBox(this);
+        preferOffline.setText("语音识别优先离线（更省流量，准确度可能降低）");
+        preferOffline.setTextColor(Color.WHITE);
+        preferOffline.setChecked(preferences.getBoolean("prefer_offline", false));
+        card.addView(preferOffline);
 
         TextView sizeLabel = label("字幕大小");
         card.addView(sizeLabel);
         fontSize = new SeekBar(this);
         fontSize.setMax(18);
-        fontSize.setProgress(8);
+        fontSize.setProgress(preferences.getInt("font_size", 8));
         card.addView(fontSize, matchWrap());
 
         Button overlay = secondaryButton("① 授予悬浮窗权限");
@@ -105,14 +129,31 @@ public class MainActivity extends Activity {
         });
         card.addView(stop, matchWrap());
 
+        Button copy = secondaryButton("复制最近译文");
+        copy.setOnClickListener(v -> copyLastTranslation());
+        card.addView(copy, matchWrap());
+
+        Button clear = secondaryButton("清空最近记录");
+        clear.setOnClickListener(v -> {
+            preferences.edit().remove("last_original").remove("last_translation").apply();
+            updateHistory();
+        });
+        card.addView(clear, matchWrap());
+
         status = text("首次使用：先授权悬浮窗，再下载模型。", 14, Color.rgb(201,190,221));
         status.setPadding(0, dp(14), 0, 0);
         card.addView(status);
 
+        history = text("", 14, Color.rgb(218,209,231));
+        history.setPadding(0, dp(14), 0, 0);
+        card.addView(history);
+        updateHistory();
+
         TextView note = text(
-            "支持：中文、英语、日语、越南语、菲律宾语、马来语。\n\n" +
+            "支持 ML Kit 全部 59 种语言。常用语言排列在前，其他语言继续向下滑动选择。\n\n" +
             "说明：系统会在每次启动时显示“开始录制或投射”确认，这是 Android 的安全要求。" +
-            "部分 App 会主动禁止内部音频捕获，此时字幕可能没有声音输入。",
+            "部分 App 会主动禁止内部音频捕获；部分语言也可能没有可用的系统语音包。\n\n" +
+            "文字翻译由 Google ML Kit 设备端模型提供。",
             14, Color.rgb(201,190,221));
         note.setPadding(dp(4), dp(22), dp(4), 0);
         root.addView(note);
@@ -155,6 +196,7 @@ public class MainActivity extends Activity {
     }
 
     private void startCapture() {
+        saveSettings();
         if (!Settings.canDrawOverlays(this)) {
             toast("请先授予悬浮窗权限");
             openOverlaySettings();
@@ -190,6 +232,7 @@ public class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
+            .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
         startForegroundService(service);
         status.setText("翻译已启动，可以切换到视频或直播 App");
@@ -207,6 +250,49 @@ public class MainActivity extends Activity {
     private void openOverlaySettings() {
         startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
             Uri.parse("package:" + getPackageName())));
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (history != null) updateHistory();
+    }
+
+    @Override protected void onPause() {
+        saveSettings();
+        super.onPause();
+    }
+
+    private void saveSettings() {
+        if (preferences == null || sourceSpinner == null || targetSpinner == null) return;
+        preferences.edit()
+            .putInt("source_index", sourceSpinner.getSelectedItemPosition())
+            .putInt("target_index", targetSpinner.getSelectedItemPosition())
+            .putBoolean("show_original", showOriginal.isChecked())
+            .putBoolean("prefer_offline", preferOffline.isChecked())
+            .putInt("font_size", fontSize.getProgress())
+            .apply();
+    }
+
+    private void updateHistory() {
+        if (history == null) return;
+        String original = preferences.getString("last_original", "");
+        String translated = preferences.getString("last_translation", "");
+        if (translated.isEmpty()) {
+            history.setText("最近译文：暂无");
+        } else {
+            history.setText("最近原文：" + original + "\n最近译文：" + translated);
+        }
+    }
+
+    private void copyLastTranslation() {
+        String translated = preferences.getString("last_translation", "");
+        if (translated.isEmpty()) {
+            toast("还没有可复制的译文");
+            return;
+        }
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        clipboard.setPrimaryClip(ClipData.newPlainText("浮译译文", translated));
+        toast("已复制最近译文");
     }
 
     private LinearLayout column(int spacingDp) {

@@ -52,6 +52,7 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String EXTRA_SOURCE_MLKIT = "source_mlkit";
     public static final String EXTRA_TARGET_MLKIT = "target_mlkit";
     public static final String EXTRA_SHOW_ORIGINAL = "show_original";
+    public static final String EXTRA_PREFER_OFFLINE = "prefer_offline";
     public static final String EXTRA_FONT_SIZE = "font_size";
 
     private static final int NOTIFICATION_ID = 3401;
@@ -76,7 +77,10 @@ public class TranslationService extends Service implements RecognitionListener {
     private WindowManager.LayoutParams overlayParams;
     private TextView originalText;
     private TextView translatedText;
+    private TextView pauseControl;
     private boolean showOriginal;
+    private boolean preferOffline;
+    private volatile boolean paused;
     private String speechLanguage;
     private String lastPartial = "";
     private Runnable partialTranslation;
@@ -100,6 +104,8 @@ public class TranslationService extends Service implements RecognitionListener {
         String sourceMl = intent.getStringExtra(EXTRA_SOURCE_MLKIT);
         String targetMl = intent.getStringExtra(EXTRA_TARGET_MLKIT);
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
+        preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, false);
+        paused = false;
         int fontSize = intent.getIntExtra(EXTRA_FONT_SIZE, 24);
         Intent resultData = android.os.Build.VERSION.SDK_INT >= 33
             ? intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class)
@@ -181,7 +187,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage)
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline)
                     .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, readPipe)
                     .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                     .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, SAMPLE_RATE)
@@ -200,6 +206,7 @@ public class TranslationService extends Service implements RecognitionListener {
         while (running && audioRecord != null) {
             int count = audioRecord.read(shorts, 0, shorts.length, AudioRecord.READ_BLOCKING);
             if (count <= 0) continue;
+            if (paused) continue;
             for (int i = 0; i < count; i++) {
                 bytes[i * 2] = (byte) (shorts[i] & 0xff);
                 bytes[i * 2 + 1] = (byte) ((shorts[i] >> 8) & 0xff);
@@ -209,7 +216,7 @@ public class TranslationService extends Service implements RecognitionListener {
             try {
                 if (output != null) output.write(bytes, 0, count * 2);
             } catch (IOException ignored) {
-                main.postDelayed(this::startRecognizerSession, 250);
+                if (!paused) main.postDelayed(this::startRecognizerSession, 250);
             }
         }
     }
@@ -244,7 +251,10 @@ public class TranslationService extends Service implements RecognitionListener {
         if (translator == null || text.isEmpty()) return;
         translator.translate(text)
             .addOnSuccessListener(value -> {
-                if (committed || text.equals(lastPartial)) translatedText.setText(value);
+                if (committed || text.equals(lastPartial)) {
+                    translatedText.setText(value);
+                    saveHistory(text, value);
+                }
             })
             .addOnFailureListener(e -> translatedText.setText("翻译失败：" + safeMessage(e)));
     }
@@ -262,6 +272,17 @@ public class TranslationService extends Service implements RecognitionListener {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(18), dp(12), dp(18), dp(12));
         box.setBackgroundResource(R.drawable.panel);
+
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        pauseControl = overlayControl("暂停");
+        TextView closeControl = overlayControl("关闭");
+        pauseControl.setOnClickListener(v -> togglePause());
+        closeControl.setOnClickListener(v -> stopEverything());
+        controls.addView(pauseControl, new LinearLayout.LayoutParams(0, -2, 1));
+        controls.addView(closeControl, new LinearLayout.LayoutParams(0, -2, 1));
+        box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
+
         originalText = overlayText(Math.max(14, fontSize - 4), Color.rgb(218, 209, 231));
         translatedText = overlayText(fontSize, Color.WHITE);
         translatedText.setTypeface(null, 1);
@@ -287,6 +308,33 @@ public class TranslationService extends Service implements RecognitionListener {
         t.setTextSize(size); t.setTextColor(color); t.setGravity(Gravity.CENTER);
         t.setMaxLines(4); t.setText(" ");
         return t;
+    }
+
+    private TextView overlayControl(String value) {
+        TextView t = overlayText(13, Color.rgb(190, 165, 255));
+        t.setText(value);
+        t.setPadding(dp(8), dp(4), dp(8), dp(8));
+        return t;
+    }
+
+    private void togglePause() {
+        paused = !paused;
+        if (paused) {
+            if (recognizer != null) recognizer.cancel();
+            pauseControl.setText("继续");
+            showStatus("翻译已暂停");
+        } else {
+            pauseControl.setText("暂停");
+            showStatus("正在继续监听……");
+            startRecognizerSession();
+        }
+    }
+
+    private void saveHistory(String original, String translated) {
+        getSharedPreferences("floating_translator", MODE_PRIVATE).edit()
+            .putString("last_original", original)
+            .putString("last_translation", translated)
+            .apply();
     }
 
     private void makeDraggable(View view) {
@@ -381,7 +429,7 @@ public class TranslationService extends Service implements RecognitionListener {
     @Override public void onEndOfSpeech() {}
     @Override public void onEvent(int eventType, Bundle params) {}
     @Override public void onError(int error) {
-        if (!running) return;
+        if (!running || paused) return;
         if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
             showStatus("当前语音包不可用，请在系统语音识别设置中下载：" + speechLanguage);
         }
