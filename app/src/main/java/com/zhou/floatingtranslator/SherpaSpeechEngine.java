@@ -134,7 +134,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             speech.reset();
             segmentMs = 0L;
             silenceMs = 0L;
-            // If this was a forced endpoint, keep listening as the speaker may be continuous.
+            // Forced endpoints keep listening, so fast continuous speech is not lost.
             inSpeech = voiced;
             if (segment.length >= SAMPLE_RATE) decode(segment);
         }
@@ -164,9 +164,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 OfflineRecognizerResult result = r.getResult(stream);
                 String text = result == null || result.getText() == null ? "" : result.getText().trim();
                 String lang = result == null || result.getLang() == null ? "" : result.getLang().trim();
-                if (!text.isEmpty()) {
-                    main.post(() -> callback.onText(text, lang));
-                }
+                if (!text.isEmpty()) main.post(() -> callback.onText(text, lang));
             } catch (Throwable e) {
                 postError("识别失败：" + safe(e));
             } finally {
@@ -177,25 +175,31 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         });
     }
 
+    /**
+     * JitPack's Android AAR exposes sherpa-onnx's Kotlin API. Kotlin data classes
+     * with all-default constructor values are callable from Java with no-arg
+     * constructors and ordinary generated setters.
+     */
     private OfflineRecognizer buildRecognizer(OfflineAsrModelCatalog.Model meta, File installedDir) {
         File root = OfflineModelStore.findPayloadRoot(installedDir, meta.archiveRootHint);
         if (root == null) throw new IllegalStateException("模型目录不存在");
 
-        OfflineModelConfig.Builder model = OfflineModelConfig.builder()
-            .setNumThreads(recommendedThreads(modelId))
-            .setDebug(false)
-            .setProvider("cpu");
+        OfflineModelConfig model = new OfflineModelConfig();
+        model.setNumThreads(recommendedThreads(modelId));
+        model.setDebug(false);
+        model.setProvider("cpu");
 
         switch (modelId) {
             case OfflineAsrModelCatalog.SENSEVOICE: {
                 File onnx = require(findNamed(root, "model.int8.onnx", "model.onnx"), "SenseVoice model");
                 File tokens = require(findTokens(root), "tokens.txt");
-                OfflineSenseVoiceModelConfig cfg = OfflineSenseVoiceModelConfig.builder()
-                    .setModel(onnx.getAbsolutePath())
-                    .setLanguage(senseVoiceLanguage())
-                    .setInverseTextNormalization(true)
-                    .build();
-                model.setSenseVoice(cfg).setTokens(tokens.getAbsolutePath()).setModelType("sense_voice");
+                OfflineSenseVoiceModelConfig cfg = new OfflineSenseVoiceModelConfig();
+                cfg.setModel(onnx.getAbsolutePath());
+                cfg.setLanguage(senseVoiceLanguage());
+                cfg.setUseInverseTextNormalization(true);
+                model.setSenseVoice(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("sense_voice");
                 break;
             }
             case OfflineAsrModelCatalog.REAZON_JA: {
@@ -203,20 +207,23 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 File decoder = require(findContains(root, "decoder", ".onnx", false), "Reazon decoder");
                 File joiner = require(findContains(root, "joiner", ".onnx", true), "Reazon joiner");
                 File tokens = require(findTokens(root), "tokens.txt");
-                OfflineTransducerModelConfig cfg = OfflineTransducerModelConfig.builder()
-                    .setEncoder(encoder.getAbsolutePath())
-                    .setDecoder(decoder.getAbsolutePath())
-                    .setJoiner(joiner.getAbsolutePath())
-                    .build();
-                model.setTransducer(cfg).setTokens(tokens.getAbsolutePath()).setModelType("transducer");
+                OfflineTransducerModelConfig cfg = new OfflineTransducerModelConfig();
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setDecoder(decoder.getAbsolutePath());
+                cfg.setJoiner(joiner.getAbsolutePath());
+                model.setTransducer(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("transducer");
                 break;
             }
             case OfflineAsrModelCatalog.PARAKEET_JA: {
                 File onnx = require(findNamed(root, "model.int8.onnx", "model.onnx"), "Parakeet model");
                 File tokens = require(findTokens(root), "tokens.txt");
-                OfflineNemoEncDecCtcModelConfig cfg = OfflineNemoEncDecCtcModelConfig.builder()
-                    .setModel(onnx.getAbsolutePath()).build();
-                model.setNemo(cfg).setTokens(tokens.getAbsolutePath()).setModelType("nemo_ctc");
+                OfflineNemoEncDecCtcModelConfig cfg = new OfflineNemoEncDecCtcModelConfig();
+                cfg.setModel(onnx.getAbsolutePath());
+                model.setNemo(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("nemo_ctc");
                 break;
             }
             case OfflineAsrModelCatalog.WHISPER_SMALL:
@@ -224,13 +231,14 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 File encoder = require(findContains(root, "encoder", ".onnx", true), "Whisper encoder");
                 File decoder = require(findContains(root, "decoder", ".onnx", true), "Whisper decoder");
                 File tokens = require(findTokens(root), "Whisper tokens");
-                OfflineWhisperModelConfig cfg = OfflineWhisperModelConfig.builder()
-                    .setEncoder(encoder.getAbsolutePath())
-                    .setDecoder(decoder.getAbsolutePath())
-                    .setLanguage(whisperLanguage())
-                    .setTask("transcribe")
-                    .build();
-                model.setWhisper(cfg).setTokens(tokens.getAbsolutePath()).setModelType("whisper");
+                OfflineWhisperModelConfig cfg = new OfflineWhisperModelConfig();
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setDecoder(decoder.getAbsolutePath());
+                cfg.setLanguage(whisperLanguage());
+                cfg.setTask("transcribe");
+                model.setWhisper(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("whisper");
                 break;
             }
             case OfflineAsrModelCatalog.QWEN3_ASR: {
@@ -238,34 +246,36 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 File encoder = require(findContains(root, "encoder", ".onnx", true), "Qwen3 encoder");
                 File decoder = require(findContains(root, "decoder", ".onnx", true), "Qwen3 decoder");
                 File tokenizer = require(findDirectoryNamed(root, "tokenizer"), "Qwen3 tokenizer");
-                OfflineQwen3AsrModelConfig cfg = OfflineQwen3AsrModelConfig.builder()
-                    .setConvFrontend(conv.getAbsolutePath())
-                    .setEncoder(encoder.getAbsolutePath())
-                    .setDecoder(decoder.getAbsolutePath())
-                    .setTokenizer(tokenizer.getAbsolutePath())
-                    .setMaxTotalLen(512)
-                    .setMaxNewTokens(160)
-                    .build();
-                model.setQwen3Asr(cfg).setModelType("qwen3_asr");
+                OfflineQwen3AsrModelConfig cfg = new OfflineQwen3AsrModelConfig();
+                cfg.setConvFrontend(conv.getAbsolutePath());
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setDecoder(decoder.getAbsolutePath());
+                cfg.setTokenizer(tokenizer.getAbsolutePath());
+                cfg.setMaxTotalLen(512);
+                cfg.setMaxNewTokens(160);
+                model.setQwen3Asr(cfg);
+                model.setModelType("qwen3_asr");
                 break;
             }
             case OfflineAsrModelCatalog.OMNILINGUAL: {
                 File onnx = require(findNamed(root, "model.int8.onnx", "model.onnx"), "Omnilingual model");
                 File tokens = require(findTokens(root), "tokens.txt");
-                OfflineOmnilingualAsrCtcModelConfig cfg = OfflineOmnilingualAsrCtcModelConfig.builder()
-                    .setModel(onnx.getAbsolutePath()).build();
-                model.setOmnilingual(cfg).setTokens(tokens.getAbsolutePath()).setModelType("omnilingual_ctc");
+                OfflineOmnilingualAsrCtcModelConfig cfg = new OfflineOmnilingualAsrCtcModelConfig();
+                cfg.setModel(onnx.getAbsolutePath());
+                model.setOmnilingual(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("omnilingual_ctc");
                 break;
             }
             default:
                 throw new IllegalArgumentException("不支持的模型 " + modelId);
         }
 
-        OfflineRecognizerConfig config = OfflineRecognizerConfig.builder()
-            .setOfflineModelConfig(model.build())
-            .setDecodingMethod("greedy_search")
-            .build();
-        return new OfflineRecognizer(config);
+        OfflineRecognizerConfig config = new OfflineRecognizerConfig();
+        config.setModelConfig(model);
+        config.setDecodingMethod("greedy_search");
+        // null AssetManager tells sherpa to load the absolute file paths above.
+        return new OfflineRecognizer(null, config);
     }
 
     private int recommendedThreads(String id) {
@@ -287,6 +297,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     private String whisperLanguage() {
+        // Empty means language auto-detection for multilingual Whisper.
         if (!LANG_SINGLE.equals(languageMode)) return "";
         switch (sourceLanguage) {
             case "zh": return "zh";
