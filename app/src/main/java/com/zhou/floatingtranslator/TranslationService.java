@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.media.AudioAttributes;
@@ -102,11 +103,14 @@ public class TranslationService extends Service implements RecognitionListener {
         }
         if (!ACTION_START.equals(intent.getAction())) return START_NOT_STICKY;
 
-        startForeground(NOTIFICATION_ID, buildNotification("正在准备实时翻译"));
-        if (running) stopPipelineOnly();
-        speechLanguage = intent.getStringExtra(EXTRA_SOURCE_SPEECH);
         inputMode = intent.getStringExtra(EXTRA_INPUT_MODE);
         if (!INPUT_MICROPHONE.equals(inputMode)) inputMode = INPUT_PLAYBACK;
+        int foregroundType = INPUT_MICROPHONE.equals(inputMode)
+            ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            : ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+        startForeground(NOTIFICATION_ID, buildNotification("正在准备实时翻译"), foregroundType);
+        if (running) stopPipelineOnly();
+        speechLanguage = intent.getStringExtra(EXTRA_SOURCE_SPEECH);
         String sourceMl = intent.getStringExtra(EXTRA_SOURCE_MLKIT);
         String targetMl = intent.getStringExtra(EXTRA_TARGET_MLKIT);
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
