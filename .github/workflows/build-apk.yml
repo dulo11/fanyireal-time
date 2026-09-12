@@ -79,7 +79,7 @@ jobs:
 
           cp \
             app/build/outputs/apk/release/app-release.apk \
-            FloatingTranslator-v0.3.0-release.apk
+            FloatingTranslator-v0.3.1-release.apk
 
       - name: Verify APK Signature
         run: |
@@ -97,17 +97,17 @@ jobs:
           "$APKSIGNER" verify \
             --verbose \
             --print-certs \
-            FloatingTranslator-v0.3.0-release.apk
+            FloatingTranslator-v0.3.1-release.apk
 
       - name: Show APK information
         run: |
-          ls -lh FloatingTranslator-v0.3.0-release.apk
-          sha256sum FloatingTranslator-v0.3.0-release.apk
+          ls -lh FloatingTranslator-v0.3.1-release.apk
+          sha256sum FloatingTranslator-v0.3.1-release.apk
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: FloatingTranslator-v0.3.0-Signed
-          path: FloatingTranslator-v0.3.0-release.apk
+          name: FloatingTranslator-v0.3.1-Signed
+          path: FloatingTranslator-v0.3.1-release.apk
           if-no-files-found: error
           retention-days: 30
