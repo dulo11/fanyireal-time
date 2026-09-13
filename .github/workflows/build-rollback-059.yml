@@ -23,8 +23,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.11.1"
-      - name: Restore v0.5.9 app source
+      - name: Restore clean v0.5.9 app source
         run: |
+          rm -rf app
           git checkout v0.5.9 -- app
           sed -i 's/versionCode = 19/versionCode = 23/' app/build.gradle.kts
           sed -i 's/versionName = "0.5.9"/versionName = "0.5.9-rollback"/' app/build.gradle.kts
