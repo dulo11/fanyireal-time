@@ -16,7 +16,7 @@
 
     <application
         android:name=".FloatingTranslatorApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="浮译"
         android:roundIcon="@drawable/ic_launcher"
