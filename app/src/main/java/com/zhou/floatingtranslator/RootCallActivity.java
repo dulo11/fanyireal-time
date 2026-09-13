@@ -5,6 +5,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -33,7 +34,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** ROOT VoIP/call compatibility center. No system audio policy files are modified. */
+import rikka.shizuku.Shizuku;
+
+/** Fixed ROOT/Shizuku VoIP/call compatibility center. No system audio policy files are modified. */
 public final class RootCallActivity extends Activity {
     private static final String PREFS = "floating_translator";
     private static final Pattern PCM = Pattern.compile("(?m)^\\s*(\\d+)-(\\d+):[^\\n]*capture[^\\n]*$", Pattern.CASE_INSENSITIVE);
@@ -61,6 +64,7 @@ public final class RootCallActivity extends Activity {
 
     private TextView rootStatus;
     private TextView savedStatus;
+    private Spinner transportSpinner;
     private Spinner appSpinner;
     private Spinner pcmSpinner;
     private Spinner rateSpinner;
@@ -75,9 +79,20 @@ public final class RootCallActivity extends Activity {
     private volatile int testPeak;
     private volatile long testBytes;
 
+    private final Shizuku.OnRequestPermissionResultListener shizukuPermissionListener = (requestCode, grantResult) -> {
+        if (requestCode != ShizukuShell.REQUEST_PERMISSION) return;
+        if (grantResult == PackageManager.PERMISSION_GRANTED) {
+            toast("Shizuku 已授权，开始扫描");
+            main.postDelayed(this::scanPrivilegedAudio, 180L);
+        } else {
+            rootStatus.setText("❌ Shizuku 授权被拒绝；不会自动切换到 ROOT 或麦克风");
+        }
+    };
+
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · ROOT 通话");
+        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener);
+        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 通话内部声音");
         setContentView(buildUi());
     }
 
@@ -90,22 +105,31 @@ public final class RootCallActivity extends Activity {
         root.setPadding(dp(18), dp(22), dp(18), dp(30));
         scroll.addView(root);
 
-        TextView title = text("ROOT 通话 / VoIP 翻译", 28, Color.WHITE);
+        TextView title = text("通话内部声音 / VoIP 翻译", 28, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
         TextView intro = text(
-            "目标是做“通用 ROOT 音频后端”：微信、QQ、Telegram、WhatsApp、LINE、Signal、Discord、Teams、Zoom 等都走同一套 ALSA/tinycap 探测，" +
-            "而不是给每个 App 写死一套代码。不同 App/ROM 可能走不同 PCM，所以可以按包名单独保存配置。\n\n" +
-            "当前实现只读取 ROOT 音频，不会改 audio_policy、不会自动关闭 SELinux，也不会永久修改系统文件。",
+            "这里提供两个固定内部声音后端：ROOT（uid=0，兼容性最高）和 Shizuku（ADB shell，免 ROOT 实验）。" +
+            "两者都按 App 保存 ALSA card/device/采样率/声道，不会失败后偷偷切换权限来源或 PCM。\n\n" +
+            "Shizuku 是否能读通话 PCM 取决于 ROM、shell 权限和 SELinux；失败时请手动改用 ROOT 或外放+麦克风。",
             14, Color.rgb(210, 200, 225));
         intro.setPadding(0, dp(7), 0, dp(13));
         root.addView(intro);
 
         LinearLayout detectCard = card(root);
-        detectCard.addView(section("① ROOT / 音频设备扫描"));
-        scanButton = button("扫描 ROOT、tinycap、ALSA、音频状态");
-        scanButton.setOnClickListener(v -> scanRootAudio());
+        detectCard.addView(section("① 固定权限来源 / 音频设备扫描"));
+        transportSpinner = new Spinner(this);
+        transportSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+            new String[]{"固定 ROOT｜uid=0", "固定 Shizuku｜ADB shell（实验）"}));
+        RootCallProfileStore.Profile savedTransport = RootCallProfileStore.loadSelected(this);
+        if (savedTransport != null && RootCallProfileStore.TRANSPORT_SHIZUKU.equals(savedTransport.transport)) {
+            transportSpinner.setSelection(1);
+        }
+        transportSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
+        detectCard.addView(transportSpinner, params());
+        scanButton = button("扫描当前固定模式：tinycap / ALSA / 音频状态");
+        scanButton.setOnClickListener(v -> scanPrivilegedAudio());
         detectCard.addView(scanButton, params());
         rootStatus = text("尚未扫描。先点上面的按钮。", 13, Color.rgb(218, 209, 231));
         rootStatus.setPadding(0, dp(7), 0, 0);
@@ -144,7 +168,7 @@ public final class RootCallActivity extends Activity {
         appCard.addView(appTip);
 
         LinearLayout pcmCard = card(root);
-        pcmCard.addView(section("③ 选择并测试 ROOT PCM"));
+        pcmCard.addView(section("③ 选择并测试固定内部 PCM"));
         pcmSpinner = new Spinner(this);
         pcmAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, candidates);
         pcmSpinner.setAdapter(pcmAdapter);
@@ -167,7 +191,7 @@ public final class RootCallActivity extends Activity {
         testButton.setOnClickListener(v -> testSelectedPcm());
         pcmCard.addView(testButton, params());
 
-        Button save = primaryButton("保存为这个 App 的 ROOT 通话配置");
+        Button save = primaryButton("保存为这个 App 的固定内部声音配置");
         save.setOnClickListener(v -> saveSelectedProfile());
         pcmCard.addView(save, params());
 
@@ -180,7 +204,7 @@ public final class RootCallActivity extends Activity {
         Button console = primaryButton("打开实时翻译控制台");
         console.setOnClickListener(v -> {
             if (!RootCallProfileStore.hasSelected(this)) {
-                toast("请先保存一个 ROOT 通话配置");
+                toast("请先保存一个 ROOT / Shizuku 通话配置");
                 return;
             }
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("input_mode", 2).apply();
@@ -188,32 +212,48 @@ public final class RootCallActivity extends Activity {
         });
         launchCard.addView(console, params());
 
-        Button mic = button("兼容备用：外放 + 麦克风通话翻译");
+        Button mic = button("免 ROOT/Shizuku：外放 + 麦克风增强模式");
         mic.setOnClickListener(v -> {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("input_mode", 1).apply();
             startActivity(new Intent(this, MainActivity.class));
         });
         launchCard.addView(mic, params());
 
-        Button copy = button("复制 ROOT 完整诊断");
+        Button copy = button("复制完整内部声音诊断");
         copy.setOnClickListener(v -> copyReport());
         launchCard.addView(copy, params());
 
         TextView warning = text(
-            "测试时要让目标 App 正在通话并持续有人说话。某个 PCM 有明显电平才值得保存。ROOT 能绕过一部分普通 Android 录音限制，" +
-            "但厂商 HAL/SELinux/硬件路由仍可能让部分 App 的内部音频不可见。录音或翻译通话请遵守所在地法律并尊重通话参与者隐私。",
+            "测试时要让目标 App 正在通话并持续有人说话。ROOT 成功率通常高于 Shizuku；Shizuku 只有在 shell/SELinux 允许读取目标 PCM 时才会接近 ROOT。" +
+            "两种内部模式都可能被厂商 HAL/硬件路由限制。录音或翻译通话请遵守所在地法律并尊重通话参与者隐私。",
             12, Color.rgb(180, 170, 205));
         warning.setPadding(dp(2), dp(8), dp(2), 0);
         root.addView(warning);
         return scroll;
     }
 
-    private void scanRootAudio() {
+    private void scanPrivilegedAudio() {
+        String transport = selectedTransport();
+        if (RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)) {
+            if (!ShizukuShell.isRunning()) {
+                rootStatus.setText("❌ Shizuku 未运行。先打开 Shizuku 并通过无线调试/ADB 启动服务。\n不会自动切换到 ROOT。");
+                return;
+            }
+            if (!ShizukuShell.hasPermission()) {
+                rootStatus.setText("正在请求 Shizuku 授权……");
+                try { ShizukuShell.requestPermission(); }
+                catch (Exception e) { rootStatus.setText("❌ " + safe(e)); }
+                return;
+            }
+        }
+
         scanButton.setEnabled(false);
-        rootStatus.setText("正在请求 ROOT 并扫描……如果 KernelSU/Magisk 弹授权，请允许浮译。");
+        rootStatus.setText(RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)
+            ? "正在用固定 Shizuku(shell) 扫描……"
+            : "正在请求固定 ROOT 并扫描……如果 KernelSU/Magisk 弹授权，请允许浮译。");
         worker.execute(() -> {
             String command =
-                "echo ROOT_ID; id; " +
+                "echo PRIV_ID; id; " +
                 "echo SELINUX; getenforce 2>/dev/null || true; " +
                 "echo TINYCAP; for p in /vendor/bin/tinycap /system/bin/tinycap /system/xbin/tinycap; do [ -x \"$p\" ] && echo $p; done; command -v tinycap 2>/dev/null || true; " +
                 "echo ALSA_CARDS; cat /proc/asound/cards 2>/dev/null || true; " +
@@ -223,24 +263,26 @@ public final class RootCallActivity extends Activity {
                 "echo PACKAGES; pm list packages 2>/dev/null || true";
             String raw;
             try {
-                raw = runRoot(command, 10, 80000);
+                raw = runPrivileged(transport, command, 10, 80000);
             } catch (Exception e) {
                 raw = "ERROR: " + safe(e);
             }
-            final String report = raw;
-            final boolean rootOk = raw.contains("uid=0");
+            final boolean accessOk = RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)
+                ? (raw.contains("uid=2000") || raw.contains("uid=0"))
+                : raw.contains("uid=0");
             final boolean tinycap = raw.contains("/tinycap") || raw.matches("(?s).*TINYCAP\\s+tinycap.*");
             final ArrayList<PcmCandidate> found = parseCandidates(raw);
             final String previous = findPreviousExternalPackage(raw);
             final Set<String> installed = installedPackages(raw);
-            lastReport = makeSummary(rootOk, tinycap, found, previous, installed) + "\n\n===== 原始诊断 =====\n" + raw;
+            final String summary = makeSummary(transport, accessOk, tinycap, found, previous, installed);
+            lastReport = summary + "\n\n===== 原始诊断 =====\n" + raw;
             detectedPreviousPackage = previous;
             runOnUiThread(() -> {
                 candidates.clear();
                 candidates.addAll(found);
                 pcmAdapter.notifyDataSetChanged();
                 if (!previous.isEmpty() && appSpinner.getSelectedItemPosition() == 0) packageInput.setText(previous);
-                rootStatus.setText(makeSummary(rootOk, tinycap, found, previous, installed));
+                rootStatus.setText(summary);
                 scanButton.setEnabled(true);
             });
         });
@@ -278,7 +320,7 @@ public final class RootCallActivity extends Activity {
         testBytes = 0;
         testButton.setEnabled(false);
         rootStatus.setText("测试中：请保持目标 App 通话，并让对方持续说话约 5 秒……");
-        RootPcmSource source = new RootPcmSource(this, pcm.card, pcm.device, rate, channels,
+        RootPcmSource source = new RootPcmSource(this, selectedTransport(), pcm.card, pcm.device, rate, channels,
             new RootPcmSource.Callback() {
                 @Override public void onStatus(String message) {
                     runOnUiThread(() -> rootStatus.setText(message + "\n请保持通话有声音……"));
@@ -333,16 +375,16 @@ public final class RootCallActivity extends Activity {
         }
         String label = appLabel(pkg);
         RootCallProfileStore.Profile profile = new RootCallProfileStore.Profile(
-            pkg, label, pcm.card, pcm.device, selectedRate(), selectedChannels());
+            pkg, label, selectedTransport(), pcm.card, pcm.device, selectedRate(), selectedChannels());
         RootCallProfileStore.save(this, profile);
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("input_mode", 2).apply();
-        savedStatus.setText("✅ 已保存并设为当前 ROOT 通话来源\n" + profile.summary());
-        toast("ROOT 通话配置已保存");
+        savedStatus.setText("✅ 已保存并设为当前固定通话来源\n" + profile.summary());
+        toast(profile.sourceLabel() + " 通话配置已保存");
     }
 
     private String savedProfileText() {
         RootCallProfileStore.Profile p = RootCallProfileStore.loadSelected(this);
-        return p == null ? "当前没有保存 ROOT 通话配置" : "当前 ROOT 配置：\n" + p.summary();
+        return p == null ? "当前没有保存内部通话配置" : "当前固定配置：\n" + p.summary();
     }
 
     private PcmCandidate selectedPcm() {
@@ -359,17 +401,26 @@ public final class RootCallActivity extends Activity {
         return channelSpinner != null && channelSpinner.getSelectedItemPosition() == 1 ? 1 : 2;
     }
 
-    private String makeSummary(boolean rootOk, boolean tinycap, ArrayList<PcmCandidate> found,
+    private String makeSummary(String transport, boolean accessOk, boolean tinycap, ArrayList<PcmCandidate> found,
                                String previous, Set<String> installed) {
+        String source = RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport) ? "Shizuku" : "ROOT";
         StringBuilder out = new StringBuilder();
-        out.append(rootOk ? "✅ ROOT：可用" : "❌ ROOT：没有拿到 uid=0").append('\n');
+        if (RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)) {
+            out.append(accessOk ? "✅ Shizuku：可用（shell/root 服务身份）" : "❌ Shizuku：没有取得可用 shell 身份").append('\n');
+            out.append(ShizukuShell.describe()).append('\n');
+        } else {
+            out.append(accessOk ? "✅ ROOT：可用" : "❌ ROOT：没有拿到 uid=0").append('\n');
+        }
         out.append(tinycap ? "✅ tinycap：已找到" : "❌ tinycap：未找到").append('\n');
         out.append(found.isEmpty() ? "⚠ ALSA：没有解析到 capture PCM" : "✅ ALSA capture：" + found.size() + " 个候选").append('\n');
         if (!previous.isEmpty()) out.append("上一个前台 App：").append(appLabel(previous)).append(" · ").append(previous).append('\n');
         ArrayList<String> known = new ArrayList<>();
         for (CommonApp app : COMMON_APPS) if (!app.packageName.isEmpty() && installed.contains(app.packageName)) known.add(app.label);
         if (!known.isEmpty()) out.append("检测到常见通话 App：").append(String.join("、", known)).append('\n');
-        if (rootOk && tinycap && !found.isEmpty()) out.append("\n下一步：保持目标 App 正在通话，逐个做 5 秒 PCM 测试，找到有明显声音的设备再保存。 ");
+        if (accessOk && tinycap && !found.isEmpty()) {
+            out.append("\n下一步：保持通话有声音，逐个做 5 秒测试。当前固定权限来源=").append(source)
+                .append("；失败不会自动切换。 ");
+        }
         return out.toString().trim();
     }
 
@@ -403,6 +454,18 @@ public final class RootCallActivity extends Activity {
         return pkg;
     }
 
+    private String selectedTransport() {
+        return transportSpinner != null && transportSpinner.getSelectedItemPosition() == 1
+            ? RootCallProfileStore.TRANSPORT_SHIZUKU : RootCallProfileStore.TRANSPORT_ROOT;
+    }
+
+    private String runPrivileged(String transport, String command, int timeoutSeconds, int maxChars) throws Exception {
+        if (RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)) {
+            return ShizukuShell.runText(command, timeoutSeconds, maxChars);
+        }
+        return runRoot(command, timeoutSeconds, maxChars);
+    }
+
     private String runRoot(String command, int timeoutSeconds, int maxChars) throws Exception {
         Process process = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
         StringBuilder out = new StringBuilder();
@@ -422,9 +485,9 @@ public final class RootCallActivity extends Activity {
     }
 
     private void copyReport() {
-        if (lastReport.isEmpty()) { toast("请先执行 ROOT 扫描"); return; }
+        if (lastReport.isEmpty()) { toast("请先执行 ROOT / Shizuku 扫描"); return; }
         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
-        clipboard.setPrimaryClip(ClipData.newPlainText("浮译 ROOT 通话诊断", lastReport));
+        clipboard.setPrimaryClip(ClipData.newPlainText("浮译通话内部声音诊断", lastReport));
         toast("完整诊断已复制");
     }
 
@@ -501,6 +564,7 @@ public final class RootCallActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        try { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener); } catch (Throwable ignored) {}
         RootPcmSource current = testCapture;
         testCapture = null;
         if (current != null) current.close();

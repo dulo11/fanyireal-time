@@ -53,7 +53,7 @@ public class ApiSettingsActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         secure = new SecureConfig(this);
-        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 翻译引擎与安全");
+        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 翻译引擎与 API");
         setContentView(buildUi());
     }
 
@@ -65,13 +65,13 @@ public class ApiSettingsActivity extends Activity {
         root.setPadding(dp(20), dp(24), dp(20), dp(30));
         scroll.addView(root);
 
-        TextView title = text("翻译引擎 / API 安全中心", 28, Color.WHITE);
+        TextView title = text("翻译引擎 / API 配置", 28, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
         TextView note = text(
             "默认推荐“自动”：ML Kit 本地离线优先；只有本地失败时才依次尝试已配置的百度、Azure、阿里云。\n" +
-            "Azure 改为账号池：需要几套就点“添加账号”，不再限制 1-4。可选轮番使用，或只在配额/限流/订阅错误后自动切换。所有 Key 使用 Android Keystore + AES/GCM 加密。",
+            "Azure 改为账号池：需要几套就点“添加账号”，不再限制 1-4。可选轮番使用，或只在配额/限流/订阅错误后自动切换。所有 Key 仅普通保存在本机 SharedPreferences，不做额外加密。",
             14, Color.rgb(201, 190, 221));
         note.setPadding(0, dp(5), 0, dp(16));
         root.addView(note);
@@ -172,7 +172,7 @@ public class ApiSettingsActivity extends Activity {
         root.addView(aliyunAccessKeyId, matchWrap());
         root.addView(aliyunAccessKeySecret, matchWrap());
         TextView aliyunTip = text(
-            "使用阿里云机器翻译通用版，客户端按 ROA HMAC-SHA1 规则签名；Key 只保存在本机加密配置中。",
+            "使用阿里云机器翻译通用版，客户端按 ROA HMAC-SHA1 规则签名；Key 只保存在本机普通配置中。",
             12, Color.rgb(174, 164, 198));
         root.addView(aliyunTip);
 
@@ -208,9 +208,9 @@ public class ApiSettingsActivity extends Activity {
         test.setOnClickListener(v -> testCurrent(test));
         root.addView(test, matchWrap());
 
-        root.addView(section("安全中心"));
+        root.addView(section("本机 API 配置"));
         TextView security = text(
-            "这里不会显示或导出完整密钥。把 APK 发给别人，不会把你后来在手机里填写的 Key 一起打包出去。",
+            "API Key 只保存在当前手机，不会被写进 APK；当前使用普通本地保存，不做额外加密。",
             13, Color.rgb(190, 180, 215));
         root.addView(security);
 
@@ -258,7 +258,7 @@ public class ApiSettingsActivity extends Activity {
         if (hasValue || secure.has(SecureConfig.azureKeyName(slot))) {
             new AlertDialog.Builder(this)
                 .setTitle("删除 Azure 账号 " + slot + "？")
-                .setMessage("会同时删除这套账号在本机加密保存的 Key / Region。")
+                .setMessage("会同时删除这套账号在本机保存的 Key / Region。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("删除", (d, w) -> removeLastAzureProfileNow())
                 .show();
@@ -347,7 +347,7 @@ public class ApiSettingsActivity extends Activity {
             secure.put(SecureConfig.LIBRE_ENDPOINT, libreEndpoint.getText().toString());
             secure.put(SecureConfig.LIBRE_KEY, libreKey.getText().toString());
             refreshConfiguredSummary();
-            status.setText("✅ 已加密保存。Azure 账号池：" + secure.configuredAzureProfileCount()
+            status.setText("✅ 已保存到本机。Azure 账号池：" + secure.configuredAzureProfileCount()
                 + " 套；策略：" + (TranslationRouter.AZURE_ROUND_ROBIN.equals(azureMode)
                 ? "轮番使用" : "额度/限流后切换") + "。");
             toast("已保存");
@@ -374,8 +374,8 @@ public class ApiSettingsActivity extends Activity {
         if (secure.has(SecureConfig.GOOGLE_KEY)) configured.add("Google(兼容)");
         if (secure.has(SecureConfig.LIBRE_ENDPOINT)) configured.add("LibreTranslate(兼容)");
         configuredSummary.setText(configured.isEmpty()
-            ? "API 安全状态：当前未保存在线 API 配置"
-            : "API 安全状态：已配置 " + String.join("、", configured) + "（内容已隐藏）");
+            ? "API 配置状态：当前未保存在线 API 配置"
+            : "API 配置状态：已配置 " + String.join("、", configured) + "（输入框默认隐藏密钥）");
     }
 
     private void confirmClearAll() {

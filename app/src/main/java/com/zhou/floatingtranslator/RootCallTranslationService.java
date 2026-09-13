@@ -26,7 +26,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Foreground translation pipeline dedicated to ROOT ALSA/tinycap VoIP audio.
+ * Foreground translation pipeline dedicated to fixed ROOT/Shizuku ALSA/tinycap VoIP audio.
  * It deliberately does not modify audio_policy, SELinux or vendor audio files.
  */
 public final class RootCallTranslationService extends Service {
@@ -76,14 +76,14 @@ public final class RootCallTranslationService extends Service {
     private TextView diag;
     private TextView original;
     private TextView translated;
-    private volatile String diagAudio = "ROOT PCM 未启动";
+    private volatile String diagAudio = "内部 PCM 未启动";
     private volatile String diagAsr = "ASR 未启动";
     private volatile String diagTranslation = "翻译未启动";
 
     @Override public void onCreate() {
         super.onCreate();
         NotificationChannel channel = new NotificationChannel(
-            CHANNEL_ID, "ROOT 通话翻译", NotificationManager.IMPORTANCE_LOW);
+            CHANNEL_ID, "内部通话翻译", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
@@ -122,7 +122,7 @@ public final class RootCallTranslationService extends Service {
         allowYoudaoSpeech = intent.getBooleanExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, true);
         int fontSize = intent.getIntExtra(TranslationService.EXTRA_FONT_SIZE, 24);
 
-        startForeground(NOTIFICATION_ID, notification("准备 ROOT 通话翻译"),
+        startForeground(NOTIFICATION_ID, notification("准备 " + profile.sourceLabel() + " 通话翻译"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         running = true;
         paused = false;
@@ -138,10 +138,10 @@ public final class RootCallTranslationService extends Service {
         createOverlay(fontSize);
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
         diagTranslation = translator.selectedEngineName();
-        diagAudio = "ROOT · " + profile.packageName + " · 等待 PCM";
+        diagAudio = profile.sourceLabel() + " · " + profile.packageName + " · 等待 PCM";
         diagAsr = "ASR：" + asrLabel(asrMode) + " · 准备中";
         renderDiag();
-        showStatus("ROOT 通话来源：" + profile.packageName + "\n正在准备 " + asrLabel(asrMode));
+        showStatus(profile.sourceLabel() + " 通话来源：" + profile.packageName + "\n正在准备 " + asrLabel(asrMode));
         prepareAsr(profile);
         return START_NOT_STICKY;
     }
@@ -149,9 +149,9 @@ public final class RootCallTranslationService extends Service {
     private void prepareAsr(RootCallProfileStore.Profile profile) {
         if (!running) return;
         if (TranslationService.ASR_SYSTEM.equals(asrMode)) {
-            diagAsr = "ASR：系统 SpeechRecognizer 不能直接接 ROOT PCM";
+            diagAsr = "ASR：系统 SpeechRecognizer 不能直接接内部 PCM";
             renderDiag();
-            showStatus("ROOT 通话来源不能使用系统 SpeechRecognizer，请选 Vosk / sherpa / 有道 ASR。");
+            showStatus("ROOT/Shizuku 内部 PCM 不能使用系统 SpeechRecognizer，请选 Vosk / sherpa / 有道 ASR。");
             return;
         }
         if (TranslationService.ASR_YOUDAO.equals(asrMode)) {
@@ -161,7 +161,7 @@ public final class RootCallTranslationService extends Service {
             }
             activeAsrMode = TranslationService.ASR_YOUDAO;
             cloudSpeechMode = true;
-            diagAsr = "ASR：有道云语音 · ROOT PCM";
+            diagAsr = "ASR：有道云语音 · 内部 PCM";
             startRootSource(profile);
             return;
         }
@@ -221,7 +221,7 @@ public final class RootCallTranslationService extends Service {
                 @Override public void onReady(String engineName) {
                     if (!running) return;
                     activeAsrMode = modelId;
-                    diagAsr = "ASR：" + engineName + " · ROOT PCM";
+                    diagAsr = "ASR：" + engineName + " · 内部 PCM";
                     renderDiag();
                     startRootSource(profile);
                 }
@@ -268,7 +268,7 @@ public final class RootCallTranslationService extends Service {
             @Override public void onReady(String engineName) {
                 if (!running) return;
                 activeAsrMode = TranslationService.ASR_VOSK;
-                diagAsr = "ASR：" + engineName + " · ROOT PCM";
+                diagAsr = "ASR：" + engineName + " · 内部 PCM";
                 renderDiag();
                 startRootSource(profile);
             }
@@ -290,7 +290,7 @@ public final class RootCallTranslationService extends Service {
 
     private void startRootSource(RootCallProfileStore.Profile profile) {
         if (!running || rootSource != null) return;
-        rootSource = new RootPcmSource(this, profile.card, profile.device, profile.rate, profile.channels,
+        rootSource = new RootPcmSource(this, profile.transport, profile.card, profile.device, profile.rate, profile.channels,
             new RootPcmSource.Callback() {
                 @Override public void onStatus(String message) {
                     diagAudio = message + " · " + profile.packageName;
@@ -302,9 +302,10 @@ public final class RootCallTranslationService extends Service {
                     consumePcm(pcm, length, peak);
                 }
                 @Override public void onError(String message) {
-                    diagAudio = "ROOT PCM 失败：" + message;
+                    diagAudio = profile.sourceLabel() + " PCM 失败：" + message;
                     renderDiag();
-                    showStatus("ROOT 内部声音捕获失败：" + message + "\n回 ROOT 兼容中心换 PCM/采样率/声道后再试。");
+                    showStatus(profile.sourceLabel() + " 内部声音捕获失败：" + message
+                        + "\n回通话兼容中心调整同一固定模式的 PCM/采样率/声道后再试；不会自动切换来源。");
                 }
             });
         rootSource.start();

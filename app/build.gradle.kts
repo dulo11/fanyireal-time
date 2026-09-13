@@ -12,8 +12,8 @@ android {
         applicationId = "com.zhou.floatingtranslator"
         minSdk = 33
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.6.0-dev2"
+        versionCode = 22
+        versionName = "0.6.0-dev3"
     }
 
     buildFeatures {
@@ -69,4 +69,8 @@ dependencies {
         exclude(group = "com.github.k2-fsa.sherpa-onnx", module = "sherpa-onnx-jvm")
     }
     implementation("org.apache.commons:commons-compress:1.27.1")
+
+    // Optional non-root privileged PCM experiment. Shizuku runs with adb-shell identity.
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }

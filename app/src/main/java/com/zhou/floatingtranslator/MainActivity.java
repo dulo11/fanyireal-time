@@ -40,6 +40,7 @@ public final class MainActivity extends Activity {
 
     private SharedPreferences preferences;
     private Spinner inputModeSpinner;
+    private Spinner micProcessingSpinner;
     private Spinner asrModeSpinner;
     private Spinner languageModeSpinner;
     private Spinner sourceSpinner;
@@ -82,7 +83,7 @@ public final class MainActivity extends Activity {
         summary = text("", 13, Color.rgb(220, 212, 235));
         summary.setPadding(0, dp(5), 0, dp(7));
         quick.addView(summary);
-        Button rootLab = secondaryButton("☎ ROOT 通话 / VoIP 兼容中心");
+        Button rootLab = secondaryButton("☎ 通话内部声音兼容中心｜ROOT / Shizuku");
         rootLab.setOnClickListener(v -> startActivity(new Intent(this, RootCallActivity.class)));
         quick.addView(rootLab, params());
         Button models = secondaryButton("📦 离线模型中心");
@@ -97,11 +98,28 @@ public final class MainActivity extends Activity {
             new String[]{
                 "系统内部声音｜直播/视频",
                 "麦克风｜通话外放兼容",
-                "ROOT 内部通话/VoIP｜按 App 保存 PCM"
+                "ROOT / Shizuku 内部通话/VoIP｜按 App 保存 PCM"
             }));
         inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(inputModeSpinner, params());
+
+        audioCard.addView(label("麦克风通话处理｜仅麦克风 + 本地/有道 PCM ASR"));
+        micProcessingSpinner = new Spinner(this);
+        micProcessingSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+            new String[]{
+                "远端外放优先｜NS + AGC，AEC关闭（推荐）",
+                "近端说话优先｜AEC + NS + AGC",
+                "原始麦克风｜AEC/NS/AGC 全关闭"
+            }));
+        micProcessingSpinner.setSelection(micProcessingIndex(preferences.getString(
+            "mic_processing", MicAudioEffects.MODE_REMOTE)));
+        micProcessingSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
+        audioCard.addView(micProcessingSpinner, params());
+        TextView micTip = text(
+            "翻译对方外放声音时不要开 AEC：AEC 的用途正是消除扬声器回声，可能把对方声音一起削掉。系统 SpeechRecognizer 自己占用麦克风，不受这里的 AEC/NS/AGC 开关控制。",
+            12, Color.rgb(184, 174, 207));
+        audioCard.addView(micTip);
 
         audioCard.addView(label("ASR 语音识别"));
         asrModeSpinner = new Spinner(this);
@@ -139,8 +157,8 @@ public final class MainActivity extends Activity {
         audioCard.addView(languageModeSpinner, params());
 
         TextView rootTip = text(
-            "ROOT 模式：先在兼容中心让目标 App 保持通话，扫描并测试 PCM；找到有明显声音的设备后按包名保存。" +
-            "ROOT PCM 会直接送入同一套 Vosk / sherpa / 有道 ASR。",
+            "内部通话模式：在兼容中心明确选择固定 ROOT 或固定 Shizuku，再扫描/测试 PCM 并按 App 保存。" +
+            "Shizuku 是免 ROOT 实验方案，受 shell/SELinux 限制；失败不会自动切到 ROOT 或麦克风。",
             12, Color.rgb(184, 174, 207));
         rootTip.setPadding(0, dp(6), 0, 0);
         audioCard.addView(rootTip);
@@ -206,7 +224,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout resultCard = card(root);
         resultCard.addView(section("状态 / 最近翻译"));
-        status = text("v0.5.3：重点加入 ROOT 通话/VoIP 通用 PCM 后端。", 13,
+        status = text("v0.6.0-dev3：Shizuku 实验 PCM + 麦克风通话处理。", 13,
             Color.rgb(190, 165, 255));
         resultCard.addView(status);
         recent = text("", 13, Color.rgb(218, 209, 231));
@@ -263,12 +281,12 @@ public final class MainActivity extends Activity {
         String asr = selectedAsrMode();
 
         if (root && !RootCallProfileStore.hasSelected(this)) {
-            toast("ROOT 模式还没有保存 PCM 配置，先去 ROOT 兼容中心");
+            toast("内部通话模式还没有保存 PCM 配置，先去 ROOT / Shizuku 兼容中心");
             startActivity(new Intent(this, RootCallActivity.class));
             return;
         }
         if (TranslationService.ASR_SYSTEM.equals(asr) && !mic) {
-            toast("系统 SpeechRecognizer 只能使用麦克风；内部声音/ROOT 请选本地 ASR 或有道 ASR");
+            toast("系统 SpeechRecognizer 只能使用麦克风；系统内部声音/ROOT/Shizuku 请选本地 ASR 或有道 ASR");
             return;
         }
 
@@ -285,9 +303,10 @@ public final class MainActivity extends Activity {
         }
 
         if (root) {
-            if (enableOcr.isChecked()) toast("ROOT 通话模式暂不使用 OCR，已只启动通话声音翻译");
+            if (enableOcr.isChecked()) toast("ROOT / Shizuku 通话模式暂不使用 OCR，已只启动通话声音翻译");
             startRootTranslationService();
-            status.setText("正在启动 ROOT 通话翻译；保持目标 App 通话即可。");
+            RootCallProfileStore.Profile p = RootCallProfileStore.loadSelected(this);
+            status.setText("正在启动 " + (p == null ? "内部" : p.sourceLabel()) + " 通话翻译；保持目标 App 通话即可。");
             return;
         }
 
@@ -334,6 +353,7 @@ public final class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_SHOW_DIAGNOSTICS, showDiagnostics.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
+            .putExtra(TranslationService.EXTRA_MIC_PROCESSING, selectedMicProcessing())
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
     }
 
@@ -455,6 +475,7 @@ public final class MainActivity extends Activity {
             .putBoolean("show_original", showOriginal.isChecked())
             .putBoolean("show_diagnostics", showDiagnostics.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
+            .putString("mic_processing", selectedMicProcessing())
             .putBoolean("enable_ocr", enableOcr.isChecked())
             .putBoolean("auto_mic_fallback", false)
             .putInt("font_size", fontSize.getProgress())
@@ -466,11 +487,14 @@ public final class MainActivity extends Activity {
     private void refreshSummary() {
         if (summary == null) return;
         int mode = inputModeSpinner == null ? preferences.getInt("input_mode", 0) : inputModeSpinner.getSelectedItemPosition();
-        String source = mode == 2 ? "ROOT 通话/VoIP" : mode == 1 ? "麦克风" : "系统内部声音";
-        String root = RootCallProfileStore.loadSelected(this) == null ? ""
-            : "\nROOT App：" + RootCallProfileStore.selectedPackage(this);
+        RootCallProfileStore.Profile profile = RootCallProfileStore.loadSelected(this);
+        String source = mode == 2 ? ((profile == null ? "ROOT/Shizuku" : profile.sourceLabel()) + " 通话/VoIP")
+            : mode == 1 ? "麦克风" : "系统内部声音";
+        String internal = profile == null ? "" : "\n内部 App：" + profile.packageName + " · " + profile.sourceLabel();
+        String mic = mode == 1 ? "\n麦克风处理：" + micProcessingLabel(preferences.getString(
+            "mic_processing", MicAudioEffects.MODE_REMOTE)) : "";
         summary.setText("声音：" + source + "\nASR：" + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO))
-            + "\n历史：" + HistoryStore.count(this) + " 条" + root);
+            + "\n历史：" + HistoryStore.count(this) + " 条" + internal + mic);
     }
 
     private void updateRecent() {
@@ -515,6 +539,29 @@ public final class MainActivity extends Activity {
             case 10: return TranslationService.ASR_YOUDAO;
             default: return TranslationService.ASR_AUTO;
         }
+    }
+
+    private int micProcessingIndex(String mode) {
+        String normalized = MicAudioEffects.normalize(mode);
+        if (MicAudioEffects.MODE_NEAR.equals(normalized)) return 1;
+        if (MicAudioEffects.MODE_RAW.equals(normalized)) return 2;
+        return 0;
+    }
+
+    private String selectedMicProcessing() {
+        if (micProcessingSpinner == null) return MicAudioEffects.MODE_REMOTE;
+        switch (micProcessingSpinner.getSelectedItemPosition()) {
+            case 1: return MicAudioEffects.MODE_NEAR;
+            case 2: return MicAudioEffects.MODE_RAW;
+            default: return MicAudioEffects.MODE_REMOTE;
+        }
+    }
+
+    private String micProcessingLabel(String mode) {
+        String normalized = MicAudioEffects.normalize(mode);
+        if (MicAudioEffects.MODE_NEAR.equals(normalized)) return "近端优先 AEC+NS+AGC";
+        if (MicAudioEffects.MODE_RAW.equals(normalized)) return "原始麦克风";
+        return "远端外放优先 NS+AGC/AEC关";
     }
 
     private int languageModeIndex(String mode) {
@@ -640,6 +687,8 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
+        if (micProcessingSpinner != null) micProcessingSpinner.setSelection(micProcessingIndex(
+            preferences.getString("mic_processing", MicAudioEffects.MODE_REMOTE)));
         refreshSummary();
         updateRecent();
     }

@@ -3,19 +3,19 @@ package com.zhou.floatingtranslator;
 import android.content.Context;
 
 import java.io.File;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import rikka.shizuku.ShizukuRemoteProcess;
+
 /**
- * Experimental ROOT PCM bridge.
- *
- * It launches the device tinycap binary through su, continuously records one ALSA capture PCM
- * endpoint into the app cache, tails the growing WAV data and converts it to 16 kHz mono PCM16.
- * The output can therefore be consumed by the same Vosk/sherpa/cloud ASR pipeline as normal
- * AudioRecord input. No audio_policy/SELinux/system files are modified.
+ * Fixed privileged PCM bridge. The caller explicitly chooses ROOT or Shizuku; this class never
+ * switches permission source, card/device, sample rate or channel count automatically.
  */
 public final class RootPcmSource implements AutoCloseable {
     public interface Callback {
@@ -25,7 +25,9 @@ public final class RootPcmSource implements AutoCloseable {
     }
 
     private static final int TARGET_RATE = 16000;
+    private static final long STALL_MS = 5000L;
     private final Context context;
+    private final String transport;
     private final int card;
     private final int device;
     private final int sourceRate;
@@ -40,7 +42,14 @@ public final class RootPcmSource implements AutoCloseable {
 
     public RootPcmSource(Context context, int card, int device, int sourceRate, int channels,
                          Callback callback) {
+        this(context, RootCallProfileStore.TRANSPORT_ROOT, card, device, sourceRate, channels, callback);
+    }
+
+    public RootPcmSource(Context context, String transport, int card, int device,
+                         int sourceRate, int channels, Callback callback) {
         this.context = context.getApplicationContext();
+        this.transport = RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)
+            ? RootCallProfileStore.TRANSPORT_SHIZUKU : RootCallProfileStore.TRANSPORT_ROOT;
         this.card = Math.max(0, card);
         this.device = Math.max(0, device);
         this.sourceRate = sourceRate <= 0 ? 48000 : sourceRate;
@@ -51,10 +60,13 @@ public final class RootPcmSource implements AutoCloseable {
     public void start() {
         if (running) return;
         running = true;
-        worker.execute(this::runLoop);
+        worker.execute(() -> {
+            if (RootCallProfileStore.TRANSPORT_SHIZUKU.equals(transport)) runShizukuLoop();
+            else runRootLoop();
+        });
     }
 
-    private void runLoop() {
+    private void runRootLoop() {
         File dir = new File(context.getCacheDir(), "root-pcm");
         if (!dir.exists() && !dir.mkdirs()) {
             fail("无法创建 ROOT 音频缓存目录");
@@ -65,13 +77,11 @@ public final class RootPcmSource implements AutoCloseable {
         try {
             String rootId = runRoot("id", 5);
             if (!rootId.contains("uid=0")) throw new IllegalStateException("没有获得 ROOT(uid=0)");
-
-            String tinycap = findTinycap();
+            String tinycap = findTinycapRoot();
             if (tinycap.isEmpty()) throw new IllegalStateException("系统没有找到 tinycap");
 
             postStatus("ROOT PCM：启动 card " + card + " / device " + device
                 + " · " + sourceRate + "Hz · " + channels + "ch");
-
             String command = "rm -f " + q(wav.getAbsolutePath()) + "; exec " + q(tinycap) + " "
                 + q(wav.getAbsolutePath()) + " -D " + card + " -d " + device
                 + " -c " + channels + " -r " + sourceRate + " -b 16 -p 1024 -n 4"
@@ -91,22 +101,30 @@ public final class RootPcmSource implements AutoCloseable {
             if (wav.length() < 44) throw new IllegalStateException("tinycap 没有产生 WAV 数据");
 
             try (RandomAccessFile raf = new RandomAccessFile(wav, "r")) {
-                long dataOffset = findWaveDataOffset(raf);
-                long position = dataOffset;
+                long position = findWaveDataOffset(raf);
                 int frameBytes = channels * 2;
                 byte[] source = new byte[96 * 1024];
                 resampleCarry = 0d;
+                long lastProgress = System.currentTimeMillis();
+                long lastLength = raf.length();
                 postStatus("ROOT PCM：正在接收内部音频");
 
                 while (running) {
-                    long available = raf.length() - position;
+                    long currentLength = raf.length();
+                    if (currentLength > lastLength) {
+                        lastLength = currentLength;
+                        lastProgress = System.currentTimeMillis();
+                    }
+                    long available = currentLength - position;
                     int readable = (int) Math.min(source.length, available);
                     readable -= readable % frameBytes;
                     if (readable < frameBytes) {
                         if (!process.isAlive()) {
-                            int exit = process.exitValue();
-                            throw new IllegalStateException("tinycap 已退出，exit=" + exit
-                                + "；请换一个 PCM 设备/采样率/声道");
+                            throw new IllegalStateException("tinycap 已退出，exit=" + process.exitValue()
+                                + "；请换 PCM/采样率/声道");
+                        }
+                        if (System.currentTimeMillis() - lastProgress > STALL_MS) {
+                            throw new IllegalStateException("tinycap 仍在运行，但 5 秒没有新的 PCM 数据；请换 PCM 参数");
                         }
                         sleep(70);
                         continue;
@@ -116,20 +134,85 @@ public final class RootPcmSource implements AutoCloseable {
                     if (read <= 0) { sleep(50); continue; }
                     read -= read % frameBytes;
                     position += read;
+                    lastProgress = System.currentTimeMillis();
                     byte[] converted = convertTo16kMono(source, read);
-                    if (converted.length == 0) continue;
-                    int peak = peak(converted);
-                    callback.onPcm(converted, converted.length, peak);
+                    if (converted.length > 0) callback.onPcm(converted, converted.length, peak(converted));
                 }
             }
         } catch (Exception e) {
             if (running) fail(safe(e));
         } finally {
-            running = false;
-            stopCaptureProcess();
-            File file = streamFile;
-            streamFile = null;
-            if (file != null) try { file.delete(); } catch (Exception ignored) {}
+            cleanup();
+        }
+    }
+
+    private void runShizukuLoop() {
+        try {
+            if (!ShizukuShell.isRunning()) throw new IllegalStateException("Shizuku 未运行");
+            if (!ShizukuShell.hasPermission()) throw new IllegalStateException("浮译没有 Shizuku 授权");
+            String tinycap = findTinycapShizuku();
+            if (tinycap.isEmpty()) throw new IllegalStateException("Shizuku 环境没有找到 tinycap");
+
+            postStatus("Shizuku PCM：启动 card " + card + " / device " + device
+                + " · " + sourceRate + "Hz · " + channels + "ch");
+            String script =
+                "f=/data/local/tmp/floatingtranslator_pcm_$$.wav; e=$f.err; rm -f \"$f\" \"$e\"; "
+                + q(tinycap) + " \"$f\" -D " + card + " -d " + device + " -c " + channels
+                + " -r " + sourceRate + " -b 16 -p 1024 -n 4 >/dev/null 2>\"$e\" & cap=$!; "
+                + "trap 'kill $cap 2>/dev/null; kill $tailpid 2>/dev/null; rm -f \"$f\" \"$e\"' EXIT INT TERM; "
+                + "i=0; while [ ! -s \"$f\" ] && kill -0 $cap 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; "
+                + "if [ ! -s \"$f\" ]; then cat \"$e\" >&2; exit 41; fi; "
+                + "tail -c +45 -f \"$f\" & tailpid=$!; wait $cap; rc=$?; kill $tailpid 2>/dev/null; "
+                + "cat \"$e\" >&2; exit $rc";
+
+            ShizukuRemoteProcess process = ShizukuShell.startProcess(script);
+            captureProcess = process;
+            InputStream in = process.getInputStream();
+            int frameBytes = channels * 2;
+            byte[] source = new byte[96 * 1024 + 8];
+            int carry = 0;
+            resampleCarry = 0d;
+            long started = System.currentTimeMillis();
+            long lastData = started;
+            boolean announced = false;
+
+            while (running) {
+                int available = in.available();
+                if (available <= 0) {
+                    if (!process.alive()) {
+                        String err = readError(process);
+                        throw new IllegalStateException("Shizuku tinycap 已退出，exit=" + process.exitValue()
+                            + (err.isEmpty() ? "" : " · " + err));
+                    }
+                    if (System.currentTimeMillis() - lastData > STALL_MS
+                        && System.currentTimeMillis() - started > STALL_MS) {
+                        throw new IllegalStateException("Shizuku tinycap 5 秒没有 PCM 数据；shell/SELinux 可能无权读取这个设备");
+                    }
+                    sleep(40);
+                    continue;
+                }
+                int max = Math.min(source.length - carry, available);
+                int read = in.read(source, carry, max);
+                if (read < 0) break;
+                if (read == 0) { sleep(20); continue; }
+                int total = carry + read;
+                int usable = total - (total % frameBytes);
+                carry = total - usable;
+                if (usable > 0) {
+                    if (!announced) {
+                        announced = true;
+                        postStatus("Shizuku PCM：正在接收内部音频");
+                    }
+                    lastData = System.currentTimeMillis();
+                    byte[] converted = convertTo16kMono(source, usable);
+                    if (converted.length > 0) callback.onPcm(converted, converted.length, peak(converted));
+                }
+                if (carry > 0) System.arraycopy(source, usable, source, 0, carry);
+            }
+        } catch (Exception e) {
+            if (running) fail(safe(e));
+        } finally {
+            cleanup();
         }
     }
 
@@ -200,13 +283,23 @@ public final class RootPcmSource implements AutoCloseable {
         return true;
     }
 
-    private String findTinycap() throws Exception {
-        String out = runRoot(
+    private String findTinycapRoot() throws Exception {
+        return firstLine(runRoot(
             "for p in /vendor/bin/tinycap /system/bin/tinycap /system/xbin/tinycap; do "
-                + "[ -x \"$p\" ] && { echo \"$p\"; exit 0; }; done; "
-                + "command -v tinycap 2>/dev/null || true", 5).trim();
-        if (out.contains("\n")) out = out.substring(0, out.indexOf('\n')).trim();
-        return out;
+                + "[ -x \"$p\" ] && { echo \"$p\"; exit 0; }; done; command -v tinycap 2>/dev/null || true", 5));
+    }
+
+    private String findTinycapShizuku() throws Exception {
+        return firstLine(ShizukuShell.runText(
+            "for p in /vendor/bin/tinycap /system/bin/tinycap /system/xbin/tinycap; do "
+                + "[ -x \"$p\" ] && { echo \"$p\"; exit 0; }; done; command -v tinycap 2>/dev/null || true",
+            5, 4096));
+    }
+
+    private String firstLine(String value) {
+        String out = value == null ? "" : value.trim();
+        int nl = out.indexOf('\n');
+        return nl >= 0 ? out.substring(0, nl).trim() : out;
     }
 
     private String runRoot(String command, int timeoutSeconds) throws Exception {
@@ -215,8 +308,17 @@ public final class RootPcmSource implements AutoCloseable {
             process.destroyForcibly();
             throw new IllegalStateException("ROOT 命令超时");
         }
-        byte[] bytes = process.getInputStream().readAllBytes();
-        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        return new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    }
+
+    private String readError(Process process) {
+        try {
+            InputStream err = process.getErrorStream();
+            int available = err.available();
+            if (available <= 0) return "";
+            byte[] data = err.readNBytes(Math.min(available, 4096));
+            return new String(data, StandardCharsets.UTF_8).trim();
+        } catch (Exception ignored) { return ""; }
     }
 
     private void postStatus(String message) {
@@ -228,22 +330,32 @@ public final class RootPcmSource implements AutoCloseable {
         callback.onError(message);
     }
 
+    private void cleanup() {
+        running = false;
+        stopCaptureProcess();
+        File file = streamFile;
+        streamFile = null;
+        if (file != null) try { file.delete(); } catch (Exception ignored) {}
+    }
+
     private void stopCaptureProcess() {
         Process process = captureProcess;
         captureProcess = null;
         if (process != null) {
             try { process.destroy(); } catch (Exception ignored) {}
             try {
-                if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly();
+                if (!process.waitFor(700, TimeUnit.MILLISECONDS)) process.destroyForcibly();
             } catch (Exception ignored) {}
         }
-        File f = streamFile;
-        if (f != null) {
-            try {
-                String name = f.getName().replace("'", "");
-                new ProcessBuilder("su", "-c", "pkill -f 'tinycap.*" + name + "' 2>/dev/null || true")
-                    .start().waitFor(1, TimeUnit.SECONDS);
-            } catch (Exception ignored) {}
+        if (RootCallProfileStore.TRANSPORT_ROOT.equals(transport)) {
+            File f = streamFile;
+            if (f != null) {
+                try {
+                    String name = f.getName().replace("'", "");
+                    new ProcessBuilder("su", "-c", "pkill -f 'tinycap.*" + name + "' 2>/dev/null || true")
+                        .start().waitFor(1, TimeUnit.SECONDS);
+                } catch (Exception ignored) {}
+            }
         }
     }
 

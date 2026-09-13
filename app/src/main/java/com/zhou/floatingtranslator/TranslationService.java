@@ -43,7 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * FloatingTranslator 0.5.0 real-time pipeline.
+ * FloatingTranslator real-time pipeline.
  *
  * Audio source is always fixed by the user and is never switched automatically.
  * Optional high-accuracy ASR models are local sherpa-onnx model packs. AUTO selects
@@ -87,6 +87,7 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String EXTRA_FONT_SIZE = "font_size";
     public static final String EXTRA_ENABLE_OCR = "enable_ocr";
     public static final String EXTRA_AUTO_MIC_FALLBACK = "auto_mic_fallback"; // compatibility; ignored
+    public static final String EXTRA_MIC_PROCESSING = "mic_processing";
 
     private static final String PREFS = "floating_translator";
     private static final int NOTIFICATION_ID = 3401;
@@ -104,6 +105,7 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private MediaProjection projection;
     private AudioRecord audioRecord;
+    private MicAudioEffects micEffects;
     private OfflineSpeechEngine offlineSpeech;
     private SherpaSpeechEngine sherpaSpeech;
     private SpeechRecognizer systemRecognizer;
@@ -131,6 +133,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private boolean enableOcr;
     private boolean allowYoudaoSpeech;
     private boolean preferOffline;
+    private String micProcessing = MicAudioEffects.MODE_REMOTE;
     private boolean failedAutoVosk;
 
     private long lastLevelUiAt;
@@ -200,6 +203,7 @@ public class TranslationService extends Service implements RecognitionListener {
         enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, false);
         allowYoudaoSpeech = intent.getBooleanExtra(EXTRA_YOUDAO_SPEECH_FALLBACK, true);
         preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, true);
+        micProcessing = MicAudioEffects.normalize(intent.getStringExtra(EXTRA_MIC_PROCESSING));
         int fontSize = intent.getIntExtra(EXTRA_FONT_SIZE, 24);
         int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class);
@@ -559,7 +563,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     .build();
             } else {
                 record = new AudioRecord.Builder()
-                    .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                    .setAudioSource(MicAudioEffects.recommendedAudioSource(micProcessing))
                     .setAudioFormat(format)
                     .setBufferSizeInBytes(min * 2)
                     .build();
@@ -570,10 +574,13 @@ public class TranslationService extends Service implements RecognitionListener {
                 throw new IllegalStateException("AudioRecord 初始化失败");
             }
             audioRecord = record;
+            closeMicEffects();
+            if (INPUT_MICROPHONE.equals(inputMode)) micEffects = MicAudioEffects.attach(record, micProcessing);
             audioCaptureStarted = true;
             int generation = ++captureGeneration;
             record.startRecording();
-            setDiagAudio(fixedSourceLabel() + " · 采集已启动");
+            String processing = micEffects == null ? "" : " · " + micEffects.status();
+            setDiagAudio(fixedSourceLabel() + " · 采集已启动" + processing);
             updateNotification(fixedSourceLabel() + " · " + asrLabel(activeAsrMode));
             audioWorker.execute(() -> audioLoop(record, generation));
         } catch (Exception e) {
@@ -1038,9 +1045,16 @@ public class TranslationService extends Service implements RecognitionListener {
         if (s != null) try { s.close(); } catch (Exception ignored) {}
     }
 
+    private void closeMicEffects() {
+        MicAudioEffects effects = micEffects;
+        micEffects = null;
+        if (effects != null) try { effects.close(); } catch (Exception ignored) {}
+    }
+
     private void stopAudioCapture() {
         captureGeneration++;
         audioCaptureStarted = false;
+        closeMicEffects();
         AudioRecord record = audioRecord;
         audioRecord = null;
         if (record != null) {
@@ -1120,7 +1134,7 @@ public class TranslationService extends Service implements RecognitionListener {
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("浮译 0.5.0")
+            .setContentTitle("浮译 " + BuildConfig.VERSION_NAME)
             .setContentText(message)
             .setContentIntent(pending)
             .setOngoing(true)
