@@ -23,6 +23,9 @@ import android.widget.Toast;
 /** Compact home dashboard. Detailed translation controls remain in MainActivity. */
 public final class HomeActivity extends Activity {
     private static final String PREFS = "floating_translator";
+    private static final String ROLLBACK_VERSION = "0.5.9";
+    private static final String ROLLBACK_RELEASE_PAGE = "https://github.com/dulo11/fanyireal-time/releases/tag/v0.5.9";
+    private static final String ROLLBACK_SOURCE_PAGE = "https://github.com/dulo11/fanyireal-time/tree/rollback-v0.5.9";
     private SharedPreferences preferences;
     private TextView quickStatus;
     private TextView recent;
@@ -96,7 +99,7 @@ public final class HomeActivity extends Activity {
             toolButton("🎚 ASR 精度", v -> startActivity(new Intent(this, AsrPrecisionActivity.class))),
             toolButton("⚙ 翻译引擎", v -> startActivity(new Intent(this, ApiSettingsActivity.class)))
         ));
-        Button update = secondaryButton("⬆ 检查更新");
+        Button update = secondaryButton("⬆ 检查更新 / ↩ 稳定回滚");
         update.setOnClickListener(v -> checkUpdate());
         toolsCard.addView(update, matchWrap());
 
@@ -213,7 +216,21 @@ public final class HomeActivity extends Activity {
         updateChecker.check(BuildConfig.VERSION_NAME, new UpdateChecker.Callback() {
             @Override public void onResult(String latestVersion, String pageUrl, String apkUrl, boolean newer) {
                 if (!newer) {
-                    toast("当前已是最新版 v" + BuildConfig.VERSION_NAME);
+                    if (UpdateChecker.compareVersions(BuildConfig.VERSION_NAME, latestVersion) > 0) {
+                        new AlertDialog.Builder(HomeActivity.this)
+                            .setTitle("当前为开发版 v" + BuildConfig.VERSION_NAME)
+                            .setMessage("GitHub 最新稳定版是 v" + latestVersion + "。\n\n"
+                                + "旧版检测只比较版本号，所以开发版比稳定版新时会误显示“已是最新版”。\n"
+                                + "现在已把 v" + ROLLBACK_VERSION + " 固定为稳定回滚点。")
+                            .setNegativeButton("继续当前版", null)
+                            .setNeutralButton("v" + ROLLBACK_VERSION + " 发布页",
+                                (d, w) -> openUrl(ROLLBACK_RELEASE_PAGE))
+                            .setPositiveButton("回滚源码",
+                                (d, w) -> openUrl(ROLLBACK_SOURCE_PAGE))
+                            .show();
+                    } else {
+                        toast("当前已是最新版 v" + BuildConfig.VERSION_NAME);
+                    }
                     return;
                 }
                 new AlertDialog.Builder(HomeActivity.this)
@@ -288,9 +305,9 @@ public final class HomeActivity extends Activity {
 
     private TextView text(String value, float sp, int color) {
         TextView t = new TextView(this);
-        t.setText(value);
         t.setTextSize(sp);
         t.setTextColor(color);
+        t.setText(value);
         return t;
     }
 
