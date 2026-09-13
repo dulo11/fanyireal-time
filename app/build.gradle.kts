@@ -33,11 +33,7 @@ android {
 
     buildTypes {
         release {
-            // Release builds are optimized and obfuscated. This does not make an APK
-            // impossible to reverse, but it removes readable class/method structure and
-            // raises the cost of patching the app substantially.
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (!releaseKeystorePath.isNullOrBlank()) {
                 signingConfig = signingConfigs.getByName("release")
