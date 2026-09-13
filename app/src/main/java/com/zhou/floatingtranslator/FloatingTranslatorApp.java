@@ -5,6 +5,10 @@ import android.app.Application;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
+import android.widget.Toast;
 
 /** Prevents translation overlays from covering the app UI and records translation history. */
 public final class FloatingTranslatorApp extends Application implements Application.ActivityLifecycleCallbacks {
@@ -12,6 +16,18 @@ public final class FloatingTranslatorApp extends Application implements Applicat
 
     @Override public void onCreate() {
         super.onCreate();
+
+        // Release APKs must carry the project's official signing certificate. Debug
+        // builds are allowed by AppIntegrity so local development remains possible.
+        if (!AppIntegrity.isTrusted(this)) {
+            Toast.makeText(this, "安装包签名校验失败，当前 APK 已停止运行", Toast.LENGTH_LONG).show();
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                try { Process.killProcess(Process.myPid()); }
+                catch (Exception ignored) {}
+            }, 2200L);
+            return;
+        }
+
         // Capture the process baseline before any optional ASR model is loaded.
         RuntimeMemory.captureProcessBaseline(this);
         registerActivityLifecycleCallbacks(this);
@@ -26,6 +42,7 @@ public final class FloatingTranslatorApp extends Application implements Applicat
     }
 
     private void signal(Activity activity, String action) {
+        if (!AppIntegrity.isTrusted(this)) return;
         boolean running = getSharedPreferences("floating_translator", MODE_PRIVATE)
             .getBoolean("service_running", false);
         if (!running) return;
