@@ -2,6 +2,10 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-apk.yml"
 
 permissions:
   contents: write
@@ -85,14 +89,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NOTES="浮译 $APP_VERSION 正式签名通用版。
+
+- v0.6.0-dev3 功能定版为正式 v0.6.0
+- 新增 Shizuku 实验 PCM 通话模式，与 ROOT 模式明确分开；固定来源失败时不会偷偷切换
+- ROOT / Shizuku PCM 增加无数据检测，减少 tinycap 假运行卡死
+- 无 ROOT 外放 + 麦克风增加远端优先、近端优先、原始麦克风三种处理方式
+- Azure 支持动态多账号池，并提供额度/限流后切换与轮番使用策略
+- API 配置改为普通本地 SharedPreferences 保存，不再使用 Keystore/AES
+- 内置 ML Kit Language ID，改善自动语言识别与双向翻译路由
+- 检查更新逻辑区分开发版与稳定版，并保留 v0.5.9 稳定回滚入口
+- v0.5.9 继续作为稳定回滚点
+- 通用 APK 已通过 apksigner 正式签名校验
+
+长期下载入口：Releases → Latest"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk --clobber
-            gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --latest
+            gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --notes "$NOTES" --latest
           else
             gh release create "$RELEASE_TAG" \
               "$APK_NAME" FloatingTranslator-latest.apk \
               --target "$GITHUB_SHA" \
               --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "浮译 $APP_VERSION 正式签名通用版。\n\n- 在线主力翻译确定为 百度 / Azure / 阿里云；自动模式仍然 ML Kit 离线优先\n- 新增阿里云机器翻译 AccessKey ID / Secret 配置与 ROA HMAC-SHA1 客户端签名\n- 阿里云使用 HTTPS 通用版翻译接口，不把 AccessKey 写进 APK\n- Azure 仅有 Subscription Key 时也可配置；Region 改为可选，多服务资源再填写\n- 自动云端兜底只尝试百度、Azure、阿里云，其他旧引擎仅保留手动兼容\n- API 页面优先展示百度、Azure、阿里云，并继续使用 Android Keystore + AES/GCM 保存密钥\n- 保留 v0.5.8 的 Silero VAD、快语速上下文、二次识别校正、热词和 ROOT 通话增强\n- 仅发布通用 APK，并通过 apksigner 签名校验\n\n长期下载入口：Releases → Latest" \
+              --notes "$NOTES" \
               --latest
           fi
