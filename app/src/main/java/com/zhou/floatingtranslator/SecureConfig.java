@@ -39,12 +39,16 @@ public final class SecureConfig {
 
     private static final String PREFS = "floating_translator_secure_v1";
     private static final String KEY_ALIAS = "floating_translator_api_key_v1";
+    private static final String FORMAT_V2 = "v2";
     private static final String AZURE_KEY_PREFIX = "azure_key_";
     private static final String AZURE_REGION_PREFIX = "azure_region_";
     private final SharedPreferences prefs;
+    private final String packageName;
 
     public SecureConfig(Context context) {
-        prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        Context app = context.getApplicationContext();
+        prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        packageName = app.getPackageName();
     }
 
     public void put(String name, String value) {
@@ -56,8 +60,10 @@ public final class SecureConfig {
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey());
+            cipher.updateAAD(aad(name));
             byte[] encrypted = cipher.doFinal(cleaned.getBytes(StandardCharsets.UTF_8));
-            String packed = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP)
+            String packed = FORMAT_V2 + ":"
+                + Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP)
                 + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP);
             prefs.edit().putString(name, packed).apply();
         } catch (Exception e) {
@@ -69,13 +75,28 @@ public final class SecureConfig {
         String packed = prefs.getString(name, "");
         if (packed == null || packed.isEmpty()) return "";
         try {
+            if (packed.startsWith(FORMAT_V2 + ":")) {
+                String[] parts = packed.split(":", 3);
+                if (parts.length != 3) return "";
+                byte[] iv = Base64.decode(parts[1], Base64.NO_WRAP);
+                byte[] encrypted = Base64.decode(parts[2], Base64.NO_WRAP);
+                Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), new GCMParameterSpec(128, iv));
+                cipher.updateAAD(aad(name));
+                return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+            }
+
+            // v1 migration path: decrypt the old IV:ciphertext format once, then
+            // immediately rewrite it as v2 bound to this package + preference name.
             String[] parts = packed.split(":", 2);
             if (parts.length != 2) return "";
             byte[] iv = Base64.decode(parts[0], Base64.NO_WRAP);
             byte[] encrypted = Base64.decode(parts[1], Base64.NO_WRAP);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), new GCMParameterSpec(128, iv));
-            return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+            String plain = new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+            if (!plain.isEmpty()) put(name, plain);
+            return plain;
         } catch (Exception e) {
             return "";
         }
@@ -136,6 +157,10 @@ public final class SecureConfig {
         return prefs.getAll().size();
     }
 
+    private byte[] aad(String name) {
+        return (packageName + "|" + name).getBytes(StandardCharsets.UTF_8);
+    }
+
     private SecretKey getOrCreateKey() throws Exception {
         KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
         keyStore.load(null);
@@ -151,6 +176,7 @@ public final class SecureConfig {
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
+            .setUnlockedDeviceRequired(true)
             .build());
         return generator.generateKey();
     }
