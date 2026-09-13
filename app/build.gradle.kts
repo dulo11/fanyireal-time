@@ -12,8 +12,8 @@ android {
         applicationId = "com.zhou.floatingtranslator"
         minSdk = 33
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.5.9"
+        versionCode = 23
+        versionName = "0.5.9-rollback"
     }
 
     buildFeatures {
@@ -59,10 +59,7 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
 
-    // High-accuracy optional offline ASR runtime. Model packs are downloaded separately.
     implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8") {
-        // The Android AAR already contains the Java API classes. The transitive JVM
-        // helper jar duplicates those classes and must not be packaged into Android.
         exclude(group = "com.github.k2-fsa.sherpa-onnx", module = "sherpa-onnx-jvm")
     }
     implementation("org.apache.commons:commons-compress:1.27.1")
