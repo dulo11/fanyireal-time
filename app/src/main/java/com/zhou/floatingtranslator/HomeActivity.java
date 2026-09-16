@@ -63,7 +63,7 @@ public final class HomeActivity extends Activity {
         version.setPadding(0, dp(2), 0, dp(3));
         root.addView(version);
 
-        TextView subtitle = text("实时语音翻译 · 高精度快语速 · 离线 ASR · ROOT 通话", 14,
+        TextView subtitle = text("实时语音翻译 · 无障碍全屏翻译 · 离线 ASR · ROOT 通话", 14,
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, 0, 0, dp(16));
         root.addView(subtitle);
@@ -92,13 +92,16 @@ public final class HomeActivity extends Activity {
         LinearLayout toolsCard = card(root);
         toolsCard.addView(sectionTitle("工具"));
         toolsCard.addView(toolRow(
-            toolButton("📝 历史", v -> startActivity(new Intent(this, HistoryActivity.class))),
-            toolButton("☎ ROOT 通话", v -> startActivity(new Intent(this, RootCallActivity.class)))
+            toolButton("🌐 全屏翻译", v -> startActivity(new Intent(this, ScreenTranslationActivity.class))),
+            toolButton("📝 历史", v -> startActivity(new Intent(this, HistoryActivity.class)))
         ));
         toolsCard.addView(toolRow(
-            toolButton("🎚 ASR 精度", v -> startActivity(new Intent(this, AsrPrecisionActivity.class))),
-            toolButton("⚙ 翻译引擎", v -> startActivity(new Intent(this, ApiSettingsActivity.class)))
+            toolButton("☎ ROOT 通话", v -> startActivity(new Intent(this, RootCallActivity.class))),
+            toolButton("🎚 ASR 精度", v -> startActivity(new Intent(this, AsrPrecisionActivity.class)))
         ));
+        Button engine = secondaryButton("⚙ 翻译引擎 / API 设置");
+        engine.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
+        toolsCard.addView(engine, matchWrap());
         Button update = secondaryButton("⬆ 检查更新 / ↩ 稳定回滚");
         update.setOnClickListener(v -> checkUpdate());
         toolsCard.addView(update, matchWrap());
@@ -113,6 +116,7 @@ public final class HomeActivity extends Activity {
         recentCard.addView(copy, matchWrap());
 
         TextView note = text(
+            "全屏翻译默认走无障碍：优先直接读取屏幕文字，读不到时使用无障碍截图 + ML Kit OCR，不占用录屏。\n" +
             "快语速准确率优先：纯日语优先 Parakeet / ReazonSpeech；日英混说优先 Qwen3-ASR / Whisper Medium；" +
             "韩语、越南语、马来语、菲律宾语、泰语、印尼语优先 Qwen3 / Whisper / Omnilingual。\n" +
             "高精度·快语速模式会延长连续语音切段，并在强制切段时保留音频重叠以减少漏字。",
@@ -168,6 +172,9 @@ public final class HomeActivity extends Activity {
         String conversation = preferences.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
         int input = Math.min(2, preferences.getInt("input_mode", 0));
         boolean overlay = Settings.canDrawOverlays(this);
+        boolean screenTranslation = ScreenTranslationAccessibilityService.isEnabled(this);
+        boolean screenContinuous = preferences.getBoolean(
+            ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
         String source = input == 2 ? "ROOT 通话/VoIP" : input == 1 ? "麦克风" : "系统内部声音";
         int sourceIndex = clampLanguageIndex(preferences.getInt("source_index", 2));
         int targetIndex = clampLanguageIndex(preferences.getInt("target_index", 0));
@@ -180,7 +187,10 @@ public final class HomeActivity extends Activity {
             "ASR 精度：" + precisionLabel(precision) + "\n" +
             "翻译：" + engineLabel(engine) + "\n" +
             memory.compact() + "\n" +
-            "悬浮窗：" + (overlay ? "✅ 已授权" : "⚠ 未授权") + "\n" +
+            "语音悬浮窗：" + (overlay ? "✅ 已授权" : "⚠ 未授权") + "\n" +
+            "全屏翻译：" + (screenTranslation
+                ? (screenContinuous ? "✅ 已开启 · 连续" : "✅ 已开启 · 点按")
+                : "⚠ 无障碍未开启") + "\n" +
             "历史：" + HistoryStore.count(this) + " 条"
         );
 
