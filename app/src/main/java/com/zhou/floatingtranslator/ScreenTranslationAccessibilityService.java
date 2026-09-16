@@ -9,6 +9,7 @@ import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.HardwareBuffer;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -36,32 +37,45 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.HashSet;
 
 /**
- * Full-screen translation without MediaProjection.
+ * Global accessibility translation without MediaProjection.
  *
- * Primary path: read visible AccessibilityNodeInfo text and its screen bounds.
- * Fallback: AccessibilityService.takeScreenshot() + on-device ML Kit OCR. This is an accessibility
- * screenshot API, not a recording session, so it does not occupy Android's screen-recording slot.
+ * Normal path: read visible AccessibilityNodeInfo text from websites, Android UI and third-party
+ * apps, then draw translations at the same screen coordinates. If no useful accessibility text is
+ * exposed, AccessibilityService.takeScreenshot() + ML Kit OCR is used as a fallback. The service
+ * also supports reverse translation of the currently focused editable field for chat apps.
  */
 public final class ScreenTranslationAccessibilityService extends AccessibilityService {
     public static final String PREF_SCREEN_CONTINUOUS = "screen_translate_continuous";
     public static final String PREF_SCREEN_OCR_FALLBACK = "screen_translate_ocr_fallback";
+    public static final String PREF_SCREEN_SMART_OCR = "screen_translate_smart_ocr";
     public static final String PREF_SCREEN_SKIP_TARGET = "screen_translate_skip_target";
+    public static final String PREF_SCREEN_INCREMENTAL_CACHE = "screen_translate_incremental_cache";
+    public static final String PREF_SCREEN_INPUT_REVERSE = "screen_translate_input_reverse";
     public static final String PREF_SCREEN_LAST_STATUS = "screen_translate_last_status";
 
     private static final String PREFS = "floating_translator";
-    private static final int MAX_NODE_BLOCKS = 70;
-    private static final long EVENT_DEBOUNCE_MS = 850L;
-    private static final long MIN_AUTO_SCAN_GAP_MS = 1200L;
+    private static final int MAX_NODE_BLOCKS = 80;
+    private static final int MAX_CACHE_ENTRIES = 500;
+    private static final long EVENT_DEBOUNCE_MS = 650L;
+    private static final long MIN_AUTO_SCAN_GAP_MS = 950L;
+    private static final long DOUBLE_TAP_MS = 330L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final LinkedHashMap<String, CachedTranslation> translationCache =
+        new LinkedHashMap<String, CachedTranslation>(128, 0.75f, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<String, CachedTranslation> eldest) {
+                return size() > MAX_CACHE_ENTRIES;
+            }
+        };
+
     private SharedPreferences prefs;
     private ScreenTranslationClient translator;
     private WindowManager windowManager;
@@ -73,7 +87,10 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     private boolean translating;
     private boolean screenshotBusy;
     private long lastAutoScanAt;
+    private long lastTapAt;
     private String lastWindowPackage = "";
+    private String lastScreenSignature = "";
+    private Runnable pendingSingleTap;
     private final Runnable eventScan = () -> translateCurrentScreen(false);
 
     @Override protected void onServiceConnected() {
@@ -84,7 +101,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         addOverlayWindow();
         addBubbleWindow();
         updateBubbleLabel();
-        saveStatus("无障碍全屏翻译已启动");
+        saveStatus("全局无障碍翻译已启动");
     }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -97,6 +114,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             if (!TextUtils.equals(lastWindowPackage, pkg)) {
                 lastWindowPackage = pkg;
+                lastScreenSignature = "";
                 clearOverlay();
             }
         }
@@ -105,9 +123,17 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         if (!continuous) return;
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             && type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            && type != AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            && type != AccessibilityEvent.TYPE_VIEW_SCROLLED
+            && type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             return;
         }
+
+        // Typing into a chat input box should not cause the whole screen to retranslate on every key.
+        if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            AccessibilityNodeInfo source = event.getSource();
+            if (source != null && source.isEditable()) return;
+        }
+
         main.removeCallbacks(eventScan);
         main.postDelayed(eventScan, EVENT_DEBOUNCE_MS);
     }
@@ -119,6 +145,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     @Override public void onDestroy() {
         main.removeCallbacksAndMessages(null);
         removeWindows();
+        translationCache.clear();
         if (translator != null) translator.close();
         translator = null;
         super.onDestroy();
@@ -142,10 +169,21 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         }
 
         if (!blocks.isEmpty()) {
+            boolean smartOcr = prefs.getBoolean(PREF_SCREEN_SMART_OCR, false);
+            if (smartOcr && blocks.size() <= 1
+                && prefs.getBoolean(PREF_SCREEN_OCR_FALLBACK, true)) {
+                takeAccessibilityScreenshot();
+                return;
+            }
+
+            String signature = screenSignature(blocks, targetLanguage());
+            if (!userInitiated && signature.equals(lastScreenSignature)) return;
+            lastScreenSignature = signature;
             translateBlocks(blocks, false);
             return;
         }
 
+        lastScreenSignature = "";
         if (prefs.getBoolean(PREF_SCREEN_OCR_FALLBACK, true)) {
             takeAccessibilityScreenshot();
         } else if (userInitiated) {
@@ -155,12 +193,13 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
 
     private void collectTextNodes(AccessibilityNodeInfo node, List<Block> out,
                                   Set<String> dedupe, int depth) {
-        if (node == null || out.size() >= MAX_NODE_BLOCKS || depth > 30) return;
+        if (node == null || out.size() >= MAX_NODE_BLOCKS || depth > 34) return;
         if (!node.isVisibleToUser()) return;
 
         CharSequence packageName = node.getPackageName();
-        if (packageName == null || !getPackageName().contentEquals(packageName)) {
+        if ((packageName == null || !getPackageName().contentEquals(packageName)) && !node.isEditable()) {
             CharSequence raw = node.getText();
+            if (raw == null || raw.toString().trim().isEmpty()) raw = node.getContentDescription();
             String text = normalize(raw == null ? "" : raw.toString());
             if (isTranslatableText(text)) {
                 Rect bounds = new Rect();
@@ -184,51 +223,153 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         setBubbleText("…");
         clearOverlay();
 
-        LinkedHashMap<String, Integer> uniqueIndex = new LinkedHashMap<>();
-        List<String> uniqueTexts = new ArrayList<>();
-        int[] blockToText = new int[blocks.size()];
-        for (int i = 0; i < blocks.size(); i++) {
-            String text = blocks.get(i).text;
-            Integer index = uniqueIndex.get(text);
-            if (index == null) {
-                index = uniqueTexts.size();
-                uniqueIndex.put(text, index);
-                uniqueTexts.add(text);
-            }
-            blockToText[i] = index;
+        String target = targetLanguage();
+        boolean cacheEnabled = prefs.getBoolean(PREF_SCREEN_INCREMENTAL_CACHE, true);
+        LinkedHashMap<String, CachedTranslation> resolved = new LinkedHashMap<>();
+        List<String> missing = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+
+        for (Block block : blocks) {
+            if (!seen.add(block.text)) continue;
+            CachedTranslation cached = cacheEnabled ? translationCache.get(cacheKey(target, block.text)) : null;
+            if (cached != null) resolved.put(block.text, cached);
+            else missing.add(block.text);
         }
 
-        String target = targetLanguage();
-        translator.translate(uniqueTexts, target, new ScreenTranslationClient.Callback() {
+        if (missing.isEmpty()) {
+            translating = false;
+            updateBubbleLabel();
+            applyTranslations(blocks, resolved, fromOcr, "缓存");
+            return;
+        }
+
+        translator.translate(missing, target, new ScreenTranslationClient.Callback() {
             @Override public void onSuccess(List<ScreenTranslationClient.Result> results, String engineName) {
                 translating = false;
                 updateBubbleLabel();
-                boolean skipTarget = prefs.getBoolean(PREF_SCREEN_SKIP_TARGET, true);
-                List<ScreenTranslationOverlayView.Entry> entries = new ArrayList<>();
-                for (int i = 0; i < blocks.size(); i++) {
-                    int resultIndex = blockToText[i];
-                    if (resultIndex < 0 || resultIndex >= results.size()) continue;
-                    ScreenTranslationClient.Result result = results.get(resultIndex);
-                    if (skipTarget && sameLanguage(result.sourceLanguage, target)) continue;
-                    String translated = normalize(result.translated);
-                    if (translated.isEmpty()) continue;
-                    if (translated.equals(blocks.get(i).text) && skipTarget) continue;
-                    entries.add(new ScreenTranslationOverlayView.Entry(
-                        blocks.get(i).bounds, blocks.get(i).text, translated));
+                int count = Math.min(missing.size(), results.size());
+                for (int i = 0; i < count; i++) {
+                    ScreenTranslationClient.Result result = results.get(i);
+                    CachedTranslation cached = new CachedTranslation(result.sourceLanguage, normalize(result.translated));
+                    resolved.put(missing.get(i), cached);
+                    if (cacheEnabled) translationCache.put(cacheKey(target, missing.get(i)), cached);
                 }
-                if (overlayView != null) overlayView.setEntries(entries);
-                String path = fromOcr ? "无障碍截图 OCR" : "无障碍文字节点";
-                saveStatus(path + " · " + engineName + " · " + entries.size() + " 段");
-                if (entries.isEmpty()) toast("当前屏幕没有需要翻译的文字");
+                applyTranslations(blocks, resolved, fromOcr, engineName);
             }
 
             @Override public void onError(String message) {
                 translating = false;
                 updateBubbleLabel();
                 saveStatus("翻译失败：" + message);
-                toast("全屏翻译失败：" + message);
+                toast("全局翻译失败：" + message);
             }
         });
+    }
+
+    private void applyTranslations(List<Block> blocks, Map<String, CachedTranslation> resolved,
+                                   boolean fromOcr, String engineName) {
+        boolean skipTarget = prefs.getBoolean(PREF_SCREEN_SKIP_TARGET, true);
+        String target = targetLanguage();
+        List<ScreenTranslationOverlayView.Entry> entries = new ArrayList<>();
+        for (Block block : blocks) {
+            CachedTranslation result = resolved.get(block.text);
+            if (result == null) continue;
+            if (skipTarget && sameLanguage(result.sourceLanguage, target)) continue;
+            String translated = normalize(result.translated);
+            if (translated.isEmpty()) continue;
+            if (translated.equals(block.text) && skipTarget) continue;
+            entries.add(new ScreenTranslationOverlayView.Entry(block.bounds, block.text, translated));
+        }
+        if (overlayView != null) overlayView.setEntries(entries);
+        String path = fromOcr ? "无障碍截图 OCR" : "全局无障碍文字";
+        saveStatus(path + " · " + engineName + " · " + entries.size() + " 段");
+    }
+
+    private void translateFocusedInput() {
+        if (prefs == null || translator == null || translating || screenshotBusy) return;
+        if (!prefs.getBoolean(PREF_SCREEN_INPUT_REVERSE, true)) {
+            toast("发送前反向翻译已关闭");
+            return;
+        }
+
+        AccessibilityNodeInfo input = findFocusedEditableNode();
+        if (input == null) {
+            toast("没有找到正在输入的文字框");
+            return;
+        }
+        String original = normalize(input.getText() == null ? "" : input.getText().toString());
+        if (!isTranslatableText(original)) {
+            toast("输入框里没有可翻译文字");
+            return;
+        }
+
+        String outgoingLanguage = sourceLanguageForOutgoing();
+        translating = true;
+        setBubbleText("输");
+        translator.translate(Collections.singletonList(original), outgoingLanguage,
+            new ScreenTranslationClient.Callback() {
+                @Override public void onSuccess(List<ScreenTranslationClient.Result> results, String engineName) {
+                    translating = false;
+                    updateBubbleLabel();
+                    if (results.isEmpty()) {
+                        toast("输入框翻译没有返回结果");
+                        return;
+                    }
+                    String translated = normalize(results.get(0).translated);
+                    if (translated.isEmpty()) {
+                        toast("输入框翻译结果为空");
+                        return;
+                    }
+                    AccessibilityNodeInfo current = findFocusedEditableNode();
+                    if (current == null) {
+                        toast("输入框已失去焦点");
+                        return;
+                    }
+                    String now = normalize(current.getText() == null ? "" : current.getText().toString());
+                    if (!now.equals(original)) {
+                        toast("输入内容已变化，未自动替换");
+                        return;
+                    }
+                    Bundle args = new Bundle();
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, translated);
+                    boolean ok = current.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                    if (ok) {
+                        saveStatus("发送前翻译 · " + engineName + " · 已替换输入框");
+                        toast("已翻译为 " + sourceLanguageLabel() + "，发送前可检查");
+                    } else {
+                        toast("这个 App 的输入框不允许无障碍替换文字");
+                    }
+                }
+
+                @Override public void onError(String message) {
+                    translating = false;
+                    updateBubbleLabel();
+                    toast("输入框翻译失败：" + message);
+                }
+            });
+    }
+
+    private AccessibilityNodeInfo findFocusedEditableNode() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return null;
+        try {
+            AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (focused != null && focused.isEditable()) return focused;
+            return findFocusedEditableRecursive(root, 0);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private AccessibilityNodeInfo findFocusedEditableRecursive(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 32) return null;
+        if (node.isVisibleToUser() && node.isEditable() && node.isFocused()) return node;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            AccessibilityNodeInfo found = findFocusedEditableRecursive(child, depth + 1);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void takeAccessibilityScreenshot() {
@@ -288,15 +429,18 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
                     if (blocks.size() >= MAX_NODE_BLOCKS) break;
                 }
                 screenshotBusy = false;
+                updateBubbleLabel();
                 if (blocks.isEmpty()) {
                     saveStatus("OCR 未识别到可翻译文字");
                     toast("OCR 没有识别到文字");
                 } else {
+                    lastScreenSignature = screenSignature(blocks, targetLanguage());
                     translateBlocks(blocks, true);
                 }
             })
             .addOnFailureListener(e -> {
                 screenshotBusy = false;
+                updateBubbleLabel();
                 saveStatus("OCR 失败：" + safe(e));
                 toast("OCR 失败：" + safe(e));
             })
@@ -327,6 +471,16 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         return LanguageOption.ALL[index].mlKitTag;
     }
 
+    private String sourceLanguageForOutgoing() {
+        int index = clampLanguageIndex(prefs.getInt("source_index", 2));
+        return LanguageOption.ALL[index].mlKitTag;
+    }
+
+    private String sourceLanguageLabel() {
+        int index = clampLanguageIndex(prefs.getInt("source_index", 2));
+        return LanguageOption.ALL[index].label;
+    }
+
     private String targetLanguage() {
         int index = clampLanguageIndex(prefs.getInt("target_index", 0));
         return LanguageOption.ALL[index].mlKitTag;
@@ -345,6 +499,20 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         if (a.startsWith("zh")) a = "zh";
         if (b.startsWith("zh")) b = "zh";
         return a.equals(b);
+    }
+
+    private String screenSignature(List<Block> blocks, String target) {
+        StringBuilder out = new StringBuilder(lastWindowPackage).append('|').append(target);
+        for (Block block : blocks) {
+            out.append('|').append(block.text).append('@')
+                .append(block.bounds.left).append(',').append(block.bounds.top).append(',')
+                .append(block.bounds.right).append(',').append(block.bounds.bottom);
+        }
+        return Integer.toHexString(out.toString().hashCode()) + ':' + blocks.size();
+    }
+
+    private static String cacheKey(String target, String text) {
+        return target + '\u0001' + text;
     }
 
     private boolean isUsefulBounds(Rect bounds) {
@@ -411,7 +579,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         bubble.setTextSize(18f);
         bubble.setGravity(Gravity.CENTER);
         bubble.setElevation(dp(8));
-        bubble.setContentDescription("浮译全屏翻译悬浮球：轻点翻译，长按切换连续翻译，拖动可移动");
+        bubble.setContentDescription("浮译全局翻译：轻点翻译屏幕，双击反向翻译当前输入框，长按开关自动翻译，拖动可移动");
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
         bg.setColor(Color.argb(235, 111, 72, 210));
@@ -477,7 +645,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
                     if (!moved && event.getActionMasked() == MotionEvent.ACTION_UP) {
                         long held = SystemClock.elapsedRealtime() - downAt;
                         if (held >= 650L) toggleContinuous();
-                        else translateCurrentScreen(true);
+                        else handleBubbleTap();
                     }
                     return true;
                 default:
@@ -486,11 +654,34 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         }
     }
 
+    private void handleBubbleTap() {
+        long now = SystemClock.elapsedRealtime();
+        if (lastTapAt > 0 && now - lastTapAt <= DOUBLE_TAP_MS && pendingSingleTap != null) {
+            main.removeCallbacks(pendingSingleTap);
+            pendingSingleTap = null;
+            lastTapAt = 0L;
+            translateFocusedInput();
+            return;
+        }
+        lastTapAt = now;
+        pendingSingleTap = () -> {
+            pendingSingleTap = null;
+            lastTapAt = 0L;
+            translateCurrentScreen(true);
+        };
+        main.postDelayed(pendingSingleTap, DOUBLE_TAP_MS);
+    }
+
     private void toggleContinuous() {
+        if (pendingSingleTap != null) {
+            main.removeCallbacks(pendingSingleTap);
+            pendingSingleTap = null;
+            lastTapAt = 0L;
+        }
         boolean next = !prefs.getBoolean(PREF_SCREEN_CONTINUOUS, false);
         prefs.edit().putBoolean(PREF_SCREEN_CONTINUOUS, next).apply();
         updateBubbleLabel();
-        toast(next ? "连续全屏翻译：已开启" : "连续全屏翻译：已关闭");
+        toast(next ? "全局自动翻译：已开启" : "全局自动翻译：已关闭");
         if (next) translateCurrentScreen(true);
     }
 
@@ -566,6 +757,16 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         Block(String text, Rect bounds) {
             this.text = text;
             this.bounds = new Rect(bounds);
+        }
+    }
+
+    private static final class CachedTranslation {
+        final String sourceLanguage;
+        final String translated;
+
+        CachedTranslation(String sourceLanguage, String translated) {
+            this.sourceLanguage = sourceLanguage == null ? "" : sourceLanguage;
+            this.translated = translated == null ? "" : translated;
         }
     }
 }

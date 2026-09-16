@@ -14,7 +14,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/** Settings and onboarding page for accessibility full-screen translation. */
+/** Settings and onboarding page for global accessibility translation. */
 public final class ScreenTranslationActivity extends Activity {
     private static final String PREFS = "floating_translator";
 
@@ -23,7 +23,10 @@ public final class ScreenTranslationActivity extends Activity {
     private TextView language;
     private Button continuous;
     private Button ocrFallback;
+    private Button smartOcr;
     private Button skipTarget;
+    private Button incrementalCache;
+    private Button inputReverse;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -38,14 +41,14 @@ public final class ScreenTranslationActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(24), dp(18), dp(28));
+        root.setPadding(dp(18), dp(24), dp(18), dp(110));
         scroll.addView(root);
 
-        TextView title = text("全屏翻译", 30, Color.WHITE);
+        TextView title = text("全局翻译", 30, Color.WHITE);
         title.setTypeface(null, 1);
         root.addView(title);
 
-        TextView subtitle = text("无障碍优先 · 不占用录屏 · Azure 自动识别源语言", 14,
+        TextView subtitle = text("网站 · 手机界面 · 聊天 App · 无障碍优先 · 不占用录屏", 14,
             Color.rgb(190, 165, 255));
         subtitle.setPadding(0, dp(3), 0, dp(16));
         root.addView(subtitle);
@@ -60,50 +63,54 @@ public final class ScreenTranslationActivity extends Activity {
         serviceCard.addView(accessibility, matchWrap());
 
         TextView serviceTip = text(
-            "启用“浮译 · 全屏翻译”后，屏幕右侧会出现“译”悬浮球。\n"
-                + "轻点：翻译当前屏幕；长按：开启/关闭连续翻译；拖动：移动悬浮球。",
+            "启用“浮译 · 全屏翻译”后会出现“译”悬浮球。\n"
+                + "轻点：翻译当前页面；双击：把当前聊天输入框反向翻译；长按：开关全局自动翻译；拖动：移动悬浮球。",
             13, Color.rgb(185, 175, 207));
         serviceTip.setPadding(0, dp(7), 0, 0);
         serviceCard.addView(serviceTip);
 
         LinearLayout modeCard = card(root);
-        modeCard.addView(sectionTitle("翻译方式"));
+        modeCard.addView(sectionTitle("全局翻译方式"));
         TextView modeTip = text(
-            "① 优先直接读取 App 暴露给无障碍的文字和坐标，速度快、没有 OCR 错字。\n"
-                + "② 页面读不到文字时，可用无障碍截图 + ML Kit OCR 兜底。这里不使用 MediaProjection 录屏。",
+            "优先直接读取网站、系统界面、聊天气泡和普通 App 的无障碍文字。读不到文字时，再用无障碍截图 + ML Kit OCR。"
+                + "不会占用 MediaProjection 录屏会话。",
             13, Color.rgb(205, 194, 224));
         modeTip.setPadding(0, dp(6), 0, dp(8));
         modeCard.addView(modeTip);
 
         continuous = secondaryButton("");
-        continuous.setOnClickListener(v -> {
-            boolean next = !prefs.getBoolean(
-                ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
-            prefs.edit().putBoolean(
-                ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, next).apply();
-            refresh();
-        });
+        continuous.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false));
         modeCard.addView(continuous, matchWrap());
 
         ocrFallback = secondaryButton("");
-        ocrFallback.setOnClickListener(v -> {
-            boolean next = !prefs.getBoolean(
-                ScreenTranslationAccessibilityService.PREF_SCREEN_OCR_FALLBACK, true);
-            prefs.edit().putBoolean(
-                ScreenTranslationAccessibilityService.PREF_SCREEN_OCR_FALLBACK, next).apply();
-            refresh();
-        });
+        ocrFallback.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_OCR_FALLBACK, true));
         modeCard.addView(ocrFallback, matchWrap());
 
+        smartOcr = secondaryButton("");
+        smartOcr.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_SMART_OCR, false));
+        modeCard.addView(smartOcr, matchWrap());
+
         skipTarget = secondaryButton("");
-        skipTarget.setOnClickListener(v -> {
-            boolean next = !prefs.getBoolean(
-                ScreenTranslationAccessibilityService.PREF_SCREEN_SKIP_TARGET, true);
-            prefs.edit().putBoolean(
-                ScreenTranslationAccessibilityService.PREF_SCREEN_SKIP_TARGET, next).apply();
-            refresh();
-        });
+        skipTarget.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_SKIP_TARGET, true));
         modeCard.addView(skipTarget, matchWrap());
+
+        incrementalCache = secondaryButton("");
+        incrementalCache.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_INCREMENTAL_CACHE, true));
+        modeCard.addView(incrementalCache, matchWrap());
+
+        LinearLayout chatCard = card(root);
+        chatCard.addView(sectionTitle("聊天 App"));
+        TextView chatTip = text(
+            "Telegram、WhatsApp、LINE、Messenger、微信等，只要聊天文字能被无障碍读取，就会跟随页面变化自动翻译。"
+                + "输入框不会在你打字时触发整屏翻译。\n\n"
+                + "发送前翻译：先点一下聊天输入框并输入中文（或你的目标语言），再双击“译”悬浮球。浮译会按“原语言”设置反向翻译并替换输入框，发送前仍由你确认。",
+            13, Color.rgb(205, 194, 224));
+        chatTip.setPadding(0, dp(6), 0, dp(8));
+        chatCard.addView(chatTip);
+
+        inputReverse = secondaryButton("");
+        inputReverse.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_INPUT_REVERSE, true));
+        chatCard.addView(inputReverse, matchWrap());
 
         LinearLayout languageCard = card(root);
         languageCard.addView(sectionTitle("语言与翻译引擎"));
@@ -117,27 +124,26 @@ public final class ScreenTranslationActivity extends Activity {
         api.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
         languageCard.addView(api, matchWrap());
 
-        LinearLayout usageCard = card(root);
-        usageCard.addView(sectionTitle("怎么用"));
-        TextView usage = text(
-            "1. 先在本页打开系统无障碍设置并启用“浮译 · 全屏翻译”。\n"
-                + "2. 返回要翻译的 App。\n"
-                + "3. 轻点“译”悬浮球，译文会按原文字位置覆盖显示。\n"
-                + "4. 长按悬浮球进入连续模式，页面变化后会自动重新翻译。\n"
-                + "5. 切换到别的 App 时，旧覆盖层会自动清除。",
-            14, Color.rgb(210, 201, 226));
-        usage.setPadding(0, dp(7), 0, 0);
-        usageCard.addView(usage);
-
-        TextView note = text(
-            "游戏、视频内嵌字幕、Canvas/OpenGL 等页面通常没有无障碍文字节点，会走无障碍截图 OCR。"
-                + "受保护页面（例如部分银行/DRM 内容）仍可能禁止截图。",
-            13, Color.rgb(176, 166, 199));
-        note.setPadding(dp(2), dp(4), dp(2), 0);
-        root.addView(note);
+        LinearLayout coverageCard = card(root);
+        coverageCard.addView(sectionTitle("适用范围"));
+        TextView coverage = text(
+            "✅ 浏览器网页：普通网页文字、菜单、按钮、滚动内容\n"
+                + "✅ 手机界面：系统设置和大多数普通 App\n"
+                + "✅ 聊天软件：聊天气泡、新出现的消息、普通输入框\n"
+                + "✅ 图片/视频字幕/Canvas：无文字节点时可尝试 OCR\n\n"
+                + "⚠ 银行、密码框、DRM、FLAG_SECURE 页面和部分游戏可能禁止读取或截图，无法保证 100% 覆盖。",
+            13, Color.rgb(205, 194, 224));
+        coverage.setPadding(0, dp(6), 0, 0);
+        coverageCard.addView(coverage);
 
         refresh();
         return scroll;
+    }
+
+    private void toggle(String key, boolean defaultValue) {
+        boolean next = !prefs.getBoolean(key, defaultValue);
+        prefs.edit().putBoolean(key, next).apply();
+        refresh();
     }
 
     private void refresh() {
@@ -149,15 +155,19 @@ public final class ScreenTranslationActivity extends Activity {
                 + "\n最近：" + (last == null ? "" : last));
         }
 
-        boolean auto = prefs.getBoolean(
-            ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
-        boolean ocr = prefs.getBoolean(
-            ScreenTranslationAccessibilityService.PREF_SCREEN_OCR_FALLBACK, true);
-        boolean skip = prefs.getBoolean(
-            ScreenTranslationAccessibilityService.PREF_SCREEN_SKIP_TARGET, true);
-        if (continuous != null) continuous.setText("连续翻译：" + (auto ? "✅ 开" : "关闭"));
+        boolean auto = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
+        boolean ocr = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_OCR_FALLBACK, true);
+        boolean smart = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_SMART_OCR, false);
+        boolean skip = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_SKIP_TARGET, true);
+        boolean cache = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_INCREMENTAL_CACHE, true);
+        boolean reverse = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_INPUT_REVERSE, true);
+
+        if (continuous != null) continuous.setText("全局自动翻译：" + (auto ? "✅ 开" : "关闭"));
         if (ocrFallback != null) ocrFallback.setText("无障碍截图 OCR 兜底：" + (ocr ? "✅ 开" : "关闭"));
+        if (smartOcr != null) smartOcr.setText("少量文字时强制 OCR 增强：" + (smart ? "✅ 开" : "关闭"));
         if (skipTarget != null) skipTarget.setText("跳过已经是目标语言的文字：" + (skip ? "✅ 开" : "关闭"));
+        if (incrementalCache != null) incrementalCache.setText("网页 / 聊天增量缓存：" + (cache ? "✅ 开" : "关闭"));
+        if (inputReverse != null) inputReverse.setText("双击悬浮球发送前反向翻译：" + (reverse ? "✅ 开" : "关闭"));
 
         if (language != null) {
             int source = clampLanguageIndex(prefs.getInt("source_index", 2));
@@ -166,11 +176,12 @@ public final class ScreenTranslationActivity extends Activity {
             if (engine == null) engine = TranslationRouter.AUTO;
             SecureConfig secure = new SecureConfig(this);
             language.setText(
-                "OCR 源语言：" + LanguageOption.ALL[source].label + "\n"
-                    + "目标语言：" + LanguageOption.ALL[target].label + "\n"
+                "对方 / 原语言：" + LanguageOption.ALL[source].label + "\n"
+                    + "我的 / 目标语言：" + LanguageOption.ALL[target].label + "\n"
                     + "当前引擎：" + TranslationRouter.engineLabel(engine) + "\n"
                     + "Azure 账号：" + secure.configuredAzureProfileCount() + " 个\n\n"
-                    + "只要配置了 Azure，全屏文字节点翻译会省略 from 参数，由 Azure 自动识别源语言。"
+                    + "整屏翻译：原语言 → 目标语言。\n"
+                    + "聊天输入框双击反向翻译：目标语言 → 原语言。"
             );
         }
     }

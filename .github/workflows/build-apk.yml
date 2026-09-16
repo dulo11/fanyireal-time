@@ -92,17 +92,18 @@ jobs:
           NOTES="$(printf '%s\n' \
             "浮译 $APP_VERSION 固定签名测试版。" \
             "" \
-            "- 新增全局固定底栏：首页 / 实时 / 全屏 / 模型 / 设置" \
-            "- 新增一站式设置中心，常用功能不再逐层进入" \
-            "- 新增应用界面语言切换，与翻译原语言/目标语言完全分开" \
-            "- 首批界面语言：简繁中文、英语、日语、韩语、越南语、泰语、菲律宾语、马来语、印尼语、法语、德语、西语、葡语、俄语、阿拉伯语" \
-            "- 支持 Android 13+ 应用独立语言设置与跟随系统" \
-            "- 阿拉伯语启用 RTL 布局支持" \
-            "- 翻译语言列表恢复为原有 ML Kit 59 种，不再把国家界面语言与翻译语种混在一起" \
-            "- 保留无障碍全屏翻译、Azure 账号池、离线 ASR、ROOT/Shizuku 等现有功能" \
+            "- 全屏翻译升级为全局无障碍翻译：网站 / 系统界面 / 第三方 App / 聊天气泡" \
+            "- 自动模式监听页面变化、新消息和滚动，网页与聊天切换后自动更新" \
+            "- 新增增量翻译缓存，相同文字不重复请求，减少 Azure 字符消耗和页面闪烁" \
+            "- 无障碍节点支持 text 与 contentDescription，提升按钮和部分网页元素覆盖率" \
+            "- 编辑框输入时不触发整屏重译，降低聊天输入过程中的干扰" \
+            "- 双击悬浮球可把当前聊天输入框反向翻译为“原语言”，确认后再发送" \
+            "- 保留无障碍截图 + ML Kit OCR 兜底，并增加少量文字时强制 OCR 增强开关" \
+            "- 无需 MediaProjection，不占用系统录屏会话" \
+            "- 保留 v0.7.0-dev3 的多国语言界面、固定底栏、Azure 账号池、离线 ASR、ROOT/Shizuku" \
             "- 通用 APK 已通过 apksigner 固定签名校验" \
             "" \
-            "稳定回滚：v0.6.0 Release 与 rollback-v0.6.0-stable 分支均已保留。")"
+            "稳定回滚：v0.6.0 Release 与 rollback-v0.6.0-stable 分支均保留。")"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk --clobber
             gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --notes "$NOTES" --latest
