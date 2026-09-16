@@ -2,15 +2,15 @@ package com.zhou.floatingtranslator;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.google.mlkit.nl.languageid.LanguageIdentification;
 import com.google.mlkit.nl.languageid.LanguageIdentifier;
 
-import java.util.Locale;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
-import android.os.Handler;
-import android.os.Looper;
 
 /**
  * Offline-first smart translation router.
@@ -44,7 +44,8 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     // Kept for cloud speech fallback, whose API expects a fixed configured pair.
     private final TranslationRouter speechRouter;
     private volatile boolean closed;
-    private String partnerLanguage;
+    private volatile String partnerLanguage;
+    private volatile String lastDetectedLanguage = "";
     private final Set<TranslationRouter> activeRouters = new HashSet<>();
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -92,6 +93,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
 
         String cleaned = text.trim();
         if (!autoLanguage || languageIdentifier == null) {
+            lastDetectedLanguage = source;
             translatePair(cleaned, source, target, "", callback);
             return;
         }
@@ -118,6 +120,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     private void routeDetected(String text, String detected, Callback callback) {
         String lang = normalizeTag(detected);
         if (!isSupportedTranslationLanguage(lang)) lang = "";
+        lastDetectedLanguage = lang;
 
         // My language -> last detected partner language.
         if (!lang.isEmpty() && sameLanguage(lang, target)) {
@@ -141,29 +144,39 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     }
 
     public String partnerLanguage() { return partnerLanguage; }
+    public String lastDetectedLanguage() { return lastDetectedLanguage; }
 
     /** A button-labelled turn has a fixed direction even when language detection is uncertain. */
     public void translateTurn(String text, boolean partnerSpoke, String detectedLanguage, Callback callback) {
         if (closed) return;
         if (text == null || text.trim().isEmpty()) { callback.onError("没有可翻译文字"); return; }
         if (!partnerSpoke) {
+            lastDetectedLanguage = target;
             translatePair(text.trim(), target, partnerLanguage, " · 我→对方", callback);
             return;
         }
         String hint = normalizeTag(detectedLanguage);
         if (isSupportedTranslationLanguage(hint) && !sameLanguage(hint, target)) {
+            lastDetectedLanguage = hint;
             partnerLanguage = hint;
             translatePair(text.trim(), hint, target, " · 对方→我", callback);
         } else if (languageIdentifier != null) {
             languageIdentifier.identifyLanguage(text.trim()).addOnSuccessListener(code -> {
                 if (closed) return;
                 String lang = normalizeTag(code);
+                if (isSupportedTranslationLanguage(lang)) lastDetectedLanguage = lang;
                 if (isSupportedTranslationLanguage(lang) && !sameLanguage(lang, target)) partnerLanguage = lang;
                 translatePair(text.trim(), partnerLanguage, target, " · 对方→我", callback);
             }).addOnFailureListener(e -> {
-                if (!closed) translatePair(text.trim(), partnerLanguage, target, " · 备用语言", callback);
+                if (!closed) {
+                    lastDetectedLanguage = partnerLanguage;
+                    translatePair(text.trim(), partnerLanguage, target, " · 备用语言", callback);
+                }
             });
-        } else translatePair(text.trim(), partnerLanguage, target, " · 对方→我", callback);
+        } else {
+            lastDetectedLanguage = partnerLanguage;
+            translatePair(text.trim(), partnerLanguage, target, " · 对方→我", callback);
+        }
     }
 
     private void translatePair(String text, String from, String to, String suffix, Callback result) {
@@ -229,11 +242,11 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
                 if (closed || finished[0]) return;
                 finalSelected.translate(text, new TranslationRouter.Callback() {
                     @Override public void onSuccess(String translated, String engineName) {
-                            callback.onSuccess(translated, engineName + " · 离线失败后兜底" + suffix);
+                        callback.onSuccess(translated, engineName + " · 离线失败后兜底" + suffix);
                     }
 
                     @Override public void onError(String cloudError) {
-                            callback.onError("ML Kit：" + localError + "；备用：" + cloudError);
+                        callback.onError("ML Kit：" + localError + "；备用：" + cloudError);
                     }
                 });
             }
@@ -254,12 +267,12 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         return !normalized.isEmpty() && !"und".equals(normalized);
     }
 
-    private static boolean sameLanguage(String a, String b) {
+    static boolean sameLanguage(String a, String b) {
         String x = normalizeTag(a);
         String y = normalizeTag(b);
         if (x.equals(y)) return true;
         if (("fil".equals(x) || "tl".equals(x)) && ("fil".equals(y) || "tl".equals(y))) return true;
-        if (("he".equals(x) || "iw".equals(x)) && ("he".equals(y) || "iw".equals(y))) return true;
+        if (("he".equals(x) || "iw".equals(y)) && ("he".equals(y) || "iw".equals(x))) return true;
         if (("id".equals(x) || "in".equals(x)) && ("id".equals(y) || "in".equals(y))) return true;
         return false;
     }
