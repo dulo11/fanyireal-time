@@ -22,6 +22,7 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
+        <activity android:name=".FaceToFaceActivity" android:exported="false" />
         <activity android:name=".AppLanguageActivity" android:exported="false" />
         <activity android:name=".SettingsHubActivity" android:exported="false" />
         <activity android:name=".HistoryActivity" android:exported="false" />
