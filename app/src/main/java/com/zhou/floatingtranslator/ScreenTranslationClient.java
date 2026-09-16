@@ -28,9 +28,9 @@ import java.util.concurrent.Executors;
  * Batch text translator used by accessibility full-screen translation.
  *
  * Azure is preferred when configured because its /translate endpoint accepts a JSON array and can
- * auto-detect the source language when the "from" query parameter is omitted. This keeps a full
- * screen to one network request instead of one request per TextView. If Azure is not configured,
- * the current TranslationRouter engine is used sequentially as a compatibility fallback.
+ * auto-detect the source language when the "from" query parameter is omitted. If Azure is not
+ * configured, v0.7.2 uses OfflineFirstTranslationRouter per block so ML Kit Language ID can still
+ * auto-detect each source language locally before selecting the translation pair.
  */
 public final class ScreenTranslationClient implements AutoCloseable {
     public static final class Result {
@@ -160,27 +160,26 @@ public final class ScreenTranslationClient implements AutoCloseable {
         });
     }
 
+    /**
+     * No-Azure fallback. Each block is language-identified locally, so a page containing Japanese,
+     * English and Vietnamese can all be translated to the same configured target without manually
+     * changing the source spinner. The configured source remains only the ambiguity fallback.
+     */
     private void translateWithCurrentEngine(List<String> texts, String targetLanguage, Callback callback) {
         int sourceIndex = clampIndex(prefs.getInt("source_index", 2));
-        String source = LanguageOption.ALL[sourceIndex].mlKitTag;
-        String target = targetLanguage;
+        String fallbackSource = LanguageOption.ALL[sourceIndex].mlKitTag;
         String engine = prefs.getString("engine_id", TranslationRouter.AUTO);
         if (engine == null) engine = TranslationRouter.AUTO;
 
-        if (source.equals(target)) {
-            List<Result> same = new ArrayList<>(texts.size());
-            for (String text : texts) same.add(new Result(source, text));
-            callback.onSuccess(same, "无需翻译");
-            return;
-        }
-
-        TranslationRouter router = new TranslationRouter(context, source, target, engine);
+        OfflineFirstTranslationRouter router = new OfflineFirstTranslationRouter(
+            context, fallbackSource, targetLanguage, engine);
         List<Result> out = new ArrayList<>(texts.size());
-        translateFallbackNext(router, texts, source, 0, out, callback);
+        translateFallbackNext(router, texts, fallbackSource, 0, out, callback);
     }
 
-    private void translateFallbackNext(TranslationRouter router, List<String> texts, String source,
-                                       int index, List<Result> out, Callback callback) {
+    private void translateFallbackNext(OfflineFirstTranslationRouter router, List<String> texts,
+                                       String fallbackSource, int index, List<Result> out,
+                                       Callback callback) {
         if (closed) {
             router.close();
             callback.onError("全屏翻译已停止");
@@ -192,10 +191,12 @@ public final class ScreenTranslationClient implements AutoCloseable {
             callback.onSuccess(out, name);
             return;
         }
-        router.translate(texts.get(index), new TranslationRouter.Callback() {
+        router.translate(texts.get(index), new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
-                out.add(new Result(source, translated));
-                translateFallbackNext(router, texts, source, index + 1, out, callback);
+                String detected = router.lastDetectedLanguage();
+                if (detected == null || detected.trim().isEmpty()) detected = fallbackSource;
+                out.add(new Result(detected, translated));
+                translateFallbackNext(router, texts, fallbackSource, index + 1, out, callback);
             }
 
             @Override public void onError(String message) {
