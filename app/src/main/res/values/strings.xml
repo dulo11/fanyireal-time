@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">浮译</string><string name="screen_translation_service_label">浮译 · 全屏翻译</string>
     <string name="screen_translation_accessibility_desc">读取当前屏幕可访问文字并在原位置显示译文；读不到时可使用无障碍截图 OCR，不使用录屏。</string>
-    <string name="nav_home">首页</string><string name="nav_realtime">实时</string><string name="nav_screen">全屏</string><string name="nav_models">模型</string><string name="nav_settings">设置</string>
+    <string name="nav_home">首页</string><string name="nav_realtime">实时</string><string name="nav_screen">全屏</string><string name="nav_models">模型</string><string name="nav_conversation">对话</string><string name="nav_settings">设置</string>
     <string name="settings_title">设置</string><string name="settings_subtitle">常用设置都集中在这里，减少一层一层进入页面。</string><string name="settings_open">打开</string>
     <string name="settings_app_language">应用语言</string><string name="settings_app_language_desc">切换浮译自己的界面语言，与翻译目标语言分开。</string>
     <string name="settings_translation_engine">翻译引擎 / API</string><string name="settings_translation_engine_desc">Azure、百度、阿里云等翻译服务与密钥。</string>
