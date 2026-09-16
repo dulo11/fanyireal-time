@@ -5,6 +5,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -32,6 +33,7 @@ public final class UpdateChecker implements AutoCloseable {
     public UpdateChecker(Context context) {}
 
     public void check(String currentVersion, Callback callback) {
+        if (closed) return;
         worker.execute(() -> {
             HttpURLConnection connection = null;
             try {
@@ -40,7 +42,7 @@ public final class UpdateChecker implements AutoCloseable {
                 connection.setReadTimeout(15000);
                 connection.setInstanceFollowRedirects(true);
                 connection.setRequestProperty("Accept", "application/vnd.github+json");
-                connection.setRequestProperty("User-Agent", "FloatingTranslator/0.5.1 Android");
+                connection.setRequestProperty("User-Agent", "FloatingTranslator/" + BuildConfig.VERSION_NAME + " Android");
                 int code = connection.getResponseCode();
                 if (code < 200 || code >= 300) throw new IllegalStateException("GitHub HTTP " + code);
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -53,41 +55,30 @@ public final class UpdateChecker implements AutoCloseable {
                 String tag = json.optString("tag_name", "").trim();
                 String latest = tag.startsWith("v") ? tag.substring(1) : tag;
                 String page = json.optString("html_url", LATEST_PAGE);
+                if (json.optBoolean("prerelease") || latest.contains("-"))
+                    throw new IllegalStateException("最新发布被标记为测试版本，请到发布页选择正式版");
+                String assetUrl = "";
+                JSONArray assets = json.optJSONArray("assets");
+                if (assets != null) for (int i = 0; i < assets.length(); i++) {
+                    JSONObject asset = assets.getJSONObject(i);
+                    if ("FloatingTranslator-latest.apk".equals(asset.optString("name"))) {
+                        assetUrl = asset.optString("browser_download_url"); break;
+                    }
+                }
+                if (assetUrl.isEmpty()) throw new IllegalStateException("正式版安装包尚未就绪，请稍后重试");
+                final String apkUrl = assetUrl;
                 boolean newer = compareVersions(latest, currentVersion) > 0;
-                if (!closed) main.post(() -> callback.onResult(latest, page, LATEST_APK, newer));
+                main.post(() -> { if (!closed) callback.onResult(latest, page, apkUrl, newer); });
             } catch (Exception e) {
                 String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                if (!closed) main.post(() -> callback.onError(message));
+                main.post(() -> { if (!closed) callback.onError(message); });
             } finally {
                 if (connection != null) connection.disconnect();
             }
         });
     }
 
-    static int compareVersions(String a, String b) {
-        int[] left = parse(a);
-        int[] right = parse(b);
-        int count = Math.max(left.length, right.length);
-        for (int i = 0; i < count; i++) {
-            int x = i < left.length ? left[i] : 0;
-            int y = i < right.length ? right[i] : 0;
-            if (x != y) return Integer.compare(x, y);
-        }
-        return 0;
-    }
-
-    private static int[] parse(String version) {
-        if (version == null) return new int[]{0};
-        String cleaned = version.trim().replaceFirst("^[vV]", "");
-        String[] parts = cleaned.split("[.-]");
-        int[] out = new int[Math.max(1, parts.length)];
-        for (int i = 0; i < parts.length; i++) {
-            String digits = parts[i].replaceAll("[^0-9]", "");
-            try { out[i] = digits.isEmpty() ? 0 : Integer.parseInt(digits); }
-            catch (Exception ignored) { out[i] = 0; }
-        }
-        return out;
-    }
+    static int compareVersions(String a, String b) { return AppVersion.compare(a, b); }
 
     @Override public void close() {
         closed = true;

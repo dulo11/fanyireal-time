@@ -66,8 +66,7 @@ public final class RootCallTranslationService extends Service {
     private long cloudChunkStartedAt;
     private String lastStreamTranslated = "";
     private boolean translateBusy;
-    private String pendingText = "";
-    private boolean pendingFinal;
+    private final SpeechQueue speechQueue = new SpeechQueue();
 
     private WindowManager windowManager;
     private View overlay;
@@ -127,8 +126,7 @@ public final class RootCallTranslationService extends Service {
         running = true;
         paused = false;
         translateBusy = false;
-        pendingText = "";
-        pendingFinal = false;
+        speechQueue.clear();
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoModels.clear();
@@ -231,7 +229,7 @@ public final class RootCallTranslationService extends Service {
                     diagAsr = "ASR：" + meta.name + " · " + preview(cleaned);
                     renderDiag();
                     if (showOriginal && original != null) original.setText("原文：" + cleaned);
-                    queueTranslate(cleaned, true);
+                    queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message) {
                     diagAsr = "ASR：" + meta.name + " 失败 · " + message;
@@ -341,20 +339,28 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void queueTranslate(String text, boolean finalResult) {
+        queueTranslate(text, finalResult, "");
+    }
+
+    private void queueTranslate(String text, boolean finalResult, String language) {
         if (!running || text == null || text.trim().isEmpty()) return;
-        String cleaned = text.trim();
-        if (translateBusy) {
-            if (finalResult) { pendingText = cleaned; pendingFinal = true; }
-            else if (!pendingFinal) pendingText = cleaned;
-            return;
-        }
+        speechQueue.offer(text.trim(), finalResult, language);
+        drainTranslateQueue();
+    }
+
+    private void drainTranslateQueue() {
+        if (!running || translateBusy) return;
+        SpeechQueue.Item next = speechQueue.poll();
+        if (next == null) return;
+        String cleaned = next.text;
         OfflineFirstTranslationRouter current = translator;
         if (current == null) return;
         translateBusy = true;
         diagTranslation = "翻译中";
         renderDiag();
-        current.translate(cleaned, new OfflineFirstTranslationRouter.Callback() {
+        current.translate(cleaned, next.language, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
+                if (!running || translator != current) return;
                 diagTranslation = engineName;
                 renderDiag();
                 if (translated != null) translated.setText("译文：" + out);
@@ -363,6 +369,7 @@ public final class RootCallTranslationService extends Service {
                 finishTranslate();
             }
             @Override public void onError(String message) {
+                if (!running || translator != current) return;
                 diagTranslation = "翻译失败：" + message;
                 renderDiag();
                 if (translated != null) translated.setText("翻译失败：" + message);
@@ -373,13 +380,7 @@ public final class RootCallTranslationService extends Service {
 
     private void finishTranslate() {
         translateBusy = false;
-        if (!pendingText.isEmpty()) {
-            String next = pendingText;
-            boolean fin = pendingFinal;
-            pendingText = "";
-            pendingFinal = false;
-            main.post(() -> queueTranslate(next, fin));
-        }
+        drainTranslateQueue();
     }
 
     private void appendCloudAudio(byte[] bytes, int length, int peak, long now) {
@@ -603,8 +604,7 @@ public final class RootCallTranslationService extends Service {
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         translateBusy = false;
-        pendingText = "";
-        pendingFinal = false;
+        speechQueue.clear();
     }
 
     private void stopEverything() {

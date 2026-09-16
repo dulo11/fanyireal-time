@@ -2,7 +2,7 @@ name: CI Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
   workflow_dispatch:
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle clean assembleRelease --stacktrace
+        run: gradle clean testDebugUnitTest lintRelease assembleRelease --stacktrace
 
       - name: Copy signed APK
         run: |
@@ -67,3 +67,13 @@ jobs:
           path: ${{ env.APK_NAME }}
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-reports
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-release.*
+          if-no-files-found: ignore

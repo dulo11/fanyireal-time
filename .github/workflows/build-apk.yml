@@ -8,6 +8,10 @@ on:
       - "app/**"
       - ".github/workflows/build-apk.yml"
 
+concurrency:
+  group: signed-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -59,7 +63,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle clean assembleRelease --stacktrace
+        run: gradle clean testDebugUnitTest lintRelease assembleRelease --stacktrace
 
       - name: Copy universal APK
         run: |
@@ -76,7 +80,8 @@ jobs:
       - name: Show APK information
         run: |
           ls -lh "$APK_NAME"
-          sha256sum "$APK_NAME"
+          sha256sum "$APK_NAME" FloatingTranslator-latest.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Upload signed APK artifact
         uses: actions/upload-artifact@v4
@@ -86,32 +91,45 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Verify signing continuity with dev5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/previous-release"
+          gh release download v0.7.0-dev5 --pattern 'FloatingTranslator-v0.7.0-dev5-release.apk' --dir "$RUNNER_TEMP/previous-release"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --print-certs "$RUNNER_TEMP/previous-release/FloatingTranslator-v0.7.0-dev5-release.apk" > "$RUNNER_TEMP/previous-cert.txt"
+          "$APKSIGNER" verify --print-certs "$APK_NAME" > "$RUNNER_TEMP/current-cert.txt"
+          sed -n '/Signer #1 certificate SHA-256 digest:/p' "$RUNNER_TEMP/previous-cert.txt" > "$RUNNER_TEMP/previous-digest.txt"
+          sed -n '/Signer #1 certificate SHA-256 digest:/p' "$RUNNER_TEMP/current-cert.txt" > "$RUNNER_TEMP/current-digest.txt"
+          test -s "$RUNNER_TEMP/previous-digest.txt"
+          diff "$RUNNER_TEMP/previous-digest.txt" "$RUNNER_TEMP/current-digest.txt"
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="$(printf '%s\n' \
-            "浮译 $APP_VERSION 固定签名开发测试版。" \
-            "" \
-            "- 新增面对面翻译：对方说话 / 我说话双区界面，支持自动朗读译文" \
-            "- 底栏调整为：首页 / 实时 / 全屏 / 对话 / 设置；模型中心保留在设置中" \
-            "- 默认启用自动多语言：无需每次手工切换原语言" \
-            "- 外语识别后自动翻译到“我的语言”，并记住最近的对方语言" \
-            "- 你说“我的语言”时自动反向翻译到对方最近使用的语言" \
-            "- 多语言 ASR 检测结果可作为自动路由依据；无结果时用 ML Kit Language ID 判断" \
-            "- 保留全局无障碍翻译、聊天输入框反向翻译、OCR 兜底、Azure 账号池" \
-            "- 保留 ROOT / Shizuku 内部通话、外放麦克风通话和离线 ASR" \
-            "- 通用 APK 已通过 apksigner 固定签名校验" \
-            "" \
-            "说明：这是 dev5 开发测试版，不替代稳定回滚版 v0.6.0。")"
+          test -s RELEASE_NOTES.md
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk --clobber
-            gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --notes "$NOTES" --latest
-          else
-            gh release create "$RELEASE_TAG" \
-              "$APK_NAME" FloatingTranslator-latest.apk \
-              --target "$GITHUB_SHA" \
-              --title "FloatingTranslator $RELEASE_TAG" \
-              --notes "$NOTES" \
-              --latest
+            echo "Release already exists; use a new version instead of replacing published APKs."
+            exit 1
           fi
+          if [[ "$APP_VERSION" == *-* ]]; then
+            gh release create "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk SHA256SUMS.txt \
+              --target "$GITHUB_SHA" --title "FloatingTranslator $RELEASE_TAG" \
+              --notes-file RELEASE_NOTES.md --prerelease --latest=false
+          else
+            gh release create "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk SHA256SUMS.txt \
+              --target "$GITHUB_SHA" --title "FloatingTranslator $RELEASE_TAG" \
+              --notes-file RELEASE_NOTES.md --latest
+          fi
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verification-reports
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-release.*
+          if-no-files-found: ignore

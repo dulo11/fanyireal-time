@@ -148,6 +148,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                         }
                     }
                 }
+                synchronized (this) {
                 if (closed) {
                     r.release();
                     if (preparedVad != null) preparedVad.release();
@@ -157,11 +158,12 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 vad = preparedVad;
                 neuralVad = preparedVad != null;
                 ready = true;
+                }
                 String suffix = loadedPrecision.isEmpty() ? "" : " · " + loadedPrecision;
                 String vadSuffix = neuralVad ? " · Silero VAD" : " · 兼容切句";
                 String hotwordSuffix = hotwords.isEmpty() ? "" : " · 热词" + hotwords.size() + "个";
-                main.post(() -> callback.onReady(meta.name + suffix + " · " + profileLabel()
-                    + vadSuffix + hotwordSuffix));
+                main.post(() -> { if (!closed) callback.onReady(meta.name + suffix + " · " + profileLabel()
+                    + vadSuffix + hotwordSuffix); });
             } catch (Throwable e) {
                 postError("模型加载失败：" + safe(e));
             }
@@ -260,6 +262,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     public synchronized void flush() {
+        if (closed) return;
         Vad localVad = vad;
         if (neuralVad && localVad != null) {
             if (vadWindowFill > 0) {
@@ -319,7 +322,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 String out = chosenVisible == null ? "" : chosenVisible.trim();
                 if (!out.isEmpty()) {
                     String lang = chosen.lang == null ? "" : chosen.lang;
-                    main.post(() -> callback.onText(out, lang));
+                    main.post(() -> { if (!closed) callback.onText(out, lang); });
                 }
             } catch (Throwable e) {
                 postError("识别失败：" + safe(e));
@@ -790,11 +793,11 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     private void postStatus(String message) {
-        main.post(() -> callback.onStatus(message));
+        main.post(() -> { if (!closed) callback.onStatus(message); });
     }
 
     private void postError(String message) {
-        main.post(() -> callback.onError(message));
+        main.post(() -> { if (!closed) callback.onError(message); });
     }
 
     private static String safe(Throwable e) {
@@ -819,9 +822,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         OfflineRecognizer r = recognizer;
         recognizer = null;
-        if (r != null) {
-            try { r.release(); } catch (Throwable ignored) {}
-        }
-        worker.shutdownNow();
+        worker.execute(() -> {
+            if (r != null) try { r.release(); } catch (Throwable ignored) {}
+        });
+        worker.shutdown();
     }
 }

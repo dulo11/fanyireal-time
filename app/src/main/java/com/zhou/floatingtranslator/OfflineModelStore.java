@@ -5,6 +5,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
@@ -118,22 +119,26 @@ public final class OfflineModelStore implements AutoCloseable {
                 extractTarBz2(archive, staging);
                 File payload = choosePayloadRoot(staging, model.archiveRootHint);
                 if (!containsOnnx(payload)) throw new IllegalStateException("模型包里没有找到 ONNX 文件");
-                File marker = new File(staging, ".ready");
-                try (OutputStream out = new FileOutputStream(marker)) {
-                    out.write((model.id + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
-                deleteRecursively(target);
-                if (!staging.renameTo(target)) {
-                    copyDirectory(staging, target);
-                    deleteRecursively(staging);
-                }
-                if (!new File(target, ".ready").isFile()) {
+                if (closed) throw new IllegalStateException("安装已取消");
+                // Publish a ready marker only after the complete directory has been moved.
+                File previous = new File(base, model.id + ".previous");
+                if (previous.exists() && !deleteRecursively(previous)) throw new IllegalStateException("无法清理旧备份");
+                boolean hadPrevious = target.exists();
+                if (hadPrevious && !target.renameTo(previous)) throw new IllegalStateException("无法备份已有模型");
+                try {
+                    if (!staging.renameTo(target)) throw new IllegalStateException("无法完成模型安装");
                     try (OutputStream out = new FileOutputStream(new File(target, ".ready"))) {
                         out.write((model.id + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     }
+                    deleteRecursively(previous);
+                } catch (Exception installError) {
+                    deleteRecursively(target);
+                    if (hadPrevious && !previous.renameTo(target))
+                        throw new IllegalStateException("安装失败，旧模型保留在备份目录", installError);
+                    throw installError;
                 }
                 if (archive.exists()) archive.delete();
-                main.post(() -> callback.onSuccess(target));
+                main.post(() -> { if (!closed) callback.onSuccess(target); });
             } catch (Exception e) {
                 deleteRecursively(staging);
                 if (downloadCompleted && archive.exists()) archive.delete();
@@ -196,6 +201,11 @@ public final class OfflineModelStore implements AutoCloseable {
             if (code < 200 || code >= 300) throw new IllegalStateException("模型下载 HTTP " + code);
 
             boolean append = existing > 0 && code == HttpURLConnection.HTTP_PARTIAL;
+            if (code == HttpURLConnection.HTTP_PARTIAL) {
+                String range = connection.getHeaderField("Content-Range");
+                if (range == null || !range.startsWith("bytes " + existing + "-"))
+                    throw new IllegalStateException("下载源返回了错误的断点位置，请清理未完成下载后重试");
+            }
             long done = append ? existing : 0L;
             long responseLength = connection.getContentLengthLong();
             long total = responseLength > 0 ? done + responseLength : -1L;
@@ -218,10 +228,11 @@ public final class OfflineModelStore implements AutoCloseable {
                         final int p = percent;
                         final long d = done;
                         final long t = total;
-                        main.post(() -> callback.onProgress(p, d, t));
+                        main.post(() -> { if (!closed) callback.onProgress(p, d, t); });
                     }
                 }
                 if (closed) throw new IllegalStateException("下载已取消");
+                if (total > 0 && done != total) throw new java.io.EOFException("下载未完成，正在保留断点");
             }
         } finally {
             if (connection != null) connection.disconnect();
@@ -236,6 +247,12 @@ public final class OfflineModelStore implements AutoCloseable {
             ArchiveEntry entry;
             byte[] buffer = new byte[128 * 1024];
             while ((entry = tar.getNextEntry()) != null) {
+                if (closed || Thread.currentThread().isInterrupted()) throw new IllegalStateException("解压已取消");
+                if (entry instanceof TarArchiveEntry) {
+                    TarArchiveEntry tarEntry = (TarArchiveEntry) entry;
+                    if (!tarEntry.isFile() && !tarEntry.isDirectory())
+                        throw new SecurityException("模型包包含不支持的链接或特殊文件");
+                }
                 String name = entry.getName();
                 if (name == null || name.isEmpty()) continue;
                 File out = new File(destination, name);
@@ -254,6 +271,7 @@ public final class OfflineModelStore implements AutoCloseable {
                 try (OutputStream os = new BufferedOutputStream(new FileOutputStream(out), 128 * 1024)) {
                     int n;
                     while ((n = tar.read(buffer)) >= 0) {
+                        if (closed) throw new IllegalStateException("解压已取消");
                         if (n > 0) os.write(buffer, 0, n);
                     }
                 }

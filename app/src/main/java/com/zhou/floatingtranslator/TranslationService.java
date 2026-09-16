@@ -147,8 +147,8 @@ public class TranslationService extends Service implements RecognitionListener {
     private String lastStreamTranslated = "";
 
     private boolean speechTranslationBusy;
-    private String pendingSpeechText = "";
-    private boolean pendingSpeechFinal;
+    private final SpeechQueue speechQueue = new SpeechQueue();
+    private String segmentLanguage = "";
 
     private WindowManager windowManager;
     private View overlay;
@@ -188,6 +188,7 @@ public class TranslationService extends Service implements RecognitionListener {
         if (!ACTION_START.equals(action)) return START_NOT_STICKY;
 
         stopPipelineOnly();
+        removeOverlay();
 
         inputMode = intent.getStringExtra(EXTRA_INPUT_MODE);
         if (!INPUT_MICROPHONE.equals(inputMode)) inputMode = INPUT_PLAYBACK;
@@ -232,8 +233,7 @@ public class TranslationService extends Service implements RecognitionListener {
         lastOcrText = "";
         pendingOcrText = "";
         speechTranslationBusy = false;
-        pendingSpeechText = "";
-        pendingSpeechFinal = false;
+        speechQueue.clear();
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
@@ -296,10 +296,11 @@ public class TranslationService extends Service implements RecognitionListener {
             MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
             projection = manager.getMediaProjection(resultCode, resultData);
             if (projection == null) throw new IllegalStateException("MediaProjection 返回空对象");
+            final MediaProjection activeProjection = projection;
             projection.registerCallback(new MediaProjection.Callback() {
                 @Override public void onStop() {
                     main.post(() -> {
-                        if (running) {
+                        if (running && projection == activeProjection) {
                             setDiagScreen("屏幕捕获被系统停止");
                             stopEverything();
                         }
@@ -397,7 +398,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     String lang = detectedLanguage == null || detectedLanguage.isEmpty() ? "" : " · " + detectedLanguage;
                     setDiagSpeech("ASR：" + meta.name + lang + " · " + preview(cleaned));
                     if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
-                    queueSpeechTranslation(cleaned, true);
+                    queueSpeechTranslation(cleaned, true, detectedLanguage);
                 }
 
                 @Override public void onError(String message) {
@@ -619,19 +620,22 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void queueSpeechTranslation(String text, boolean finalResult) {
+        queueSpeechTranslation(text, finalResult, "");
+    }
+
+    private void queueSpeechTranslation(String text, boolean finalResult, String language) {
         if (!running || text == null || text.trim().isEmpty()) return;
-        String cleaned = text.trim();
-        if (speechTranslationBusy) {
-            if (finalResult) {
-                pendingSpeechText = cleaned;
-                pendingSpeechFinal = true;
-            } else if (!pendingSpeechFinal) {
-                pendingSpeechText = cleaned;
-            }
-            return;
-        }
+        speechQueue.offer(text.trim(), finalResult, language);
+        drainSpeechQueue();
+    }
+
+    private void drainSpeechQueue() {
+        if (!running || speechTranslationBusy) return;
+        SpeechQueue.Item next = speechQueue.poll();
+        if (next == null) return;
         speechTranslationBusy = true;
-        translateSpeechSegmented(cleaned, finalResult);
+        segmentLanguage = next.language;
+        translateSpeechSegmented(next.text, next.complete);
     }
 
     private void translateSpeechSegmented(String text, boolean finalResult) {
@@ -653,8 +657,9 @@ public class TranslationService extends Service implements RecognitionListener {
         if (current == null) { finishSpeechTranslation(); return; }
         if (index == 0) setDiagTranslation("翻译中 · " + (finalResult ? "完整句" : "流式片段"));
         String part = parts.get(index);
-        current.translate(part, new OfflineFirstTranslationRouter.Callback() {
+        current.translate(part, segmentLanguage, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
+                if (!running || translator != current) return;
                 if (out.length() > 0) out.append('\n');
                 out.append(translated);
                 setDiagTranslation((finalResult ? "最终" : "流式") + " · " + engineName
@@ -662,6 +667,7 @@ public class TranslationService extends Service implements RecognitionListener {
                 translatePart(parts, index + 1, out, original, finalResult);
             }
             @Override public void onError(String message) {
+                if (!running || translator != current) return;
                 setDiagTranslation("翻译失败：" + message);
                 if (translatedText != null) translatedText.setText("翻译失败：" + message);
                 finishSpeechTranslation();
@@ -671,13 +677,7 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void finishSpeechTranslation() {
         speechTranslationBusy = false;
-        if (!pendingSpeechText.isEmpty()) {
-            String next = pendingSpeechText;
-            boolean nextFinal = pendingSpeechFinal;
-            pendingSpeechText = "";
-            pendingSpeechFinal = false;
-            main.post(() -> queueSpeechTranslation(next, nextFinal));
-        }
+        drainSpeechQueue();
     }
 
     private List<String> splitForTranslation(String text, int maxChars) {
@@ -1096,8 +1096,7 @@ public class TranslationService extends Service implements RecognitionListener {
         ocrBusy = false;
         pendingOcrText = "";
         speechTranslationBusy = false;
-        pendingSpeechText = "";
-        pendingSpeechFinal = false;
+        speechQueue.clear();
     }
 
     private void stopEverything() {

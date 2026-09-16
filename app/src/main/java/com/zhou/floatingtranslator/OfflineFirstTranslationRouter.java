@@ -7,6 +7,10 @@ import com.google.mlkit.nl.languageid.LanguageIdentification;
 import com.google.mlkit.nl.languageid.LanguageIdentifier;
 
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
+import android.os.Handler;
+import android.os.Looper;
 
 /**
  * Offline-first smart translation router.
@@ -40,7 +44,10 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
 
     // Kept for cloud speech fallback, whose API expects a fixed configured pair.
     private final TranslationRouter speechRouter;
-    private boolean closed;
+    private volatile boolean closed;
+    private String partnerLanguage;
+    private final Set<TranslationRouter> activeRouters = new HashSet<>();
+    private final Handler main = new Handler(Looper.getMainLooper());
 
     public OfflineFirstTranslationRouter(Context context, String source, String target, String selectedEngine) {
         this.context = context.getApplicationContext();
@@ -49,6 +56,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
             ? TranslationRouter.AUTO : selectedEngine;
         this.source = normalizeTag(source);
         this.target = normalizeTag(target);
+        this.partnerLanguage = this.source;
         this.autoLanguage = prefs.getBoolean(PREF_AUTO_LANGUAGE, true);
         this.languageIdentifier = autoLanguage ? LanguageIdentification.getClient() : null;
         this.speechRouter = new TranslationRouter(this.context, this.source, this.target, this.selectedEngine);
@@ -114,7 +122,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
 
         // My language -> last detected partner language.
         if (!lang.isEmpty() && sameLanguage(lang, target)) {
-            String partner = normalizeTag(prefs.getString(PREF_LAST_PARTNER_LANGUAGE, source));
+            String partner = partnerLanguage;
             if (!isSupportedTranslationLanguage(partner) || sameLanguage(partner, target)) partner = source;
             translatePair(text, target, partner,
                 " · 自动双向 " + target + "→" + partner + " · 识别" + lang, callback);
@@ -123,7 +131,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
 
         // Any supported foreign language -> my language, and remember it for the next reply.
         if (!lang.isEmpty() && !sameLanguage(lang, target)) {
-            prefs.edit().putString(PREF_LAST_PARTNER_LANGUAGE, lang).apply();
+            partnerLanguage = lang;
             translatePair(text, lang, target,
                 " · 自动识别 " + lang + "→" + target, callback);
             return;
@@ -133,18 +141,65 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         translatePair(text, source, target, " · 自动识别不确定，使用备用 " + source + "→" + target, callback);
     }
 
-    private void translatePair(String text, String from, String to, String suffix, Callback callback) {
-        if (sameLanguage(from, to)) {
-            callback.onSuccess(text, "无需翻译" + suffix);
+    public String partnerLanguage() { return partnerLanguage; }
+
+    /** A button-labelled turn has a fixed direction even when language detection is uncertain. */
+    public void translateTurn(String text, boolean partnerSpoke, String detectedLanguage, Callback callback) {
+        if (closed) return;
+        if (text == null || text.trim().isEmpty()) { callback.onError("没有可翻译文字"); return; }
+        if (!partnerSpoke) {
+            translatePair(text.trim(), target, partnerLanguage, " · 我→对方", callback);
             return;
         }
+        String hint = normalizeTag(detectedLanguage);
+        if (isSupportedTranslationLanguage(hint) && !sameLanguage(hint, target)) {
+            partnerLanguage = hint;
+            translatePair(text.trim(), hint, target, " · 对方→我", callback);
+        } else if (languageIdentifier != null) {
+            languageIdentifier.identifyLanguage(text.trim()).addOnSuccessListener(code -> {
+                if (closed) return;
+                String lang = normalizeTag(code);
+                if (isSupportedTranslationLanguage(lang) && !sameLanguage(lang, target)) partnerLanguage = lang;
+                translatePair(text.trim(), partnerLanguage, target, " · 对方→我", callback);
+            }).addOnFailureListener(e -> {
+                if (!closed) translatePair(text.trim(), partnerLanguage, target, " · 备用语言", callback);
+            });
+        } else translatePair(text.trim(), partnerLanguage, target, " · 对方→我", callback);
+    }
 
+    private void translatePair(String text, String from, String to, String suffix, Callback result) {
+        if (closed) return;
+        if (sameLanguage(from, to)) { result.onSuccess(text, "无需翻译" + suffix); return; }
+        // One completion, bounded wait, and no callbacks into a stopped screen/service.
+        final Set<TranslationRouter> requestRouters = new HashSet<>();
+        final boolean[] finished = {false};
+        final Runnable[] timeout = {null};
+        Callback callback = new Callback() {
+            private boolean finish() {
+                if (finished[0]) return false;
+                finished[0] = true;
+                main.removeCallbacks(timeout[0]);
+                for (TranslationRouter router : requestRouters) {
+                    activeRouters.remove(router);
+                    router.close();
+                }
+                return !closed;
+            }
+            public void onSuccess(String value, String engine) { if (finish()) result.onSuccess(value, engine); }
+            public void onError(String error) { if (finish()) result.onError(error); }
+        };
+        timeout[0] = () -> callback.onError("翻译超时，请检查网络或先下载离线语言包后重试");
+        main.postDelayed(timeout[0], 60000L);
         TranslationRouter local;
         TranslationRouter selected;
         try {
             local = new TranslationRouter(context, from, to, TranslationRouter.MLKIT);
+            requestRouters.add(local);
+            activeRouters.add(local);
             selected = TranslationRouter.MLKIT.equals(selectedEngine)
                 ? local : new TranslationRouter(context, from, to, selectedEngine);
+            requestRouters.add(selected);
+            activeRouters.add(selected);
         } catch (Exception e) {
             callback.onError("语言路由初始化失败：" + safe(e));
             return;
@@ -155,12 +210,10 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
             TranslationRouter finalLocal = local;
             finalSelected.translate(text, new TranslationRouter.Callback() {
                 @Override public void onSuccess(String translated, String engineName) {
-                    closeRouters(finalLocal, finalSelected);
                     callback.onSuccess(translated, engineName + suffix);
                 }
 
                 @Override public void onError(String message) {
-                    closeRouters(finalLocal, finalSelected);
                     callback.onError(message);
                 }
             });
@@ -171,20 +224,18 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         TranslationRouter finalLocal = local;
         finalLocal.translate(text, new TranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
-                closeRouters(finalLocal, finalSelected);
                 callback.onSuccess(translated, engineName + " · 离线优先" + suffix);
             }
 
             @Override public void onError(String localError) {
+                if (closed || finished[0]) return;
                 finalSelected.translate(text, new TranslationRouter.Callback() {
                     @Override public void onSuccess(String translated, String engineName) {
-                        closeRouters(finalLocal, finalSelected);
-                        callback.onSuccess(translated, engineName + " · 离线失败后兜底" + suffix);
+                            callback.onSuccess(translated, engineName + " · 离线失败后兜底" + suffix);
                     }
 
                     @Override public void onError(String cloudError) {
-                        closeRouters(finalLocal, finalSelected);
-                        callback.onError("ML Kit：" + localError + "；备用：" + cloudError);
+                            callback.onError("ML Kit：" + localError + "；备用：" + cloudError);
                     }
                 });
             }
@@ -233,7 +284,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         return normalized;
     }
 
-    private static String scriptHint(String text) {
+    static String scriptHint(String text) {
         int kana = 0;
         int han = 0;
         int hangul = 0;
@@ -248,8 +299,8 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         }
         if (kana >= 1) return "ja";
         if (hangul >= 1) return "ko";
-        if (han >= 2) return "zh";
-        if (latin >= 3) return "en";
+        // Han is shared by Chinese/Japanese; Latin is shared by many languages.
+        // Keep the configured pair instead of inventing English/Chinese.
         return "";
     }
 
@@ -267,6 +318,9 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     @Override public void close() {
         if (closed) return;
         closed = true;
+        main.removeCallbacksAndMessages(null);
+        for (TranslationRouter router : activeRouters) router.close();
+        activeRouters.clear();
         try { speechRouter.close(); } catch (Exception ignored) {}
         if (languageIdentifier != null) {
             try { languageIdentifier.close(); } catch (Exception ignored) {}

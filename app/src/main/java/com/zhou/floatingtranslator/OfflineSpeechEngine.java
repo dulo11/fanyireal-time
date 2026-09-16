@@ -90,6 +90,11 @@ public final class OfflineSpeechEngine implements AutoCloseable {
         return MODELS.containsKey(normalize(language));
     }
 
+    public static boolean isLanguageInstalled(Context context, String language) {
+        ModelInfo info = MODELS.get(normalize(language));
+        return info != null && isInstalled(new File(new File(context.getFilesDir(), "vosk-models"), info.modelName));
+    }
+
     public static String supportedSummary() {
         return "中文、英语、日语、越南语、韩语、法语、德语、西语、葡语、意大利语、荷兰语、土耳其语、印地语、俄语、波兰语、捷克语";
     }
@@ -149,7 +154,7 @@ public final class OfflineSpeechEngine implements AutoCloseable {
                     recognizer = loadedRecognizer;
                     ready = true;
                 }
-                main.post(() -> callback.onReady("Vosk 离线 ASR"));
+                main.post(() -> { if (!closed) callback.onReady("Vosk 离线 ASR"); });
             } catch (Exception e) {
                 postError("离线语音模型准备失败：" + safe(e));
             }
@@ -179,7 +184,7 @@ public final class OfflineSpeechEngine implements AutoCloseable {
                 String text = extract(finalJson, "text");
                 if (!text.isEmpty()) {
                     lastPartial = "";
-                    main.post(() -> callback.onFinal(text));
+                    main.post(() -> { if (!closed) callback.onFinal(text); });
                 }
                 return;
             }
@@ -190,7 +195,7 @@ public final class OfflineSpeechEngine implements AutoCloseable {
                 if (!text.isEmpty() && !text.equals(lastPartial) && now - lastPartialAt >= PARTIAL_INTERVAL_MS) {
                     lastPartial = text;
                     lastPartialAt = now;
-                    main.post(() -> callback.onPartial(text));
+                    main.post(() -> { if (!closed) callback.onPartial(text); });
                 }
             }
         } catch (Exception e) {
@@ -207,7 +212,7 @@ public final class OfflineSpeechEngine implements AutoCloseable {
                 json = recognizer.getFinalResult();
             }
             String text = extract(json, "text");
-            if (!text.isEmpty()) main.post(() -> callback.onFinal(text));
+            if (!text.isEmpty()) main.post(() -> { if (!closed) callback.onFinal(text); });
         } catch (Exception ignored) {}
     }
 

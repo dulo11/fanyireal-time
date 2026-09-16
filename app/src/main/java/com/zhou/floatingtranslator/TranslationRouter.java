@@ -158,6 +158,7 @@ public final class TranslationRouter implements AutoCloseable {
 
     private void translateAuto(String text, List<String> engines, int index,
                                Callback callback, List<String> errors) {
+        if (closed) return;
         if (index >= engines.size()) {
             callback.onError(errors.isEmpty() ? "没有可用翻译引擎" : String.join("；", errors));
             return;
@@ -200,6 +201,7 @@ public final class TranslationRouter implements AutoCloseable {
     }
 
     private void translateSingle(String engine, String text, Callback callback) {
+        if (closed) return;
         if (!isConfigured(engine)) {
             callback.onError("尚未填写该引擎的 API 配置");
             return;
@@ -226,9 +228,9 @@ public final class TranslationRouter implements AutoCloseable {
                 String successName = AZURE.equals(engine)
                     ? engineLabel(engine) + " · 账号" + lastAzureSlot
                     : engineLabel(engine);
-                main.post(() -> callback.onSuccess(finalResult, successName));
+                main.post(() -> { if (!closed) callback.onSuccess(finalResult, successName); });
             } catch (Exception e) {
-                main.post(() -> callback.onError(safe(e)));
+                main.post(() -> { if (!closed) callback.onError(safe(e)); });
             }
         });
     }
@@ -236,11 +238,12 @@ public final class TranslationRouter implements AutoCloseable {
     private void translateMlKit(String text, Callback callback) {
         mlKit.downloadModelIfNeeded(new DownloadConditions.Builder().build())
             .continueWithTask(task -> {
+                if (closed) throw new IllegalStateException("翻译已取消");
                 if (!task.isSuccessful()) throw task.getException();
                 return mlKit.translate(text);
             })
-            .addOnSuccessListener(value -> callback.onSuccess(value, engineLabel(MLKIT)))
-            .addOnFailureListener(e -> callback.onError(safe(e)));
+            .addOnSuccessListener(value -> { if (!closed) callback.onSuccess(value, engineLabel(MLKIT)); })
+            .addOnFailureListener(e -> { if (!closed) callback.onError(safe(e)); });
     }
 
     private String translateBaidu(String text) throws Exception {
@@ -465,7 +468,7 @@ public final class TranslationRouter implements AutoCloseable {
                 if (translated.isEmpty()) throw new IllegalStateException("有道语音未返回译文");
                 main.post(() -> callback.onSuccess(original, translated, "有道语音翻译"));
             } catch (Exception e) {
-                main.post(() -> callback.onError(safe(e)));
+                main.post(() -> { if (!closed) callback.onError(safe(e)); });
             }
         });
     }
