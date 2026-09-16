@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="screen_translation_accessibility_desc">读取当前屏幕可访问文字并在原位置显示译文；读不到时可使用无障碍截图 OCR，不使用录屏。</string>
+</resources>
