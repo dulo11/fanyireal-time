@@ -464,7 +464,7 @@ public final class RootCallTranslationService extends Service {
         original = overlayText(Math.max(13, fontSize - 5), Color.rgb(220, 215, 235));
         original.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
         translated = overlayText(fontSize, Color.WHITE);
-        translated.setTypeface(null, 1);
+        translated.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(original, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translated, new LinearLayout.LayoutParams(-1, -2));
 

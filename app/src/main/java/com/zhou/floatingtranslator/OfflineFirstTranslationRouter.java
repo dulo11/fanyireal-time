@@ -15,7 +15,7 @@ import android.os.Looper;
 /**
  * Offline-first smart translation router.
  *
- * dev5 behavior:
+ * Session-scoped automatic language routing:
  * - Text language is detected automatically by ML Kit Language ID.
  * - Foreign speech/text is translated to the configured target (the user's language).
  * - When the user speaks the target language, translation automatically reverses to the most
@@ -32,7 +32,6 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
 
     private static final String PREFS = "floating_translator";
     private static final String PREF_AUTO_LANGUAGE = "auto_language_enabled";
-    private static final String PREF_LAST_PARTNER_LANGUAGE = "last_partner_language";
 
     private final Context context;
     private final SharedPreferences prefs;
@@ -207,7 +206,6 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
 
         if (!TranslationRouter.AUTO.equals(selectedEngine)) {
             TranslationRouter finalSelected = selected;
-            TranslationRouter finalLocal = local;
             finalSelected.translate(text, new TranslationRouter.Callback() {
                 @Override public void onSuccess(String translated, String engineName) {
                     callback.onSuccess(translated, engineName + suffix);
@@ -240,13 +238,6 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
                 });
             }
         });
-    }
-
-    private static void closeRouters(TranslationRouter local, TranslationRouter selected) {
-        try { local.close(); } catch (Exception ignored) {}
-        if (selected != local) {
-            try { selected.close(); } catch (Exception ignored) {}
-        }
     }
 
     private static boolean isSupportedTranslationLanguage(String code) {

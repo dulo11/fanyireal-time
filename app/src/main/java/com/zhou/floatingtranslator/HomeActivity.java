@@ -55,7 +55,7 @@ public final class HomeActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("浮译", 34, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView version = text("FloatingTranslator v" + BuildConfig.VERSION_NAME,
@@ -141,7 +141,7 @@ public final class HomeActivity extends Activity {
 
     private TextView sectionTitle(String value) {
         TextView t = text(value, 18, Color.WHITE);
-        t.setTypeface(null, 1);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
         return t;
     }
 

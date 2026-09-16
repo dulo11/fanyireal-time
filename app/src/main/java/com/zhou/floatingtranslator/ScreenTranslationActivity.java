@@ -45,7 +45,7 @@ public final class ScreenTranslationActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("全局翻译", 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView subtitle = text("网站 · 手机界面 · 聊天 App · 无障碍优先 · 不占用录屏", 14,
@@ -212,7 +212,7 @@ public final class ScreenTranslationActivity extends Activity {
 
     private TextView sectionTitle(String value) {
         TextView t = text(value, 18, Color.WHITE);
-        t.setTypeface(null, 1);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
         return t;
     }
 

@@ -81,6 +81,8 @@ final class FaceOfflineSession implements AutoCloseable {
                     if (vosk != null) vosk.acceptPcm(data, n);
                     else if (sherpa != null) sherpa.acceptPcm(data, n, peak);
                 }
+            } catch (SecurityException e) {
+                main.post(() -> { if (!closed) callback.error("录音权限已撤销，请重新授予麦克风权限"); });
             } catch (Exception e) {
                 String message = e.getMessage() == null ? "录音失败" : e.getMessage();
                 main.post(() -> { if (!closed) callback.error(message); });

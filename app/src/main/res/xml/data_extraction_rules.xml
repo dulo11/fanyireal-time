@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="floating_translator_api_local_v1.xml" />
+        <exclude domain="sharedpref" path="floating_translator_secure_v1.xml" />
+        <exclude domain="file" path="sherpa-models/" />
+        <exclude domain="file" path="vosk-models/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="floating_translator_api_local_v1.xml" />
+        <exclude domain="sharedpref" path="floating_translator_secure_v1.xml" />
+        <exclude domain="file" path="sherpa-models/" />
+        <exclude domain="file" path="vosk-models/" />
+    </device-transfer>
+</data-extraction-rules>

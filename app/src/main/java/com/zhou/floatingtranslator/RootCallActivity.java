@@ -106,7 +106,7 @@ public final class RootCallActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("通话内部声音 / VoIP 翻译", 28, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView intro = text(
@@ -504,7 +504,7 @@ public final class RootCallActivity extends Activity {
 
     private TextView section(String value) {
         TextView t = text(value, 18, Color.WHITE);
-        t.setTypeface(null, 1);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
         return t;
     }
 

@@ -66,7 +66,7 @@ public class ApiSettingsActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("翻译引擎 / API 配置", 28, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView note = text(
@@ -436,7 +436,7 @@ public class ApiSettingsActivity extends Activity {
 
     private TextView section(String value) {
         TextView text = text(value, 18, Color.WHITE);
-        text.setTypeface(null, 1);
+        text.setTypeface(null, android.graphics.Typeface.BOLD);
         text.setPadding(0, dp(18), 0, dp(4));
         return text;
     }

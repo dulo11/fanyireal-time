@@ -67,7 +67,6 @@ public final class FaceToFaceActivity extends Activity implements RecognitionLis
     private Spinner asrSpinner;
     private final ArrayList<String> asrIds = new ArrayList<>();
     private String translatorPair = "";
-    private String spokenTarget = "";
     private final Runnable timeout = () -> { cancelTurn(); status.setText("等待超时，已停止；请检查语音模型或网络后重试"); };
 
     @Override protected void onCreate(Bundle state) {
@@ -87,7 +86,7 @@ public final class FaceToFaceActivity extends Activity implements RecognitionLis
         scroll.addView(root);
 
         TextView title = text("面对面翻译", 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
         TextView tip = text(
             "我的语言固定，对方语言可自动识别。已下载的多语言模型优先；Vosk 和单语言模型按备用语言识别。每次说完请稍作停顿，译文完成后再让另一方说话。",
@@ -454,7 +453,7 @@ public final class FaceToFaceActivity extends Activity implements RecognitionLis
 
     private TextView section(String value) {
         TextView t = text(value, 19, Color.WHITE);
-        t.setTypeface(null, 1);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
         return t;
     }
 

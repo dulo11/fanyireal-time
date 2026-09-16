@@ -39,7 +39,7 @@ public final class AppLanguageActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text(getString(R.string.language_title), 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
         TextView sub = text(getString(R.string.language_subtitle), 14, Color.rgb(201, 190, 221));
         sub.setPadding(0, dp(4), 0, dp(14));

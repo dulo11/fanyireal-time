@@ -27,7 +27,7 @@ public final class SettingsHubActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text(getString(R.string.settings_title), 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
         TextView sub = text(getString(R.string.settings_subtitle), 14, Color.rgb(201, 190, 221));
         sub.setPadding(0, dp(4), 0, dp(14));
@@ -49,7 +49,7 @@ public final class SettingsHubActivity extends Activity {
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
         card.setBackgroundResource(R.drawable.panel);
         TextView title = text(getString(titleId), 18, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         card.addView(title);
         TextView desc = text(getString(descId), 13, Color.rgb(190, 180, 212));
         desc.setPadding(0, dp(4), 0, dp(8));

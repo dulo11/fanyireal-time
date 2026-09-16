@@ -41,7 +41,7 @@ public final class AsrHotwordActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("热词 / 人名词库", 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView intro = text(
@@ -64,7 +64,7 @@ public final class AsrHotwordActivity extends Activity {
         root.addView(editor, new LinearLayout.LayoutParams(-1, -2));
 
         TextView strength = text("热词偏置强度", 18, Color.WHITE);
-        strength.setTypeface(null, 1);
+        strength.setTypeface(null, android.graphics.Typeface.BOLD);
         strength.setPadding(0, dp(16), 0, dp(4));
         root.addView(strength);
 

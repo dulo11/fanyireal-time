@@ -71,7 +71,7 @@ public final class MainActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("实时翻译控制台", 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
         TextView sub = text("浮译 v" + BuildConfig.VERSION_NAME + " · 声音来源固定，不会自动乱切", 13,
             Color.rgb(190, 165, 255));
@@ -224,7 +224,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout resultCard = card(root);
         resultCard.addView(section("状态 / 最近翻译"));
-        status = text("v0.6.0-dev3：Shizuku 实验 PCM + 麦克风通话处理。", 13,
+        status = text("v" + BuildConfig.VERSION_NAME + " · 固定声音来源，完整句依次翻译。", 13,
             Color.rgb(190, 165, 255));
         resultCard.addView(status);
         recent = text("", 13, Color.rgb(218, 209, 231));
@@ -609,7 +609,7 @@ public final class MainActivity extends Activity {
 
     private TextView section(String value) {
         TextView t = text(value, 18, Color.WHITE);
-        t.setTypeface(null, 1);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
         return t;
     }
 

@@ -1,4 +1,4 @@
-# 浮译 FloatingTranslator v0.7.0-dev1
+# 浮译 FloatingTranslator v0.7.0
 
 一个面向 Android 13+ 的实时翻译工具。支持实时语音翻译、无障碍全屏翻译、OCR、离线 ASR、Azure Translator 多账号池，以及 ROOT/Shizuku 通话实验能力。
 
@@ -22,7 +22,7 @@
 - 自定义“浮译”应用图标
 - 模型下载后可离线翻译
 
-## 全屏翻译 v0.7.0-dev1
+## 全屏翻译 v0.7.0
 
 流程：
 
@@ -54,8 +54,8 @@
 
 仓库包含两个流程：
 
-- `CI Build`：每次推送到 `main` 自动构建 Debug APK，用于开发验证。
-- `Build Signed APK`：手动运行，使用固定签名构建正式 Release APK。
+- `CI Build`：推送到 `main` 或 `fix/**` 后，运行单元测试、Android Lint 和签名构建。
+- `Build Signed APK`：正式代码推送到 `main` 或手动运行时，验证、签名并发布；正式版与测试版渠道分开。
 
 ## 手机使用
 
@@ -102,3 +102,7 @@
 ## 隐私与费用
 
 离线翻译和离线 ASR 在手机本地运行。使用 Azure、百度、阿里云等云端翻译时，待翻译文本会发送到对应服务商。API 密钥由用户自行配置。无障碍全屏翻译的截图 OCR 兜底在设备端通过 ML Kit OCR 处理，之后只把识别出的文字交给当前翻译引擎。
+
+## 0.7.0 修复与面对面对话
+
+详细变更、离线模型选择及验证范围见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。更新使用相同签名覆盖安装，保留应用数据。API 配置仅保留在当前设备，不随系统备份或设备迁移传送；更换设备需要重新填写。

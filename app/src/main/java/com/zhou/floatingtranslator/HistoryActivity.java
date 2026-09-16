@@ -43,7 +43,7 @@ public final class HistoryActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("翻译历史", 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView note = text("自动保存实时翻译的原文、译文和时间。最多保留最近 5000 条；可导出 TXT 或 SRT。", 14,

@@ -38,7 +38,7 @@ public final class AsrPrecisionActivity extends Activity {
         scroll.addView(root);
 
         TextView title = text("ASR 精度与快语速", 30, Color.WHITE);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
         TextView intro = text(
@@ -181,7 +181,7 @@ public final class AsrPrecisionActivity extends Activity {
 
     private TextView section(String value) {
         TextView t = text(value, 18, Color.WHITE);
-        t.setTypeface(null, 1);
+        t.setTypeface(null, android.graphics.Typeface.BOLD);
         return t;
     }
 

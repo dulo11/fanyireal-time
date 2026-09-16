@@ -920,13 +920,13 @@ public class TranslationService extends Service implements RecognitionListener {
         originalText = overlayText(Math.max(13, fontSize - 5), Color.rgb(220, 215, 235));
         originalText.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
         translatedText = overlayText(fontSize, Color.WHITE);
-        translatedText.setTypeface(null, 1);
+        translatedText.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(originalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translatedText, new LinearLayout.LayoutParams(-1, -2));
 
         ocrOriginalText = overlayText(Math.max(12, fontSize - 6), Color.rgb(205, 215, 235));
         ocrTranslatedText = overlayText(Math.max(14, fontSize - 2), Color.WHITE);
-        ocrTranslatedText.setTypeface(null, 1);
+        ocrTranslatedText.setTypeface(null, android.graphics.Typeface.BOLD);
         ocrOriginalText.setVisibility(enableOcr && showOriginal ? View.VISIBLE : View.GONE);
         ocrTranslatedText.setVisibility(enableOcr ? View.VISIBLE : View.GONE);
         box.addView(ocrOriginalText, new LinearLayout.LayoutParams(-1, -2));
