@@ -2,6 +2,10 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-apk.yml"
 
 permissions:
   contents: write
@@ -86,20 +90,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOTES="$(printf '%s\n' \
-            "浮译 $APP_VERSION 正式签名通用版。" \
+            "浮译 $APP_VERSION 固定签名测试版。" \
             "" \
-            "- v0.6.0-dev3 功能定版为正式 v0.6.0" \
-            "- 新增 Shizuku 实验 PCM 通话模式，与 ROOT 模式明确分开；固定来源失败时不会偷偷切换" \
-            "- ROOT / Shizuku PCM 增加无数据检测，减少 tinycap 假运行卡死" \
-            "- 无 ROOT 外放 + 麦克风增加远端优先、近端优先、原始麦克风三种处理方式" \
-            "- Azure 支持动态多账号池，并提供额度/限流后切换与轮番使用策略" \
-            "- API 配置改为普通本地 SharedPreferences 保存，不再使用 Keystore/AES" \
-            "- 内置 ML Kit Language ID，改善自动语言识别与双向翻译路由" \
-            "- 检查更新逻辑区分开发版与稳定版，并保留 v0.5.9 稳定回滚入口" \
-            "- v0.5.9 继续作为稳定回滚点" \
-            "- 通用 APK 已通过 apksigner 正式签名校验" \
+            "- 新增全局固定底栏：首页 / 实时 / 全屏 / 模型 / 设置" \
+            "- 新增一站式设置中心，常用功能不再逐层进入" \
+            "- 新增应用界面语言切换，与翻译原语言/目标语言完全分开" \
+            "- 首批界面语言：简繁中文、英语、日语、韩语、越南语、泰语、菲律宾语、马来语、印尼语、法语、德语、西语、葡语、俄语、阿拉伯语" \
+            "- 支持 Android 13+ 应用独立语言设置与跟随系统" \
+            "- 阿拉伯语启用 RTL 布局支持" \
+            "- 翻译语言列表恢复为原有 ML Kit 59 种，不再把国家界面语言与翻译语种混在一起" \
+            "- 保留无障碍全屏翻译、Azure 账号池、离线 ASR、ROOT/Shizuku 等现有功能" \
+            "- 通用 APK 已通过 apksigner 固定签名校验" \
             "" \
-            "长期下载入口：Releases → Latest")"
+            "稳定回滚：v0.6.0 Release 与 rollback-v0.6.0-stable 分支均已保留。")"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk --clobber
             gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --notes "$NOTES" --latest
