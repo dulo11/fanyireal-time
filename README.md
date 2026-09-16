@@ -1,20 +1,44 @@
-# 浮译 FloatingTranslator v0.3.0
+# 浮译 FloatingTranslator v0.7.0-dev1
 
-一个面向 Android 13+ 的实时悬浮翻译工具。可翻译允许共享的系统媒体声音，也可通过麦克风实验模式辅助翻译免提电话和语音通话。
+一个面向 Android 13+ 的实时翻译工具。支持实时语音翻译、无障碍全屏翻译、OCR、离线 ASR、Azure Translator 多账号池，以及 ROOT/Shizuku 通话实验能力。
 
 ## 当前支持
 
+- Azure Translator、ML Kit、百度、阿里云等多翻译引擎
+- Azure Translator 动态多账号池，支持轮番调用与额度/限流后自动切换
 - ML Kit 设备端翻译支持的全部 59 种语言
 - 常用语言优先：中文、英语、日语、越南语、菲律宾语、马来语、韩语、法语等
 - 任意受支持语言互译，默认翻译成中文
 - 系统内部音频捕获
 - 麦克风/免提电话翻译实验模式
+- Vosk / sherpa-onnx 等离线 ASR 能力
 - 原文与译文悬浮字幕
+- 无障碍全屏翻译：优先直接读取页面文字和坐标
+- 页面没有无障碍文字节点时，可使用 AccessibilityService 截图 + ML Kit OCR 兜底
+- 全屏翻译不依赖 MediaProjection，因此不会占用系统录屏会话
+- 全屏翻译悬浮球：轻点翻译、长按连续翻译、拖动移动
 - 字号调整、设置自动保存、语言一键互换
-- 悬浮字幕暂停/继续/关闭控制
 - 最近原文和译文记录、一键复制与清空
 - 自定义“浮译”应用图标
 - 模型下载后可离线翻译
+
+## 全屏翻译 v0.7.0-dev1
+
+流程：
+
+`目标 App → AccessibilityService 读取文字节点/坐标 → Azure 批量自动识别源语言并翻译 → TYPE_ACCESSIBILITY_OVERLAY 原位置覆盖译文`
+
+如果页面没有可读取的无障碍文字节点：
+
+`AccessibilityService.takeScreenshot() → ML Kit OCR → Azure/当前翻译引擎 → 原位置覆盖译文`
+
+说明：
+
+- 这条全屏翻译链路不使用 MediaProjection，不需要开启“录制屏幕”。
+- 普通 App、浏览器、聊天界面等优先直接读取无障碍文字，因此没有 OCR 错字。
+- 游戏、视频内嵌字幕、Canvas/OpenGL 等页面通常会进入截图 OCR 兜底。
+- 部分银行、DRM 或受保护页面可能禁止截图，第三方应用无法绕过系统保护。
+- 配置了 Azure 后，全屏文字批量翻译会省略 `from`，由 Azure 自动检测源语言；只需要设置目标语言。
 
 ## 构建
 
@@ -26,52 +50,55 @@
 4. 选择 `Build > Build APK(s)`。
 5. APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
 
-### GitHub Actions（不需要本地电脑配置 Android 环境）
+### GitHub Actions
 
-1. 把整个项目上传到 GitHub 仓库。
-2. 打开仓库的 `Actions` 页面。
-3. 运行 `Build APK`，或向 `main/master` 分支推送一次。
-4. 在完成的任务底部下载 `FloatingTranslator-debug-apk`。
+仓库包含两个流程：
+
+- `CI Build`：每次推送到 `main` 自动构建 Debug APK，用于开发验证。
+- `Build Signed APK`：手动运行，使用固定签名构建正式 Release APK。
 
 ## 手机使用
 
-1. 安装 APK，并允许“录音”和“通知”。
-2. 点击“授予悬浮窗权限”。
+### 实时语音翻译
+
+1. 安装 APK，并允许需要的录音/通知权限。
+2. 按需要授予悬浮窗权限。
 3. 选择声音语言和目标语言。
-4. 点击“下载当前语言模型”；首次下载需要联网。
-5. 视频、直播、游戏：声音来源选“系统内部声音”，开始后允许共享声音。
-6. 电话或语音通话：声音来源选“麦克风/免提通话”，开始后打开免提，让手机麦克风听到对方声音。
-7. 切换到需要翻译的 App，悬浮字幕会保持显示。
+4. 配置在线翻译引擎，或下载本地模型。
+5. 视频、直播、游戏声音：声音来源选“系统内部声音”。
+6. 电话或语音通话：按设备能力选择麦克风、ROOT 或 Shizuku 实验来源。
+
+### 无障碍全屏翻译
+
+1. 首页进入 `全屏翻译`。
+2. 打开系统无障碍设置，启用 `浮译 · 全屏翻译`。
+3. 返回需要翻译的 App，屏幕右侧会出现 `译` 悬浮球。
+4. 轻点悬浮球：翻译当前屏幕。
+5. 长按悬浮球：开启/关闭连续翻译；连续模式显示 `自`。
+6. 拖动悬浮球：移动位置。
+7. 页面切换时旧译文覆盖层会自动清除。
 
 ## 重要限制
 
-- Android 会在每次开始捕获时要求用户确认，普通应用不能绕过。
-- 对方 App 可以禁止 `AudioPlaybackCapture`。禁止捕获时不会有音频数据，这不是翻译模型故障。
-- 设备端语音识别器需要支持 Android 13 的 `EXTRA_AUDIO_SOURCE`。一加 Ace 6 / Android 16 是本项目首要测试设备。
-- 翻译支持全部 59 种语言，但手机的系统语音识别服务不一定支持其中每一种语言。
-- 菲律宾语在翻译层使用 ML Kit 的 Tagalog (`tl`) 模型，语音识别区域使用 `fil-PH`。
-- “准确度优先”允许系统语音识别服务联网（是否联网由系统服务决定）；“优先离线”更省流量，但语音识别准确度可能降低。
-- ML Kit 设备端翻译适合日常和简单内容。非英语语言互译时会经过英语中转，质量可能下降。
-- “下载语言模型”下载的是文本翻译模型；语音识别离线包由手机系统的语音识别服务管理。若提示语音包不可用，请到系统或 Google 语音服务中下载对应语言。
-- 普通第三方应用不能直接读取电话上下行内部音频。实验模式只能通过麦克风收听免提声音，会受回声、音量和环境噪声影响；它不是系统级双向同传。
-
-## 技术流程
-
-系统声音：`其他 App 音频 → AudioPlaybackCapture → Android 语音识别 → ML Kit 本地翻译 → 悬浮字幕`
-
-免提通话：`扬声器外放 → 麦克风 → Android 语音识别 → ML Kit 本地翻译 → 悬浮字幕`
+- 系统内部音频捕获仍受 Android `AudioPlaybackCapture` 和 MediaProjection 限制；这与无障碍全屏翻译是两套独立链路。
+- 对方 App 可以禁止音频捕获。禁止时没有内部音频数据，不代表翻译模型故障。
+- 翻译支持的语言数量与手机语音识别服务支持的语言数量不是一回事。
+- 菲律宾语在 ML Kit 翻译层使用 Tagalog (`tl`)；Azure 使用 `fil`。
+- ML Kit 设备端翻译适合日常和简单内容，部分非英语互译可能经过英语中转。
+- 普通第三方应用不能直接读取电话上下行内部音频；ROOT/Shizuku 方案也受设备和 ROM 限制。
+- 无障碍服务只用于用户主动启用的全屏翻译；代码会跳过浮译自身界面，避免递归翻译。
 
 ## 固定签名和自动发布
 
-仓库已配置固定签名发布流程。首次需要在仓库 `Settings → Secrets and variables → Actions` 中添加以下 4 个 Repository secrets：
+仓库已配置固定签名发布流程。正式发布需要在仓库 `Settings → Secrets and variables → Actions` 中保留以下 4 个 Repository secrets：
 
 - `ANDROID_KEYSTORE_BASE64`
 - `ANDROID_KEYSTORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-以后打开 `Actions → Build APK → Run workflow`，勾选“使用固定签名并发布 GitHub Release”，填写版本号并运行。成功后正式 APK 会同时出现在本次任务的 Artifacts 和仓库 Releases 页面。同一应用后续升级必须始终使用同一把签名密钥。
+以后打开 `Actions → Build Signed APK → Run workflow` 即可构建正式签名 APK。正式升级必须始终使用同一把签名密钥。
 
 ## 隐私与费用
 
-应用不包含账号、广告或付费 API。翻译模型下载完成后，文本翻译在本机执行。语音是否完全离线取决于手机安装并启用的设备端语音识别服务。
+离线翻译和离线 ASR 在手机本地运行。使用 Azure、百度、阿里云等云端翻译时，待翻译文本会发送到对应服务商。API 密钥由用户自行配置。无障碍全屏翻译的截图 OCR 兜底在设备端通过 ML Kit OCR 处理，之后只把识别出的文字交给当前翻译引擎。
