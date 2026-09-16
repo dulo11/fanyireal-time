@@ -12,7 +12,6 @@ public final class FloatingTranslatorApp extends Application implements Applicat
 
     @Override public void onCreate() {
         super.onCreate();
-        // Capture the process baseline before any optional ASR model is loaded.
         RuntimeMemory.captureProcessBaseline(this);
         registerActivityLifecycleCallbacks(this);
         SharedPreferences prefs = getSharedPreferences("floating_translator", MODE_PRIVATE);
@@ -37,8 +36,10 @@ public final class FloatingTranslatorApp extends Application implements Applicat
 
     @Override public void onActivityResumed(Activity activity) {
         signal(activity, TranslationService.ACTION_UI_VISIBLE);
-        // Every in-app page gets the same fixed bottom navigation without modifying each Activity.
-        activity.getWindow().getDecorView().post(() -> AppBottomNav.attach(activity));
+        activity.getWindow().getDecorView().post(() -> {
+            UiLocalizer.apply(activity);
+            AppBottomNav.attach(activity);
+        });
     }
 
     @Override public void onActivityPaused(Activity activity) {

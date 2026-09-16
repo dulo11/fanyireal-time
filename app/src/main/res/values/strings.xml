@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">浮译</string><string name="screen_translation_service_label">浮译 · 全屏翻译</string>
     <string name="screen_translation_accessibility_desc">读取当前屏幕可访问文字并在原位置显示译文；读不到时可使用无障碍截图 OCR，不使用录屏。</string>
+    <string name="nav_home">首页</string><string name="nav_realtime">实时</string><string name="nav_screen">全屏</string><string name="nav_models">模型</string><string name="nav_settings">设置</string>
+    <string name="settings_title">设置</string><string name="settings_subtitle">常用设置都集中在这里，减少一层一层进入页面。</string><string name="settings_open">打开</string>
+    <string name="settings_app_language">应用语言</string><string name="settings_app_language_desc">切换浮译自己的界面语言，与翻译目标语言分开。</string>
+    <string name="settings_translation_engine">翻译引擎 / API</string><string name="settings_translation_engine_desc">Azure、百度、阿里云等翻译服务与密钥。</string>
+    <string name="settings_screen">全屏翻译</string><string name="settings_screen_desc">无障碍全屏翻译、连续模式和 OCR 兜底。</string>
+    <string name="settings_models">离线模型</string><string name="settings_models_desc">管理 ASR 与 ML Kit 离线模型。</string>
+    <string name="settings_asr">ASR 精度</string><string name="settings_asr_desc">识别精度、快语速和对话模式。</string>
+    <string name="settings_root">ROOT / Shizuku</string><string name="settings_root_desc">内部通话和 PCM 兼容设置。</string>
+    <string name="settings_history">历史与导出</string><string name="settings_history_desc">查看翻译记录并导出 TXT / SRT。</string>
+    <string name="language_title">应用语言</string><string name="language_subtitle">只改变浮译界面；原语言、目标语言和翻译引擎不会被改动。</string><string name="language_changed">界面语言已切换</string>
+    <string name="ui_realtime_title">实时翻译控制台</string><string name="ui_screen_title">全屏翻译</string><string name="ui_models_title">离线模型中心</string><string name="ui_api_title">翻译引擎 / API 配置</string><string name="ui_history_title">翻译历史</string>
+    <string name="ui_current_status">当前状态 · 运行内存实时刷新</string><string name="ui_realtime">实时翻译</string><string name="ui_open_realtime">▶ 打开实时翻译控制台</string><string name="ui_models">📦 离线模型中心</string><string name="ui_tools">工具</string><string name="ui_screen">🌐 全屏翻译</string><string name="ui_history">📝 历史</string><string name="ui_root">☎ ROOT 通话</string><string name="ui_asr">🎚 ASR 精度</string><string name="ui_api">⚙ 翻译引擎 / API 设置</string><string name="ui_update">⬆ 检查更新 / ↩ 稳定回滚</string><string name="ui_recent">最近翻译</string><string name="ui_copy">复制最近译文</string>
+    <string name="ui_audio">声音与识别</string><string name="ui_translation_language">翻译语言</string><string name="ui_subtitles">字幕与显示</string><string name="ui_prepare">开始前准备</string><string name="ui_status_recent">状态 / 最近翻译</string><string name="ui_accessibility">无障碍服务</string><string name="ui_translation_mode">翻译方式</string><string name="ui_language_engine">语言与翻译引擎</string><string name="ui_how_to_use">怎么用</string><string name="ui_offline_asr">高精度离线 ASR</string><string name="ui_model_by_language">Vosk / ML Kit 按语言管理</string><string name="ui_default_engine">默认翻译引擎</string>
 </resources>

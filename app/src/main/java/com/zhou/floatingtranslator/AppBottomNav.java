@@ -36,14 +36,18 @@ public final class AppBottomNav {
         bar.setPadding(dp(activity, 5), dp(activity, 4), dp(activity, 5), dp(activity, 5));
         bar.setElevation(dp(activity, 18));
 
-        addTab(activity, bar, "⌂\n首页", HomeActivity.class, activity instanceof HomeActivity);
-        addTab(activity, bar, "▶\n实时", MainActivity.class, activity instanceof MainActivity);
-        addTab(activity, bar, "译\n全屏", ScreenTranslationActivity.class,
+        addTab(activity, bar, "⌂\n" + activity.getString(R.string.nav_home), HomeActivity.class,
+            activity instanceof HomeActivity);
+        addTab(activity, bar, "▶\n" + activity.getString(R.string.nav_realtime), MainActivity.class,
+            activity instanceof MainActivity);
+        addTab(activity, bar, "译\n" + activity.getString(R.string.nav_screen), ScreenTranslationActivity.class,
             activity instanceof ScreenTranslationActivity);
-        addTab(activity, bar, "▣\n模型", ModelManagerActivity.class,
+        addTab(activity, bar, "▣\n" + activity.getString(R.string.nav_models), ModelManagerActivity.class,
             activity instanceof ModelManagerActivity);
-        addTab(activity, bar, "⚙\n设置", ApiSettingsActivity.class,
-            activity instanceof ApiSettingsActivity);
+        addTab(activity, bar, "⚙\n" + activity.getString(R.string.nav_settings), SettingsHubActivity.class,
+            activity instanceof SettingsHubActivity || activity instanceof AppLanguageActivity
+                || activity instanceof ApiSettingsActivity || activity instanceof AsrPrecisionActivity
+                || activity instanceof RootCallActivity || activity instanceof HistoryActivity);
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);

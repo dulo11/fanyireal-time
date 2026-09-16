@@ -12,13 +12,11 @@ android {
         applicationId = "com.zhou.floatingtranslator"
         minSdk = 33
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.7.0-dev2"
+        versionCode = 28
+        versionName = "0.7.0-dev3"
     }
 
-    buildFeatures {
-        buildConfig = true
-    }
+    buildFeatures { buildConfig = true }
 
     signingConfigs {
         if (!releaseKeystorePath.isNullOrBlank()) {
@@ -35,9 +33,7 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (!releaseKeystorePath.isNullOrBlank()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            if (!releaseKeystorePath.isNullOrBlank()) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -49,28 +45,18 @@ android {
 
 dependencies {
     implementation("com.google.mlkit:translate:17.0.3")
-    // v0.6.0: bundled language identification model for automatic/bidirectional routing.
-    // Bundled variant avoids a first-use Play Services download and adds only about 0.9 MB.
     implementation("com.google.mlkit:language-id:17.0.6")
-
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")
     implementation("com.google.mlkit:text-recognition-devanagari:16.0.1")
-
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
-
-    // High-accuracy optional offline ASR runtime. Model packs are downloaded separately.
     implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8") {
-        // The Android AAR already contains the Java API classes. The transitive JVM
-        // helper jar duplicates those classes and must not be packaged into Android.
         exclude(group = "com.github.k2-fsa.sherpa-onnx", module = "sherpa-onnx-jvm")
     }
     implementation("org.apache.commons:commons-compress:1.27.1")
-
-    // Optional non-root privileged PCM experiment. Shizuku runs with adb-shell identity.
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 }
