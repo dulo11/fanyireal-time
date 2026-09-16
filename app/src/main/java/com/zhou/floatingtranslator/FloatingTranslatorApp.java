@@ -8,13 +8,26 @@ import android.os.Bundle;
 
 /** Prevents translation overlays from covering the app UI, records history, and attaches global nav. */
 public final class FloatingTranslatorApp extends Application implements Application.ActivityLifecycleCallbacks {
+    private static final String PREFS = "floating_translator";
+    private static final String PREF_DEV5_SMART_LANGUAGE_MIGRATED = "dev5_smart_language_migrated";
     private SharedPreferences.OnSharedPreferenceChangeListener historyListener;
 
     @Override public void onCreate() {
         super.onCreate();
         RuntimeMemory.captureProcessBaseline(this);
         registerActivityLifecycleCallbacks(this);
-        SharedPreferences prefs = getSharedPreferences("floating_translator", MODE_PRIVATE);
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        // dev5: make automatic multilingual recognition/routing the default for existing installs too.
+        // The configured source language is retained as the fallback language for ASR/very short text.
+        if (!prefs.getBoolean(PREF_DEV5_SMART_LANGUAGE_MIGRATED, false)) {
+            prefs.edit()
+                .putBoolean("auto_language_enabled", true)
+                .putString("language_mode", SherpaSpeechEngine.LANG_AUTO)
+                .putBoolean(PREF_DEV5_SMART_LANGUAGE_MIGRATED, true)
+                .apply();
+        }
+
         historyListener = (preferences, key) -> {
             if (!"last_translation".equals(key)) return;
             String translated = preferences.getString("last_translation", "");
@@ -25,7 +38,7 @@ public final class FloatingTranslatorApp extends Application implements Applicat
     }
 
     private void signal(Activity activity, String action) {
-        boolean running = getSharedPreferences("floating_translator", MODE_PRIVATE)
+        boolean running = getSharedPreferences(PREFS, MODE_PRIVATE)
             .getBoolean("service_running", false);
         if (!running) return;
         try { startService(new Intent(this, TranslationService.class).setAction(action)); }
