@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "app/**"
       - ".github/workflows/build-apk.yml"
 
 permissions:
@@ -90,20 +91,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOTES="$(printf '%s\n' \
-            "浮译 $APP_VERSION 固定签名测试版。" \
+            "浮译 $APP_VERSION 固定签名开发测试版。" \
             "" \
-            "- 全屏翻译升级为全局无障碍翻译：网站 / 系统界面 / 第三方 App / 聊天气泡" \
-            "- 自动模式监听页面变化、新消息和滚动，网页与聊天切换后自动更新" \
-            "- 新增增量翻译缓存，相同文字不重复请求，减少 Azure 字符消耗和页面闪烁" \
-            "- 无障碍节点支持 text 与 contentDescription，提升按钮和部分网页元素覆盖率" \
-            "- 编辑框输入时不触发整屏重译，降低聊天输入过程中的干扰" \
-            "- 双击悬浮球可把当前聊天输入框反向翻译为“原语言”，确认后再发送" \
-            "- 保留无障碍截图 + ML Kit OCR 兜底，并增加少量文字时强制 OCR 增强开关" \
-            "- 无需 MediaProjection，不占用系统录屏会话" \
-            "- 保留 v0.7.0-dev3 的多国语言界面、固定底栏、Azure 账号池、离线 ASR、ROOT/Shizuku" \
+            "- 新增面对面翻译：对方说话 / 我说话双区界面，支持自动朗读译文" \
+            "- 底栏调整为：首页 / 实时 / 全屏 / 对话 / 设置；模型中心保留在设置中" \
+            "- 默认启用自动多语言：无需每次手工切换原语言" \
+            "- 外语识别后自动翻译到“我的语言”，并记住最近的对方语言" \
+            "- 你说“我的语言”时自动反向翻译到对方最近使用的语言" \
+            "- 多语言 ASR 检测结果可作为自动路由依据；无结果时用 ML Kit Language ID 判断" \
+            "- 保留全局无障碍翻译、聊天输入框反向翻译、OCR 兜底、Azure 账号池" \
+            "- 保留 ROOT / Shizuku 内部通话、外放麦克风通话和离线 ASR" \
             "- 通用 APK 已通过 apksigner 固定签名校验" \
             "" \
-            "稳定回滚：v0.6.0 Release 与 rollback-v0.6.0-stable 分支均保留。")"
+            "说明：这是 dev5 开发测试版，不替代稳定回滚版 v0.6.0。")"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$APK_NAME" FloatingTranslator-latest.apk --clobber
             gh release edit "$RELEASE_TAG" --title "FloatingTranslator $RELEASE_TAG" --notes "$NOTES" --latest
