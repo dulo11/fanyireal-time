@@ -14,9 +14,10 @@ import android.view.View;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
-/** Non-touchable accessibility overlay that paints translated text over the original bounds. */
+/** Non-touchable accessibility overlay that paints translated text near the original bounds. */
 public final class ScreenTranslationOverlayView extends View {
     public static final class Entry {
         public final Rect bounds;
@@ -37,13 +38,15 @@ public final class ScreenTranslationOverlayView extends View {
     public ScreenTranslationOverlayView(Context context) {
         super(context);
         setWillNotDraw(false);
-        background.setColor(Color.argb(226, 20, 16, 31));
+        // Keep the source page visible. The old near-opaque black box made Telegram/web pages
+        // look as if half of the screen had been covered by a curtain.
+        background.setColor(Color.argb(182, 20, 16, 31));
         textPaint.setColor(Color.WHITE);
         textPaint.setFakeBoldText(false);
     }
 
     public void setEntries(List<Entry> value) {
-        entries = value == null ? Collections.emptyList() : new ArrayList<>(value);
+        entries = normalizeEntries(value);
         setVisibility(entries.isEmpty() ? INVISIBLE : VISIBLE);
         invalidate();
     }
@@ -52,33 +55,108 @@ public final class ScreenTranslationOverlayView extends View {
         setEntries(Collections.emptyList());
     }
 
+    /**
+     * Accessibility trees often expose the same text both on a large container node and on its
+     * children. Drawing both creates giant overlapping rectangles and makes translations look
+     * incomplete. Prefer the smaller/leaf-like boxes and remove obvious duplicate containers.
+     */
+    private List<Entry> normalizeEntries(List<Entry> value) {
+        if (value == null || value.isEmpty()) return Collections.emptyList();
+        ArrayList<Entry> candidates = new ArrayList<>();
+        for (Entry entry : value) {
+            if (entry == null || entry.bounds == null || entry.translated.trim().isEmpty()) continue;
+            if (entry.bounds.width() < 8 || entry.bounds.height() < 8) continue;
+            candidates.add(entry);
+        }
+        candidates.sort(Comparator.comparingLong(e -> area(e.bounds)));
+
+        ArrayList<Entry> kept = new ArrayList<>();
+        for (Entry candidate : candidates) {
+            boolean skip = false;
+            int containedChildren = 0;
+            long candidateArea = area(candidate.bounds);
+            for (Entry small : kept) {
+                Rect intersection = new Rect();
+                if (!intersection.setIntersect(candidate.bounds, small.bounds)) continue;
+                long overlap = area(intersection);
+                long smallArea = Math.max(1L, area(small.bounds));
+                long minArea = Math.max(1L, Math.min(candidateArea, smallArea));
+
+                boolean sameText = normalized(candidate.original).equals(normalized(small.original))
+                    || normalized(candidate.translated).equals(normalized(small.translated));
+                if (sameText && overlap >= minArea * 0.60f) {
+                    skip = true;
+                    break;
+                }
+
+                boolean containsSmall = overlap >= smallArea * 0.92f
+                    && candidateArea >= smallArea * 1.45f;
+                if (containsSmall) {
+                    containedChildren++;
+                    String parentText = normalized(candidate.original);
+                    String childText = normalized(small.original);
+                    if (!childText.isEmpty() && parentText.contains(childText)
+                        && candidateArea >= smallArea * 3L) {
+                        skip = true;
+                        break;
+                    }
+                }
+            }
+            if (!skip && containedChildren >= 2) skip = true;
+            if (!skip) kept.add(candidate);
+        }
+
+        kept.sort((a, b) -> {
+            int top = Integer.compare(a.bounds.top, b.bounds.top);
+            return top != 0 ? top : Integer.compare(a.bounds.left, b.bounds.left);
+        });
+        return kept;
+    }
+
+    private static String normalized(String value) {
+        return value == null ? "" : value.replaceAll("\\s+", " ").trim();
+    }
+
+    private static long area(Rect rect) {
+        return Math.max(0, rect.width()) * (long) Math.max(0, rect.height());
+    }
+
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         float density = getResources().getDisplayMetrics().density;
         int pad = Math.max(3, Math.round(4f * density));
-        float radius = 6f * density;
+        float radius = 5f * density;
+        int minWidth = Math.round(112f * density);
+        int maxGrowWidth = Math.round(260f * density);
 
         for (Entry entry : entries) {
             Rect b = entry.bounds;
             if (b.width() < 8 || b.height() < 8 || entry.translated.trim().isEmpty()) continue;
 
-            float textSize = Math.max(11f * density,
-                Math.min(18f * density, b.height() * 0.48f));
+            float textSize = Math.max(10f * density,
+                Math.min(16f * density, b.height() * 0.34f));
             textPaint.setTextSize(textSize);
 
-            int width = Math.max(Math.round(48f * density), b.width() - pad * 2);
+            int left = Math.max(0, b.left);
+            int available = Math.max(1, getWidth() - left - pad);
+            int wanted = Math.max(b.width(), minWidth);
+            if (entry.translated.length() > Math.max(8, entry.original.length())) {
+                wanted = Math.max(wanted, Math.min(maxGrowWidth, available));
+            }
+            int outerWidth = Math.min(available, wanted);
+            int textWidth = Math.max(1, outerWidth - pad * 2);
+
             StaticLayout layout = StaticLayout.Builder
-                .obtain(entry.translated, 0, entry.translated.length(), textPaint, width)
+                .obtain(entry.translated, 0, entry.translated.length(), textPaint, textWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setIncludePad(false)
                 .setEllipsize(TextUtils.TruncateAt.END)
-                .setMaxLines(5)
+                .setMaxLines(4)
                 .build();
 
-            int boxHeight = Math.max(b.height(), layout.getHeight() + pad * 2);
-            int left = Math.max(0, b.left);
-            int top = Math.max(0, b.top);
-            int right = Math.min(getWidth(), Math.max(left + pad * 2 + 1, b.right));
+            int boxHeight = layout.getHeight() + pad * 2;
+            int top = Math.max(0, b.top + Math.max(0, (b.height() - boxHeight) / 2));
+            int right = Math.min(getWidth(), left + outerWidth);
             int bottom = Math.min(getHeight(), top + boxHeight);
             if (right <= left || bottom <= top) continue;
 
