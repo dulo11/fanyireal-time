@@ -6,7 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
-/** Prevents translation overlays from covering the app UI and records translation history. */
+/** Prevents translation overlays from covering the app UI, records history, and attaches global nav. */
 public final class FloatingTranslatorApp extends Application implements Application.ActivityLifecycleCallbacks {
     private SharedPreferences.OnSharedPreferenceChangeListener historyListener;
 
@@ -37,6 +37,8 @@ public final class FloatingTranslatorApp extends Application implements Applicat
 
     @Override public void onActivityResumed(Activity activity) {
         signal(activity, TranslationService.ACTION_UI_VISIBLE);
+        // Every in-app page gets the same fixed bottom navigation without modifying each Activity.
+        activity.getWindow().getDecorView().post(() -> AppBottomNav.attach(activity));
     }
 
     @Override public void onActivityPaused(Activity activity) {
