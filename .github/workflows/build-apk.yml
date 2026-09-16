@@ -100,9 +100,10 @@ jobs:
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           "$APKSIGNER" verify --print-certs "$RUNNER_TEMP/previous-release/FloatingTranslator-v0.7.0-dev5-release.apk" > "$RUNNER_TEMP/previous-cert.txt"
           "$APKSIGNER" verify --print-certs "$APK_NAME" > "$RUNNER_TEMP/current-cert.txt"
-          sed -n '/Signer #1 certificate SHA-256 digest:/p' "$RUNNER_TEMP/previous-cert.txt" > "$RUNNER_TEMP/previous-digest.txt"
-          sed -n '/Signer #1 certificate SHA-256 digest:/p' "$RUNNER_TEMP/current-cert.txt" > "$RUNNER_TEMP/current-digest.txt"
+          sed -n 's/.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/previous-cert.txt" | sort -u > "$RUNNER_TEMP/previous-digest.txt"
+          sed -n 's/.*certificate SHA-256 digest: //p' "$RUNNER_TEMP/current-cert.txt" | sort -u > "$RUNNER_TEMP/current-digest.txt"
           test -s "$RUNNER_TEMP/previous-digest.txt"
+          test -s "$RUNNER_TEMP/current-digest.txt"
           diff "$RUNNER_TEMP/previous-digest.txt" "$RUNNER_TEMP/current-digest.txt"
 
       - name: Publish GitHub Release
