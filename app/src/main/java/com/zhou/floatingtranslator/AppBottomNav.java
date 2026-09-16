@@ -42,12 +42,13 @@ public final class AppBottomNav {
             activity instanceof MainActivity);
         addTab(activity, bar, "译\n" + activity.getString(R.string.nav_screen), ScreenTranslationActivity.class,
             activity instanceof ScreenTranslationActivity);
-        addTab(activity, bar, "▣\n" + activity.getString(R.string.nav_models), ModelManagerActivity.class,
-            activity instanceof ModelManagerActivity);
+        addTab(activity, bar, "⇄\n" + activity.getString(R.string.nav_conversation), FaceToFaceActivity.class,
+            activity instanceof FaceToFaceActivity);
         addTab(activity, bar, "⚙\n" + activity.getString(R.string.nav_settings), SettingsHubActivity.class,
             activity instanceof SettingsHubActivity || activity instanceof AppLanguageActivity
                 || activity instanceof ApiSettingsActivity || activity instanceof AsrPrecisionActivity
-                || activity instanceof RootCallActivity || activity instanceof HistoryActivity);
+                || activity instanceof RootCallActivity || activity instanceof HistoryActivity
+                || activity instanceof ModelManagerActivity);
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
