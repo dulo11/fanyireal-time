@@ -9,16 +9,16 @@ import com.google.mlkit.nl.languageid.LanguageIdentifier;
 import java.util.Locale;
 
 /**
- * Offline-first wrapper around TranslationRouter.
+ * Offline-first smart translation router.
  *
- * Normal mode:
- *   AUTO = ML Kit first; only if the local model cannot translate do we try configured clouds.
+ * dev5 behavior:
+ * - Text language is detected automatically by ML Kit Language ID.
+ * - Foreign speech/text is translated to the configured target (the user's language).
+ * - When the user speaks the target language, translation automatically reverses to the most
+ *   recently detected partner language, with the configured source language as fallback.
+ * - The old fixed source/target pair remains the safe fallback for short or undetermined text.
  *
- * v0.6.0 automatic multi-language mode:
- *   When the existing ASR language mode is set to LANG_AUTO, text language is identified locally
- *   with ML Kit Language ID. If the utterance matches the selected target language, the router
- *   automatically reverses the selected pair. This turns an existing source/target pair into a
- *   practical two-way conversation pair without changing the fixed audio source.
+ * This changes translation routing only. Audio capture remains fixed and is never switched here.
  */
 public final class OfflineFirstTranslationRouter implements AutoCloseable {
     public interface Callback {
@@ -27,61 +27,53 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     }
 
     private static final String PREFS = "floating_translator";
+    private static final String PREF_AUTO_LANGUAGE = "auto_language_enabled";
+    private static final String PREF_LAST_PARTNER_LANGUAGE = "last_partner_language";
 
+    private final Context context;
+    private final SharedPreferences prefs;
     private final String selectedEngine;
     private final String source;
     private final String target;
-    private final boolean bidirectional;
-
-    private final TranslationRouter local;
-    private final TranslationRouter selected;
-    private final TranslationRouter reverseLocal;
-    private final TranslationRouter reverseSelected;
+    private final boolean autoLanguage;
     private final LanguageIdentifier languageIdentifier;
 
+    // Kept for cloud speech fallback, whose API expects a fixed configured pair.
+    private final TranslationRouter speechRouter;
     private boolean closed;
 
     public OfflineFirstTranslationRouter(Context context, String source, String target, String selectedEngine) {
-        String normalized = selectedEngine == null || selectedEngine.isEmpty()
+        this.context = context.getApplicationContext();
+        this.prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this.selectedEngine = selectedEngine == null || selectedEngine.isEmpty()
             ? TranslationRouter.AUTO : selectedEngine;
-        this.selectedEngine = normalized;
         this.source = normalizeTag(source);
         this.target = normalizeTag(target);
-
-        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        this.bidirectional = SherpaSpeechEngine.LANG_AUTO.equals(
-            prefs.getString("language_mode", SherpaSpeechEngine.LANG_SINGLE));
-
-        this.local = new TranslationRouter(context, source, target, TranslationRouter.MLKIT);
-        this.selected = TranslationRouter.MLKIT.equals(normalized)
-            ? this.local
-            : new TranslationRouter(context, source, target, normalized);
-
-        if (bidirectional) {
-            this.reverseLocal = new TranslationRouter(context, target, source, TranslationRouter.MLKIT);
-            this.reverseSelected = TranslationRouter.MLKIT.equals(normalized)
-                ? this.reverseLocal
-                : new TranslationRouter(context, target, source, normalized);
-            this.languageIdentifier = LanguageIdentification.getClient();
-        } else {
-            this.reverseLocal = null;
-            this.reverseSelected = null;
-            this.languageIdentifier = null;
-        }
+        this.autoLanguage = prefs.getBoolean(PREF_AUTO_LANGUAGE, true);
+        this.languageIdentifier = autoLanguage ? LanguageIdentification.getClient() : null;
+        this.speechRouter = new TranslationRouter(this.context, this.source, this.target, this.selectedEngine);
     }
 
     public String selectedEngineName() {
         String base = TranslationRouter.AUTO.equals(selectedEngine)
             ? "自动 · ML Kit 离线优先"
             : TranslationRouter.engineLabel(selectedEngine);
-        return bidirectional ? base + " · 自动双向" : base;
+        return autoLanguage ? base + " · 自动识别语言/双向" : base;
     }
 
     public boolean hasYoudaoCredentials() {
-        return selected.hasYoudaoCredentials();
+        return speechRouter.hasYoudaoCredentials();
     }
 
     public void translate(String text, Callback callback) {
+        translate(text, "", callback);
+    }
+
+    /**
+     * Prefer a language code already detected by a multilingual ASR. If absent, Language ID detects
+     * the transcript locally. This avoids requiring the user to change source language every time.
+     */
+    public void translate(String text, String asrDetectedLanguage, Callback callback) {
         if (closed) {
             callback.onError("翻译引擎已经关闭");
             return;
@@ -92,8 +84,14 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         }
 
         String cleaned = text.trim();
-        if (!bidirectional || languageIdentifier == null) {
-            translateDirection(cleaned, false, "", callback);
+        if (!autoLanguage || languageIdentifier == null) {
+            translatePair(cleaned, source, target, "", callback);
+            return;
+        }
+
+        String fromAsr = normalizeTag(asrDetectedLanguage);
+        if (isUsefulDetectedLanguage(fromAsr)) {
+            routeDetected(cleaned, fromAsr, callback);
             return;
         }
 
@@ -101,56 +99,91 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
             .addOnSuccessListener(language -> {
                 if (closed) return;
                 String detected = normalizeTag(language);
-                boolean reverse = shouldReverse(detected, cleaned);
-                translateDirection(cleaned, reverse, detected, callback);
+                if (!isUsefulDetectedLanguage(detected)) detected = scriptHint(cleaned);
+                routeDetected(cleaned, detected, callback);
             })
             .addOnFailureListener(error -> {
                 if (closed) return;
-                // Language ID is a routing enhancement only. If it ever fails, keep the old
-                // forward-only behaviour rather than failing a translation that would otherwise work.
-                translateDirection(cleaned, false, "", callback);
+                routeDetected(cleaned, scriptHint(cleaned), callback);
             });
     }
 
-    private void translateDirection(String text, boolean reverse, String detected, Callback callback) {
-        TranslationRouter directionLocal = reverse ? reverseLocal : local;
-        TranslationRouter directionSelected = reverse ? reverseSelected : selected;
-        if (directionLocal == null || directionSelected == null) {
-            directionLocal = local;
-            directionSelected = selected;
-            reverse = false;
+    private void routeDetected(String text, String detected, Callback callback) {
+        String lang = normalizeTag(detected);
+        if (!isSupportedTranslationLanguage(lang)) lang = "";
+
+        // My language -> last detected partner language.
+        if (!lang.isEmpty() && sameLanguage(lang, target)) {
+            String partner = normalizeTag(prefs.getString(PREF_LAST_PARTNER_LANGUAGE, source));
+            if (!isSupportedTranslationLanguage(partner) || sameLanguage(partner, target)) partner = source;
+            translatePair(text, target, partner,
+                " · 自动双向 " + target + "→" + partner + " · 识别" + lang, callback);
+            return;
         }
 
-        final boolean finalReverse = reverse;
-        final String suffix = directionSuffix(finalReverse, detected);
+        // Any supported foreign language -> my language, and remember it for the next reply.
+        if (!lang.isEmpty() && !sameLanguage(lang, target)) {
+            prefs.edit().putString(PREF_LAST_PARTNER_LANGUAGE, lang).apply();
+            translatePair(text, lang, target,
+                " · 自动识别 " + lang + "→" + target, callback);
+            return;
+        }
+
+        // Very short/uncertain text keeps the configured pair rather than guessing wildly.
+        translatePair(text, source, target, " · 自动识别不确定，使用备用 " + source + "→" + target, callback);
+    }
+
+    private void translatePair(String text, String from, String to, String suffix, Callback callback) {
+        if (sameLanguage(from, to)) {
+            callback.onSuccess(text, "无需翻译" + suffix);
+            return;
+        }
+
+        TranslationRouter local;
+        TranslationRouter selected;
+        try {
+            local = new TranslationRouter(context, from, to, TranslationRouter.MLKIT);
+            selected = TranslationRouter.MLKIT.equals(selectedEngine)
+                ? local : new TranslationRouter(context, from, to, selectedEngine);
+        } catch (Exception e) {
+            callback.onError("语言路由初始化失败：" + safe(e));
+            return;
+        }
 
         if (!TranslationRouter.AUTO.equals(selectedEngine)) {
-            directionSelected.translate(text, new TranslationRouter.Callback() {
+            TranslationRouter finalSelected = selected;
+            TranslationRouter finalLocal = local;
+            finalSelected.translate(text, new TranslationRouter.Callback() {
                 @Override public void onSuccess(String translated, String engineName) {
+                    closeRouters(finalLocal, finalSelected);
                     callback.onSuccess(translated, engineName + suffix);
                 }
 
                 @Override public void onError(String message) {
+                    closeRouters(finalLocal, finalSelected);
                     callback.onError(message);
                 }
             });
             return;
         }
 
-        TranslationRouter finalDirectionSelected = directionSelected;
-        directionLocal.translate(text, new TranslationRouter.Callback() {
+        TranslationRouter finalSelected = selected;
+        TranslationRouter finalLocal = local;
+        finalLocal.translate(text, new TranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
+                closeRouters(finalLocal, finalSelected);
                 callback.onSuccess(translated, engineName + " · 离线优先" + suffix);
             }
 
             @Override public void onError(String localError) {
-                // AUTO TranslationRouter skips cloud engines whose credentials are absent.
-                finalDirectionSelected.translate(text, new TranslationRouter.Callback() {
+                finalSelected.translate(text, new TranslationRouter.Callback() {
                     @Override public void onSuccess(String translated, String engineName) {
+                        closeRouters(finalLocal, finalSelected);
                         callback.onSuccess(translated, engineName + " · 离线失败后兜底" + suffix);
                     }
 
                     @Override public void onError(String cloudError) {
+                        closeRouters(finalLocal, finalSelected);
                         callback.onError("ML Kit：" + localError + "；备用：" + cloudError);
                     }
                 });
@@ -158,41 +191,32 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         });
     }
 
-    /**
-     * Reverse only when the detected language confidently matches the configured target side.
-     * For short/undetermined text, use script hints for Chinese/Japanese/Korean and otherwise
-     * preserve the original forward direction.
-     */
-    private boolean shouldReverse(String detected, String text) {
-        if (!detected.isEmpty() && !"und".equals(detected)) {
-            if (sameLanguage(detected, target) && !sameLanguage(detected, source)) return true;
-            if (sameLanguage(detected, source)) return false;
+    private static void closeRouters(TranslationRouter local, TranslationRouter selected) {
+        try { local.close(); } catch (Exception ignored) {}
+        if (selected != local) {
+            try { selected.close(); } catch (Exception ignored) {}
         }
+    }
 
-        String script = scriptHint(text);
-        if (!script.isEmpty()) {
-            if (sameLanguage(script, target) && !sameLanguage(script, source)) return true;
-            if (sameLanguage(script, source)) return false;
+    private static boolean isSupportedTranslationLanguage(String code) {
+        String normalized = normalizeTag(code);
+        if (normalized.isEmpty() || "und".equals(normalized)) return false;
+        for (LanguageOption option : LanguageOption.ALL) {
+            if (sameLanguage(option.mlKitTag, normalized)) return true;
         }
         return false;
     }
 
-    private String directionSuffix(boolean reverse, String detected) {
-        if (!bidirectional) return "";
-        String from = reverse ? target : source;
-        String to = reverse ? source : target;
-        String detectedText = detected == null || detected.isEmpty() || "und".equals(detected)
-            ? "" : " · 识别" + detected;
-        return " · 双向 " + from + "→" + to + detectedText;
+    private static boolean isUsefulDetectedLanguage(String code) {
+        String normalized = normalizeTag(code);
+        return !normalized.isEmpty() && !"und".equals(normalized);
     }
 
     private static boolean sameLanguage(String a, String b) {
         String x = normalizeTag(a);
         String y = normalizeTag(b);
         if (x.equals(y)) return true;
-        // ML Kit can report Filipino as fil while translation models commonly use tl.
         if (("fil".equals(x) || "tl".equals(x)) && ("fil".equals(y) || "tl".equals(y))) return true;
-        // Legacy Android/Java aliases.
         if (("he".equals(x) || "iw".equals(x)) && ("he".equals(y) || "iw".equals(y))) return true;
         if (("id".equals(x) || "in".equals(x)) && ("id".equals(y) || "in".equals(y))) return true;
         return false;
@@ -203,6 +227,9 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         String normalized = value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
         int dash = normalized.indexOf('-');
         if (dash > 0) normalized = normalized.substring(0, dash);
+        if ("fil".equals(normalized)) return "tl";
+        if ("iw".equals(normalized)) return "he";
+        if ("in".equals(normalized)) return "id";
         return normalized;
     }
 
@@ -227,22 +254,20 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     }
 
     public void translateYoudaoSpeech(byte[] pcm16le, TranslationRouter.SpeechCallback callback) {
-        selected.translateYoudaoSpeech(pcm16le, callback);
+        speechRouter.translateYoudaoSpeech(pcm16le, callback);
+    }
+
+    private static String safe(Exception e) {
+        if (e == null) return "未知错误";
+        String message = e.getMessage();
+        return message == null || message.trim().isEmpty()
+            ? e.getClass().getSimpleName() : message;
     }
 
     @Override public void close() {
         if (closed) return;
         closed = true;
-        try { local.close(); } catch (Exception ignored) {}
-        if (selected != local) {
-            try { selected.close(); } catch (Exception ignored) {}
-        }
-        if (reverseLocal != null) {
-            try { reverseLocal.close(); } catch (Exception ignored) {}
-        }
-        if (reverseSelected != null && reverseSelected != reverseLocal) {
-            try { reverseSelected.close(); } catch (Exception ignored) {}
-        }
+        try { speechRouter.close(); } catch (Exception ignored) {}
         if (languageIdentifier != null) {
             try { languageIdentifier.close(); } catch (Exception ignored) {}
         }
