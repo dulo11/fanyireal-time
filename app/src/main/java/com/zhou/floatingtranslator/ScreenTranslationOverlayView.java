@@ -38,8 +38,6 @@ public final class ScreenTranslationOverlayView extends View {
     public ScreenTranslationOverlayView(Context context) {
         super(context);
         setWillNotDraw(false);
-        // Keep the source page visible. The old near-opaque black box made Telegram/web pages
-        // look as if half of the screen had been covered by a curtain.
         background.setColor(Color.argb(182, 20, 16, 31));
         textPaint.setColor(Color.WHITE);
         textPaint.setFakeBoldText(false);
@@ -95,6 +93,9 @@ public final class ScreenTranslationOverlayView extends View {
                     containedChildren++;
                     String parentText = normalized(candidate.original);
                     String childText = normalized(small.original);
+                    // Drop a parent duplicate only when the child really looks like a fragment of it.
+                    // Keep a lone large paragraph node otherwise, because some chat apps expose the
+                    // entire message as one node and there is no smaller replacement.
                     if (!childText.isEmpty() && parentText.contains(childText)
                         && candidateArea >= smallArea * 3L) {
                         skip = true;
@@ -127,7 +128,8 @@ public final class ScreenTranslationOverlayView extends View {
         int pad = Math.max(3, Math.round(4f * density));
         float radius = 5f * density;
         int minWidth = Math.round(112f * density);
-        int maxGrowWidth = Math.round(260f * density);
+        int maxGrowWidth = Math.round(300f * density);
+        int longBlockHeight = Math.round(110f * density);
 
         for (Entry entry : entries) {
             Rect b = entry.bounds;
@@ -140,22 +142,27 @@ public final class ScreenTranslationOverlayView extends View {
             int left = Math.max(0, b.left);
             int available = Math.max(1, getWidth() - left - pad);
             int wanted = Math.max(b.width(), minWidth);
-            if (entry.translated.length() > Math.max(8, entry.original.length())) {
+            boolean longBlock = b.height() >= longBlockHeight
+                || entry.original.length() >= 90 || entry.translated.length() >= 90;
+            if (longBlock || entry.translated.length() > Math.max(8, entry.original.length())) {
                 wanted = Math.max(wanted, Math.min(maxGrowWidth, available));
             }
             int outerWidth = Math.min(available, wanted);
             int textWidth = Math.max(1, outerWidth - pad * 2);
 
-            StaticLayout layout = StaticLayout.Builder
+            int linesFromSourceHeight = Math.max(4,
+                Math.round(b.height() / Math.max(textSize * 1.12f, 1f)));
+            int maxLines = longBlock ? Math.min(24, Math.max(8, linesFromSourceHeight + 3)) : 4;
+            StaticLayout.Builder builder = StaticLayout.Builder
                 .obtain(entry.translated, 0, entry.translated.length(), textPaint, textWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setIncludePad(false)
-                .setEllipsize(TextUtils.TruncateAt.END)
-                .setMaxLines(4)
-                .build();
+                .setMaxLines(maxLines);
+            if (!longBlock) builder.setEllipsize(TextUtils.TruncateAt.END);
+            StaticLayout layout = builder.build();
 
             int boxHeight = layout.getHeight() + pad * 2;
-            int top = Math.max(0, b.top + Math.max(0, (b.height() - boxHeight) / 2));
+            int top = Math.max(0, b.top + (longBlock ? 0 : Math.max(0, (b.height() - boxHeight) / 2)));
             int right = Math.min(getWidth(), left + outerWidth);
             int bottom = Math.min(getHeight(), top + boxHeight);
             if (right <= left || bottom <= top) continue;
