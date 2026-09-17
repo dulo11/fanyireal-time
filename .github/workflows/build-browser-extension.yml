@@ -14,6 +14,7 @@ on:
       - feature/browser-translator-v1.0-rc
       - feature/browser-translator-v1.1-cross-browser
       - feature/browser-translator-v1.2-multi-provider
+      - feature/browser-translator-v1.3-signed-update
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -56,6 +57,8 @@ jobs:
           test -f browser-extension/content/v02-enhancements.js
           test -f browser-extension/content/mixed-page-guard.js
           test -f browser-extension/content/attribute-translator.js
+          test -f browser-extension/content/floating-panel-bridge.js
+          test -f browser-extension/content/floating-panel.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
           test -f browser-extension/options/provider-pool-ui.js
@@ -64,13 +67,18 @@ jobs:
           test -f browser-extension/tests/crypto-lite.test.cjs
           test -f browser-extension/tests/runtime-hardening.test.cjs
           test -f browser-extension/tests/cross-browser.test.cjs
+          test -f browser-extension/tests/signed-update.test.cjs
+          test -f browser-extension/tests/floating-panel.test.cjs
           python - <<'PY'
           import json
           from pathlib import Path
           root = Path('browser-extension')
           chromium = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
           firefox = json.loads((root / 'compat/firefox/manifest.json').read_text(encoding='utf-8'))
-          assert chromium['version'] == firefox['version'] == '1.2.0'
+          assert chromium['version'] == firefox['version']
+          assert chromium['name'] == firefox['name'] == '浮译'
+          assert chromium['update_url'] == 'https://raw.githubusercontent.com/dulo11/fanyireal-time/extension-update-channel/updates.xml'
+          assert chromium.get('key')
           worker = chromium['background']['service_worker']
           assert worker == 'background/main.js', worker
           assert (root / worker).is_file(), worker

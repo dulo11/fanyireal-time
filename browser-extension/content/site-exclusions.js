@@ -151,7 +151,7 @@
 
     banner ||= document.createElement("div");
     banner.dataset.ftOwned = "1";
-    banner.textContent = "FloatingTranslator：点击要排除翻译的区域 · Esc 取消";
+    banner.textContent = "浮译：点击要排除翻译的区域 · Esc 取消";
     Object.assign(banner.style, {
       position: "fixed", left: "50%", top: "12px", transform: "translateX(-50%)",
       zIndex: "2147483647", padding: "8px 12px", borderRadius: "8px",

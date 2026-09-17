@@ -8,8 +8,10 @@ const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const chromium = JSON.parse(read('manifest.json'));
 const firefox = JSON.parse(read('compat/firefox/manifest.json'));
 
-assert.equal(chromium.version, '1.2.0');
+assert.match(chromium.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
 assert.equal(firefox.version, chromium.version);
+assert.equal(chromium.name, '浮译');
+assert.equal(firefox.name, chromium.name);
 assert.equal(chromium.background.service_worker, 'background/main.js');
 assert.ok(Array.isArray(firefox.background.scripts));
 assert.equal(firefox.background.service_worker, undefined);
