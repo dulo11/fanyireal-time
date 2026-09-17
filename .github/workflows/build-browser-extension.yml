@@ -13,6 +13,7 @@ on:
       - feature/browser-translator-v0.9-complete
       - feature/browser-translator-v1.0-rc
       - feature/browser-translator-v1.1-cross-browser
+      - feature/browser-translator-v1.2-multi-provider
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -41,8 +42,10 @@ jobs:
           test -f browser-extension/compat/browser-api.js
           test -f browser-extension/shared/language-core.js
           test -f browser-extension/shared/glossary-core.js
+          test -f browser-extension/shared/crypto-lite.js
           test -f browser-extension/background/main.js
           test -f browser-extension/background/service-worker.js
+          test -f browser-extension/background/provider-pool.js
           test -f browser-extension/background/glossary-runtime.js
           test -f browser-extension/background/runtime-telemetry.js
           test -f browser-extension/background/cache-stats.js
@@ -55,8 +58,10 @@ jobs:
           test -f browser-extension/content/attribute-translator.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
+          test -f browser-extension/options/provider-pool-ui.js
           test -f browser-extension/tests/language-core.test.cjs
           test -f browser-extension/tests/glossary-core.test.cjs
+          test -f browser-extension/tests/crypto-lite.test.cjs
           test -f browser-extension/tests/runtime-hardening.test.cjs
           test -f browser-extension/tests/cross-browser.test.cjs
           python - <<'PY'
@@ -65,7 +70,7 @@ jobs:
           root = Path('browser-extension')
           chromium = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
           firefox = json.loads((root / 'compat/firefox/manifest.json').read_text(encoding='utf-8'))
-          assert chromium['version'] == firefox['version']
+          assert chromium['version'] == firefox['version'] == '1.2.0'
           worker = chromium['background']['service_worker']
           assert worker == 'background/main.js', worker
           assert (root / worker).is_file(), worker
@@ -78,8 +83,10 @@ jobs:
           for rel in firefox['background']['scripts']:
               assert (root / rel).is_file(), rel
           main = (root / 'background/main.js').read_text(encoding='utf-8')
-          for rel in ['../shared/glossary-core.js', 'service-worker.js', 'glossary-runtime.js', 'runtime-telemetry.js', 'cache-stats.js', 'runtime-extras.js']:
+          for rel in ['../shared/crypto-lite.js', '../shared/glossary-core.js', 'service-worker.js', 'provider-pool.js', 'glossary-runtime.js', 'runtime-telemetry.js', 'cache-stats.js', 'runtime-extras.js']:
               assert rel in main, rel
+          options = (root / 'options/options.html').read_text(encoding='utf-8')
+          assert 'provider-pool-ui.js' in options
           PY
 
       - name: Validate JavaScript syntax
