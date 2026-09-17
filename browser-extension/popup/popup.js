@@ -74,7 +74,7 @@ function hostFromTab(tab) {
 
 async function sendToPage(message) {
   if (!activeTab?.id) return null;
-  try { return await chrome.tabs.sendMessage(activeTab.id, message); }
+  try { return await chrome.tabs.sendMessage(activeTab.id, message, { frameId: 0 }); }
   catch { return null; }
 }
 
@@ -93,6 +93,10 @@ function render() {
   $("siteRule").disabled = !currentHost;
   $("host").textContent = currentHost || "此页面不支持扩展脚本";
   $("pauseResume").textContent = pagePaused ? "继续翻译" : "暂停翻译";
+  $("swapInputLang").disabled = (settings.inputSourceLang || "auto") === "auto";
+  $("swapInputLang").title = $("swapInputLang").disabled ? "先把“我输入的语言”改成具体语言后才能交换" : "交换输入与发送语言";
+  $("pickExclusion").disabled = !currentHost;
+  $("clearExclusions").disabled = !currentHost;
 }
 
 async function saveSync(patch) {
@@ -116,11 +120,27 @@ async function refreshPageState() {
   if (response.queued) pieces.push(`待翻译 ${response.queued}`);
   if (response.processed) pieces.push(`已翻译 ${response.processed}`);
   if (response.retried) pieces.push(`精确重试 ${response.retried}`);
+  if (response.protectedRestores) pieces.push(`防覆盖恢复 ${response.protectedRestores}`);
   if (response.failed) pieces.push(`失败文本 ${response.failed}`);
   if (settings.chatMode && settings.inputPreview) pieces.push("聊天输入预览开");
   $("pageState").textContent = pieces.join(" · ");
   $("pageState").title = response.lastError || "";
   render();
+}
+
+async function refreshExclusions() {
+  if (!currentHost) {
+    $("exclusionCount").textContent = "排除区域：此页面不支持";
+    return;
+  }
+  const response = await sendToPage({ type: "FT_GET_EXCLUSIONS" });
+  if (!response?.ok) {
+    $("exclusionCount").textContent = "排除区域：读取失败";
+    return;
+  }
+  const count = Array.isArray(response.selectors) ? response.selectors.length : 0;
+  $("exclusionCount").textContent = `排除区域：${count} 条规则`;
+  $("clearExclusions").disabled = count === 0;
 }
 
 async function init() {
@@ -132,7 +152,7 @@ async function init() {
   settings = { ...DEFAULTS, ...settings };
   currentHost = hostFromTab(activeTab);
   render();
-  await refreshPageState();
+  await Promise.all([refreshPageState(), refreshExclusions()]);
 
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
@@ -145,12 +165,33 @@ async function init() {
   $("inputSourceLang").addEventListener("change", event => saveSync({ inputSourceLang: event.target.value }));
   $("inputTargetLang").addEventListener("change", event => saveSync({ inputTargetLang: event.target.value }));
 
+  $("swapInputLang").addEventListener("click", async () => {
+    const source = settings.inputSourceLang || "auto";
+    const target = settings.inputTargetLang || "en";
+    if (source === "auto") return;
+    await saveSync({ inputSourceLang: target, inputTargetLang: source });
+  });
+
   $("siteRule").addEventListener("change", async event => {
     if (!currentHost) return;
     const siteRules = { ...(settings.siteRules || {}) };
     if (event.target.value === "default") delete siteRules[currentHost];
     else siteRules[currentHost] = event.target.value;
     await saveSync({ siteRules });
+  });
+
+  $("pickExclusion").addEventListener("click", async () => {
+    const response = await sendToPage({ type: "FT_PICK_EXCLUSION" });
+    if (response?.ok) $("exclusionCount").textContent = "排除区域：已进入网页选择模式";
+    else $("exclusionCount").textContent = "排除区域：无法启动选择模式";
+  });
+
+  $("clearExclusions").addEventListener("click", async () => {
+    const response = await sendToPage({ type: "FT_CLEAR_SITE_EXCLUSIONS" });
+    if (response?.ok) {
+      await refreshExclusions();
+      setTimeout(refreshPageState, 150);
+    }
   });
 
   $("pauseResume").addEventListener("click", async () => {
