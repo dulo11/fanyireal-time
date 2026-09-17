@@ -24,7 +24,8 @@
         <input id="fallbackGoogle" type="checkbox">
         <span>Azure 失败时自动回退到 Google Web</span>
       </label>
-      <p class="note">v0.7 以 Azure 为正式主引擎。连续失败会短暂熔断 Azure，避免长网页反复卡死；恢复后自动重试。</p>
+      <p id="engineStatus" class="note">引擎状态：正在读取…</p>
+      <p class="note">v0.7.1 以 Azure 为正式主引擎。连续失败会短暂熔断 Azure，避免长网页反复卡死；恢复后自动重试。</p>
     </section>
 
     <section id="azureSection">
@@ -66,18 +67,18 @@
         <input id="autoTranslate" type="checkbox">
         <span>打开网页后自动持续翻译</span>
       </label>
-      <p class="note">长页面采用增量扫描，不再只翻译最前面几段；动态帖子、评论、聊天消息和 Open Shadow DOM 会继续跟进。</p>
+      <p class="note">长页面采用增量扫描；动态帖子、评论、聊天消息和 Open Shadow DOM 会继续跟进。中文/日文等目标语言页面里出现明显外语片段时，v0.7.1 会自动补翻。</p>
     </section>
 
     <section>
       <h2>维护</h2>
       <div class="actions">
-        <button id="testEngine">测试翻译引擎</button>
+        <button id="testEngine">保存并测试翻译引擎</button>
         <button id="refreshCacheStats">刷新缓存统计</button>
         <button id="clearCache">清空翻译缓存</button>
       </div>
       <p id="cacheStats" class="note">缓存统计：正在读取…</p>
-      <p class="note">测试只翻译一条很短的测试文本。清缓存不会删除 Azure Key 或其他设置。</p>
+      <p class="note">测试会先保存当前页面里填写的 Endpoint / Region / Key，再翻译一条很短的测试文本。清缓存不会删除 Azure Key 或其他设置。</p>
     </section>
 
     <div class="actions">
