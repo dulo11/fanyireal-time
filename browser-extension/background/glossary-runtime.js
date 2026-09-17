@@ -3,7 +3,8 @@
   globalThis.__FT_GLOSSARY_RUNTIME__ = true;
 
   const baseTranslateBatch = globalThis.translateBatch;
-  if (typeof baseTranslateBatch !== "function" || !globalThis.FTGlossary) return;
+  const glossary = globalThis.FTGlossary;
+  if (typeof baseTranslateBatch !== "function" || !glossary) return;
 
   const GLOSSARY_DEFAULTS = {
     glossaryEnabled: true,
@@ -20,7 +21,7 @@
     return {
       enabled: local.glossaryEnabled !== false,
       caseSensitive: Boolean(local.glossaryCaseSensitive),
-      entries: FTGlossary.normalizeEntries(local.glossaryEntries)
+      entries: glossary.normalizeEntries(local.glossaryEntries)
     };
   }
 
@@ -31,8 +32,8 @@
     const config = await getGlossaryConfig();
     if (!config.enabled || !config.entries.length) return baseTranslateBatch(clean, options);
 
-    const plans = clean.map(text => FTGlossary.planText(text, config.entries, config.caseSensitive));
-    if (!plans.some(FTGlossary.hasFixedTerms)) return baseTranslateBatch(clean, options);
+    const plans = clean.map(text => glossary.planText(text, config.entries, config.caseSensitive));
+    if (!plans.some(glossary.hasFixedTerms)) return baseTranslateBatch(clean, options);
 
     const work = [];
     const workIndex = new Map();
@@ -56,7 +57,7 @@
         const index = workIndex.get(`${textIndex}:${segmentIndex}`);
         translatedSegments.push(index == null ? segment.text : (translated[index] ?? segment.text));
       });
-      return FTGlossary.renderPlan(plan, translatedSegments);
+      return glossary.renderPlan(plan, translatedSegments);
     });
   }
 
