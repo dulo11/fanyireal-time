@@ -8,10 +8,61 @@ const LOCAL_DEFAULTS = {
   requestTimeoutMs: 15000,
   maxRetries: 3,
   cacheMaxEntries: 30000,
-  cacheTtlDays: 30
+  cacheTtlDays: 30,
+  glossaryEnabled: true,
+  glossaryCaseSensitive: false,
+  glossaryEntries: []
 };
 
 const $ = id => document.getElementById(id);
+
+function parseGlossaryText(value) {
+  const entries = [];
+  const invalid = [];
+  const seen = new Set();
+  const lines = String(value || "").split(/\r?\n/);
+
+  lines.forEach((raw, index) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) return;
+    const match = line.match(/^(.*?)\s*(?:=>|→|->)\s*(.+)$/);
+    if (!match) {
+      invalid.push(index + 1);
+      return;
+    }
+    const source = match[1].trim();
+    const target = match[2].trim();
+    if (!source || !target) {
+      invalid.push(index + 1);
+      return;
+    }
+    if (seen.has(source)) return;
+    seen.add(source);
+    entries.push({ source, target });
+  });
+
+  return { entries: entries.slice(0, 300), invalid, truncated: entries.length > 300 };
+}
+
+function serializeGlossary(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map(item => {
+      const source = String(item?.source ?? item?.from ?? "").trim();
+      const target = String(item?.target ?? item?.to ?? "").trim();
+      return source && target ? `${source} => ${target}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function refreshGlossaryStatus() {
+  const parsed = parseGlossaryText($("glossaryText").value);
+  const notes = [`有效规则 ${parsed.entries.length} 条`];
+  if (parsed.invalid.length) notes.push(`格式错误行：${parsed.invalid.slice(0, 8).join("、")}${parsed.invalid.length > 8 ? "…" : ""}`);
+  if (parsed.truncated) notes.push("超过 300 条，保存时只保留前 300 条");
+  $("glossaryStatus").textContent = `术语表：${notes.join(" · ")}`;
+  return parsed;
+}
 
 async function load() {
   const [sync, localRaw] = await Promise.all([
@@ -31,9 +82,13 @@ async function load() {
   $("maxRetries").value = String(local.maxRetries ?? 3);
   $("cacheMaxEntries").value = String(local.cacheMaxEntries || 30000);
   $("cacheTtlDays").value = String(local.cacheTtlDays ?? 30);
+  $("glossaryEnabled").checked = local.glossaryEnabled !== false;
+  $("glossaryCaseSensitive").checked = Boolean(local.glossaryCaseSensitive);
+  $("glossaryText").value = serializeGlossary(local.glossaryEntries);
   $("enabled").checked = Boolean(sync.enabled);
   $("autoTranslate").checked = Boolean(sync.autoTranslate);
   toggleProviderSections();
+  refreshGlossaryStatus();
   await Promise.all([refreshCacheStats(), refreshDiagnostics(), refreshUsage()]);
 }
 
@@ -44,10 +99,11 @@ function toggleProviderSections() {
 function setStatus(message) {
   $("status").textContent = message;
   clearTimeout(setStatus.timer);
-  setStatus.timer = setTimeout(() => $("status").textContent = "", 3600);
+  setStatus.timer = setTimeout(() => $("status").textContent = "", 4200);
 }
 
 async function save({ showStatus = true, reload = true } = {}) {
+  const parsedGlossary = refreshGlossaryStatus();
   const sync = {
     enabled: $("enabled").checked,
     autoTranslate: $("autoTranslate").checked
@@ -61,7 +117,10 @@ async function save({ showStatus = true, reload = true } = {}) {
     requestTimeoutMs: Math.max(3000, Math.min(45000, Number($("requestTimeoutMs").value) || 15000)),
     maxRetries: Math.max(0, Math.min(5, Number($("maxRetries").value) || 0)),
     cacheMaxEntries: Math.max(1000, Math.min(200000, Number($("cacheMaxEntries").value) || 30000)),
-    cacheTtlDays: Math.max(0, Math.min(3650, Number($("cacheTtlDays").value) || 0))
+    cacheTtlDays: Math.max(0, Math.min(3650, Number($("cacheTtlDays").value) || 0)),
+    glossaryEnabled: $("glossaryEnabled").checked,
+    glossaryCaseSensitive: $("glossaryCaseSensitive").checked,
+    glossaryEntries: parsedGlossary.entries
   };
 
   if ($("clearAzureKey").checked) local.azureKey = "";
@@ -75,7 +134,10 @@ async function save({ showStatus = true, reload = true } = {}) {
 
   $("azureKey").value = "";
   $("clearAzureKey").checked = false;
-  if (showStatus) setStatus("已保存");
+  if (showStatus) {
+    const suffix = parsedGlossary.invalid.length ? `；${parsedGlossary.invalid.length} 行格式错误未保存` : "";
+    setStatus(`已保存${suffix}`);
+  }
   if (reload) await load();
 }
 
@@ -158,6 +220,7 @@ async function resetUsage() {
 }
 
 $("provider").addEventListener("change", toggleProviderSections);
+$("glossaryText").addEventListener("input", refreshGlossaryStatus);
 $("save").addEventListener("click", () => save().catch(error => setStatus(`保存失败：${error?.message || error}`)));
 $("testEngine").addEventListener("click", () => testEngine().catch(error => setStatus(`测试失败：${error?.message || error}`)));
 $("refreshUsage").addEventListener("click", () => refreshUsage().catch(error => setStatus(`用量读取失败：${error?.message || error}`)));
