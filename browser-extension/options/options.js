@@ -30,6 +30,7 @@ async function load() {
   $("enabled").checked = Boolean(sync.enabled);
   $("autoTranslate").checked = Boolean(sync.autoTranslate);
   toggleProviderSections();
+  await refreshCacheStats();
 }
 
 function toggleProviderSections() {
@@ -81,17 +82,29 @@ async function testEngine() {
   });
   if (!response?.ok) throw new Error(response?.error || "测试失败");
   setStatus(`测试成功：${response.translations?.[0] || "已返回译文"}`);
+  await refreshCacheStats();
+}
+
+async function refreshCacheStats() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_CACHE_STATS" });
+  if (!response?.ok) {
+    $("cacheStats").textContent = `缓存统计：读取失败${response?.error ? `（${response.error}）` : ""}`;
+    return;
+  }
+  $("cacheStats").textContent = `缓存统计：${response.entries || 0} 条译文缓存`;
 }
 
 async function clearCache() {
   const response = await chrome.runtime.sendMessage({ type: "FT_CLEAR_CACHE" });
   if (!response?.ok) throw new Error(response?.error || "清理失败");
+  await refreshCacheStats();
   setStatus("翻译缓存已清空");
 }
 
 $("provider").addEventListener("change", toggleProviderSections);
 $("save").addEventListener("click", () => save().catch(error => setStatus(`保存失败：${error?.message || error}`)));
 $("testEngine").addEventListener("click", () => testEngine().catch(error => setStatus(`测试失败：${error?.message || error}`)));
+$("refreshCacheStats").addEventListener("click", () => refreshCacheStats().catch(error => setStatus(`统计失败：${error?.message || error}`)));
 $("clearCache").addEventListener("click", () => clearCache().catch(error => setStatus(`清理失败：${error?.message || error}`)));
 
 load().catch(error => setStatus(`加载失败：${error?.message || error}`));
