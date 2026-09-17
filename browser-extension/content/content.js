@@ -202,7 +202,10 @@
     }
     if (state.queue.size) {
       clearTimeout(state.retryTimer);
-      state.retryTimer = setTimeout(() => scheduleFlush(0), Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
+      state.retryTimer = setTimeout(() => {
+        state.retryTimer = null;
+        scheduleFlush(0);
+      }, Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
     }
   }
 
