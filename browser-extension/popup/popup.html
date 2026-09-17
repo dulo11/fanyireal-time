@@ -29,74 +29,38 @@
         <input id="fallbackGoogleQuick" type="checkbox">
         <span>Azure 失败时自动使用 Google Web 备用</span>
       </label>
-      <div class="host">Google Web 在本扩展里无需 API Key、不会走付费账号；它属于非正式 Web 接口，可能被限流或失效。关闭后 Azure 失败就直接报错，不再自动调用 Google。</div>
+      <div class="host">Google Web 在本扩展里无需 API Key、不会走付费账号；它属于非正式 Web 接口，可能被限流或失效。</div>
       <label class="check-row">
         <input id="skipTargetLanguage" type="checkbox">
         <span>自动跳过已经是目标语言的文本</span>
       </label>
 
       <div class="grid">
-        <label>
-          <span>网页源语言</span>
-          <select id="sourceLang"></select>
-        </label>
-        <label>
-          <span>网页翻译为</span>
-          <select id="targetLang"></select>
-        </label>
+        <label><span>网页源语言</span><select id="sourceLang"></select></label>
+        <label><span>网页翻译为</span><select id="targetLang"></select></label>
       </div>
 
-      <label>
-        <span>显示方式</span>
-        <select id="displayMode">
-          <option value="translated">仅译文</option>
-          <option value="bilingual">原文 + 译文</option>
-        </select>
-      </label>
-      <div class="host">v1.1 跨浏览器版继续保护已经翻好的文字；网页脚本把译文覆盖回原文时直接恢复，不重复请求。</div>
+      <label><span>显示方式</span><select id="displayMode"><option value="translated">仅译文</option><option value="bilingual">原文 + 译文</option></select></label>
+      <div class="host">固定签名版继续保护已经翻好的文字；网页脚本把译文覆盖回原文时直接恢复，不重复请求。</div>
     </section>
 
     <section class="card">
-      <label class="check-row">
-        <input id="chatMode" type="checkbox">
-        <span>网页聊天连续翻译</span>
-      </label>
-      <label class="check-row">
-        <input id="inputPreview" type="checkbox">
-        <span>输入时实时预览译文</span>
-      </label>
+      <label class="check-row"><input id="chatMode" type="checkbox"><span>网页聊天连续翻译</span></label>
+      <label class="check-row"><input id="inputPreview" type="checkbox"><span>输入时实时预览译文</span></label>
       <div class="grid">
-        <label>
-          <span>我输入的语言</span>
-          <select id="inputSourceLang"></select>
-        </label>
-        <label>
-          <span>我发送为</span>
-          <select id="inputTargetLang"></select>
-        </label>
+        <label><span>我输入的语言</span><select id="inputSourceLang"></select></label>
+        <label><span>我发送为</span><select id="inputTargetLang"></select></label>
       </div>
-      <div class="actions">
-        <button id="swapInputLang">交换输入语言</button>
-      </div>
+      <div class="actions"><button id="swapInputLang">交换输入语言</button></div>
       <div class="host">按网站记住最后一次“输入语言 → 发送语言”。输入预览仍支持仅复制、交换和本次输入暂停预览。</div>
     </section>
 
     <section class="card">
-      <label>
-        <span>当前网站规则</span>
-        <select id="siteRule">
-          <option value="default">跟随全局设置</option>
-          <option value="always">始终翻译此网站</option>
-          <option value="never">永不翻译此网站</option>
-        </select>
-      </label>
+      <label><span>当前网站规则</span><select id="siteRule"><option value="default">跟随全局设置</option><option value="always">始终翻译此网站</option><option value="never">永不翻译此网站</option></select></label>
       <div id="host" class="host"></div>
       <div id="exclusionCount" class="host">排除区域：正在读取…</div>
       <div id="runtimeRoute" class="host">最近翻译路径：正在读取…</div>
-      <div class="actions">
-        <button id="pickExclusion">选择不翻译区域</button>
-        <button id="clearExclusions">清除此网站排除</button>
-      </div>
+      <div class="actions"><button id="pickExclusion">选择不翻译区域</button><button id="clearExclusions">清除此网站排除</button></div>
       <div class="host">点“选择不翻译区域”后回到网页，再点要排除的区域。代码块、编辑器、用户名区等以后不会自动翻译；Esc 可取消选择。</div>
     </section>
 
@@ -106,6 +70,17 @@
       <button id="rescanPage">补扫遗漏内容</button>
       <button id="restorePage">恢复原文</button>
     </div>
+
+    <section class="card" id="updateCard">
+      <strong>扩展更新</strong>
+      <div id="extensionVersion" class="host">当前版本：读取中…</div>
+      <div id="updateStatus" class="host">固定扩展 ID：hlfnagdelcpfdbpdeackdjelemaaoban</div>
+      <div class="actions">
+        <button id="checkExtensionUpdate">检查更新</button>
+        <button id="applyExtensionUpdate" hidden>应用已下载更新</button>
+      </div>
+      <div class="host">安装固定签名 CRX 后，支持标准 Chromium 更新机制的浏览器会按 update_url 自动检查；这里也可以手动请求检查。</div>
+    </section>
 
     <div class="tip">暂停后保留当前译文和剩余队列；继续后接着跑。高级设置里可以导出/恢复配置和复制诊断信息。</div>
     <button id="openOptions" class="link-button">翻译引擎、术语表、诊断与备份 ›</button>
