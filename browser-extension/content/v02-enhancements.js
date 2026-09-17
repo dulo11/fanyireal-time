@@ -23,6 +23,27 @@
     ".ft-translation-inline", ".ft-selection-bubble", ".ft-input-preview", "[data-ft-owned='1']"
   ].join(",");
 
+  const CHAT_ADAPTERS = [
+    {
+      id: "whatsapp",
+      hosts: ["web.whatsapp.com"],
+      composers: ["[contenteditable='true'][role='textbox']", "footer [contenteditable='true']"],
+      feeds: ["[role='application']", "[data-testid='conversation-panel-messages']"]
+    },
+    {
+      id: "telegram",
+      hosts: ["web.telegram.org"],
+      composers: [".input-message-input[contenteditable='true']", "[contenteditable='true'][role='textbox']"],
+      feeds: [".MessageList", ".messages-container", "[class*='message-list']"]
+    },
+    {
+      id: "discord",
+      hosts: ["discord.com", "www.discord.com"],
+      composers: ["[role='textbox'][contenteditable='true']", "[data-slate-editor='true']"],
+      feeds: ["[data-list-id='chat-messages']", "[role='log']"]
+    }
+  ];
+
   const state = {
     settings: { ...DEFAULTS },
     shadowObservers: new Map(),
@@ -30,13 +51,14 @@
     trackedShadowNodes: new Set(),
     shadowBusy: new WeakSet(),
     docObserver: null,
-    inputTimer: null,
-    inputSeq: 0,
+    inputStates: new WeakMap(),
+    activeEditable: null,
     previewEl: null,
     previewAnchor: null,
     previewInteracting: false,
     lastUrl: location.href,
-    routeTimer: null
+    routeTimer: null,
+    adapter: null
   };
 
   const helper = () => globalThis.FTLanguage;
@@ -163,6 +185,7 @@
   }
 
   function showInputPreview(anchor, original, translated, isError = false) {
+    if (state.activeEditable !== anchor) return;
     removePreview();
     const panel = document.createElement("div");
     panel.className = `ft-input-preview${isError ? " ft-error" : ""}`;
@@ -214,27 +237,71 @@
     positionPreview();
   }
 
+  function inputStateFor(element) {
+    let record = state.inputStates.get(element);
+    if (!record) {
+      record = { timer: null, seq: 0, lastText: "" };
+      state.inputStates.set(element, record);
+    }
+    return record;
+  }
+
+  function cancelInputPreview(element) {
+    const record = state.inputStates.get(element);
+    if (!record) return;
+    clearTimeout(record.timer);
+    record.timer = null;
+    record.seq++;
+  }
+
   function scheduleInputPreview(element) {
-    clearTimeout(state.inputTimer);
+    const record = inputStateFor(element);
+    clearTimeout(record.timer);
+    record.seq++;
+    const seq = record.seq;
+    state.activeEditable = element;
+
     if (!state.settings.enabled || !state.settings.chatMode || !state.settings.inputPreview) return removePreview();
     const text = readEditable(element).trim();
+    record.lastText = text;
     if (text.length < 2) return removePreview();
     if (shouldSkipBecauseAlreadyTarget(text, state.settings.inputTargetLang, state.settings.inputSourceLang)) return removePreview();
 
-    const seq = ++state.inputSeq;
-    state.inputTimer = setTimeout(async () => {
+    record.timer = setTimeout(async () => {
       try {
         const current = readEditable(element).trim();
-        if (!current || current !== text || seq !== state.inputSeq) return;
+        if (!current || current !== text || seq !== record.seq || state.activeEditable !== element) return;
         const translated = await translateOne(current, state.settings.inputSourceLang || "auto", state.settings.inputTargetLang || "en");
-        if (seq !== state.inputSeq || !element.isConnected || readEditable(element).trim() !== current) return;
+        if (seq !== record.seq || !element.isConnected || state.activeEditable !== element || readEditable(element).trim() !== current) return;
         if (translated.trim() === current.trim()) return removePreview();
         showInputPreview(element, current, translated);
       } catch (error) {
-        if (seq !== state.inputSeq) return;
+        if (seq !== record.seq || state.activeEditable !== element) return;
         showInputPreview(element, text, `实时输入翻译失败：${error?.message || error}`, true);
       }
     }, Math.max(250, Number(state.settings.inputPreviewDelay) || 550));
+  }
+
+  function findAdapter() {
+    const host = location.hostname.toLowerCase();
+    return CHAT_ADAPTERS.find(adapter => adapter.hosts.some(item => host === item || host.endsWith(`.${item}`))) || null;
+  }
+
+  function markAdapterElements(root = document) {
+    state.adapter = findAdapter();
+    const adapter = state.adapter;
+    if (!adapter || !root?.querySelectorAll) return;
+
+    for (const selector of adapter.composers) {
+      let elements = [];
+      try { elements = root.querySelectorAll(selector); } catch {}
+      for (const element of elements) element.dataset.ftChatComposer = "1";
+    }
+    for (const selector of adapter.feeds) {
+      let elements = [];
+      try { elements = root.querySelectorAll(selector); } catch {}
+      for (const element of elements) element.dataset.ftChatFeed = "1";
+    }
   }
 
   function shadowEligible(node) {
@@ -346,7 +413,11 @@
     if (state.docObserver || !document.documentElement) return;
     state.docObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
-        for (const added of mutation.addedNodes) if (added.nodeType === Node.ELEMENT_NODE) discoverShadowRoots(added);
+        for (const added of mutation.addedNodes) {
+          if (added.nodeType !== Node.ELEMENT_NODE) continue;
+          discoverShadowRoots(added);
+          markAdapterElements(added);
+        }
       }
     });
     state.docObserver.observe(document.documentElement, { subtree: true, childList: true });
@@ -367,8 +438,11 @@
   function handleRouteChange() {
     if (location.href === state.lastUrl) return;
     state.lastUrl = location.href;
+    if (state.activeEditable) cancelInputPreview(state.activeEditable);
+    state.activeEditable = null;
     removePreview();
     setTimeout(() => {
+      markAdapterElements(document);
       window.dispatchEvent(new CustomEvent("ft-route-change", { detail: { url: location.href } }));
       discoverShadowRoots(document);
       for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
@@ -378,6 +452,7 @@
   function startRouteWatch() {
     window.addEventListener("popstate", handleRouteChange, true);
     window.addEventListener("hashchange", handleRouteChange, true);
+    try { window.navigation?.addEventListener?.("navigate", () => setTimeout(handleRouteChange, 0)); } catch {}
     if (!state.routeTimer) state.routeTimer = setInterval(handleRouteChange, 1200);
   }
 
@@ -388,12 +463,22 @@
 
   document.addEventListener("focusin", event => {
     const editable = resolveEditable(event.target);
-    if (editable) scheduleInputPreview(editable);
+    if (!editable) return;
+    if (state.activeEditable && state.activeEditable !== editable) cancelInputPreview(state.activeEditable);
+    state.activeEditable = editable;
+    scheduleInputPreview(editable);
   }, true);
 
-  document.addEventListener("focusout", () => {
+  document.addEventListener("focusout", event => {
+    const editable = resolveEditable(event.target);
+    if (editable) cancelInputPreview(editable);
     setTimeout(() => {
-      if (!state.previewInteracting && document.activeElement !== state.previewAnchor) removePreview();
+      if (state.previewInteracting) return;
+      const active = resolveEditable(document.activeElement);
+      if (!active) {
+        state.activeEditable = null;
+        removePreview();
+      }
     }, 220);
   }, true);
 
@@ -405,6 +490,7 @@
 
   async function init() {
     await loadSettings();
+    markAdapterElements(document);
     startDocumentObserver();
     discoverShadowRoots(document);
     startRouteWatch();
