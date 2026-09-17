@@ -69,12 +69,31 @@ function relayToSender(sender, payload) {
       return;
     }
     const options = Number.isInteger(sender.frameId) ? { frameId: sender.frameId } : undefined;
-    chrome.tabs.sendMessage(sender.tab.id, payload, options, response => {
-      const lastError = chrome.runtime.lastError;
-      if (lastError) reject(new Error(lastError.message));
-      else resolve(response || { ok: true });
-    });
+    try {
+      chrome.tabs.sendMessage(sender.tab.id, payload, options, response => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) reject(new Error(lastError.message));
+        else resolve(response || { ok: true });
+      });
+    } catch (error) {
+      reject(error);
+    }
   });
+}
+
+async function openOptionsTab() {
+  const url = chrome.runtime.getURL("options/options.html");
+  if (chrome.tabs?.create) {
+    const created = chrome.tabs.create({ url });
+    if (created && typeof created.then === "function") await created;
+    return { ok: true, url, method: "tabs.create" };
+  }
+  if (typeof chrome.runtime.openOptionsPage === "function") {
+    const opened = chrome.runtime.openOptionsPage();
+    if (opened && typeof opened.then === "function") await opened;
+    return { ok: true, url, method: "openOptionsPage" };
+  }
+  throw new Error("当前浏览器不支持打开扩展设置页");
 }
 
 async function handleFloatingAction(sender, action) {
@@ -106,6 +125,18 @@ async function handleFloatingAction(sender, action) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "FT_BACKGROUND_PING") {
+    sendResponse({ ok: true, at: Date.now() });
+    return false;
+  }
+
+  if (message?.type === "FT_OPEN_OPTIONS") {
+    openOptionsTab()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
   if (message?.type === "FT_DIAGNOSTICS") {
     diagnosticsSnapshot()
       .then(diagnostics => sendResponse({ ok: true, diagnostics }))
