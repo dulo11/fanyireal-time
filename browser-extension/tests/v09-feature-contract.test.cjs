@@ -6,7 +6,7 @@ const root = path.resolve(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const manifest = JSON.parse(read('manifest.json'));
-assert.equal(manifest.version, '1.2.0');
+assert.equal(manifest.version, '1.3.0');
 
 const optionHtml = read('options/options.html');
 for (const id of ['glossaryEnabled', 'glossaryCaseSensitive', 'glossaryText', 'glossaryStatus', 'copyDiagnostics', 'exportSettings', 'importSettings', 'includeAzureKey']) {
@@ -48,4 +48,4 @@ const siteInput = read('content/site-input-profile.js');
 assert.match(siteInput, /siteInputLanguagesV1/);
 assert.match(siteInput, /chrome\.storage\.sync\.set/);
 
-console.log('v1.2 inherited feature contract tests passed');
+console.log('v1.3 inherited feature contract tests passed');
