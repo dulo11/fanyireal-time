@@ -5,6 +5,7 @@ on:
     branches:
       - feature/browser-translator-v0.1
       - feature/browser-translator-v0.2
+      - feature/browser-translator-v0.3
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'

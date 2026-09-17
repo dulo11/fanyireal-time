@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "0.2.0",
-  "description": "持续翻译整个网页、动态内容和聊天输入，并增强 Shadow DOM 页面兼容。",
+  "version": "0.3.0",
+  "description": "持续翻译整个网页、动态内容和聊天输入，并支持 Microsoft/Azure、Google Web 与 OCI 代理翻译。",
   "permissions": [
     "storage",
     "activeTab",

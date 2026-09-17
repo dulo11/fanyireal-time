@@ -9,9 +9,12 @@ const SYNC_DEFAULTS = {
 
 const LOCAL_DEFAULTS = {
   translationProvider: "google-web",
+  fallbackGoogle: true,
   azureEndpoint: "https://api.cognitive.microsofttranslator.com",
   azureRegion: "",
-  azureKey: ""
+  azureKey: "",
+  ociProxyEndpoint: "",
+  ociProxyToken: ""
 };
 
 const DB_NAME = "floating-translator-cache";
@@ -23,9 +26,7 @@ function openDb() {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE);
-      }
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -84,6 +85,16 @@ function normalizeAzureLang(lang) {
   return lang;
 }
 
+function normalizeOciLang(lang) {
+  if (!lang || lang === "auto") return "auto";
+  const value = lang.toLowerCase();
+  if (value === "zh-hans") return "zh-CN";
+  if (value === "zh-hant") return "zh-TW";
+  if (value === "pt-br") return "pt-BR";
+  if (value === "fr-ca") return "fr-CA";
+  return lang;
+}
+
 function splitLongText(text, maxLength = 3500) {
   if (text.length <= maxLength) return [text];
   const pieces = [];
@@ -119,9 +130,7 @@ async function googleWebTranslate(text, sourceLang, targetLang) {
       q: piece
     });
     const response = await fetch(`https://translate.googleapis.com/translate_a/single?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error(`Google Web 翻译失败：HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Google Web 翻译失败：HTTP ${response.status}`);
     const data = await response.json();
     const result = Array.isArray(data?.[0])
       ? data[0].map(segment => segment?.[0] || "").join("")
@@ -133,26 +142,20 @@ async function googleWebTranslate(text, sourceLang, targetLang) {
 }
 
 async function azureTranslate(text, sourceLang, targetLang, config) {
-  if (!config.azureKey) {
-    throw new Error("尚未设置 Microsoft/Azure Translator Key");
-  }
+  if (!config.azureKey) throw new Error("尚未设置 Microsoft/Azure Translator Key");
 
   const endpoint = String(config.azureEndpoint || LOCAL_DEFAULTS.azureEndpoint).replace(/\/$/, "");
   const params = new URLSearchParams({
     "api-version": "3.0",
     to: normalizeAzureLang(targetLang)
   });
-  if (sourceLang && sourceLang !== "auto") {
-    params.set("from", normalizeAzureLang(sourceLang));
-  }
+  if (sourceLang && sourceLang !== "auto") params.set("from", normalizeAzureLang(sourceLang));
 
   const headers = {
     "Content-Type": "application/json",
     "Ocp-Apim-Subscription-Key": config.azureKey
   };
-  if (config.azureRegion) {
-    headers["Ocp-Apim-Subscription-Region"] = config.azureRegion;
-  }
+  if (config.azureRegion) headers["Ocp-Apim-Subscription-Region"] = config.azureRegion;
 
   const response = await fetch(`${endpoint}/translate?${params.toString()}`, {
     method: "POST",
@@ -168,6 +171,41 @@ async function azureTranslate(text, sourceLang, targetLang, config) {
   return data?.[0]?.translations?.[0]?.text || text;
 }
 
+async function ociProxyTranslate(text, sourceLang, targetLang, config) {
+  if (!config.ociProxyEndpoint) {
+    throw new Error("尚未设置 Oracle OCI 翻译代理地址");
+  }
+
+  const headers = { "Content-Type": "application/json" };
+  if (config.ociProxyToken) headers.Authorization = `Bearer ${config.ociProxyToken}`;
+
+  const response = await fetch(config.ociProxyEndpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      text,
+      sourceLang: normalizeOciLang(sourceLang),
+      targetLang: normalizeOciLang(targetLang)
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Oracle OCI 翻译失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 180)}` : ""}`);
+  }
+
+  const data = await response.json();
+  const translated = data?.translatedText ?? data?.translation ?? data?.translations?.[0];
+  if (typeof translated !== "string") throw new Error("Oracle OCI 代理返回格式不正确");
+  return translated;
+}
+
+async function runProvider(provider, text, sourceLang, targetLang, config) {
+  if (provider === "azure") return azureTranslate(text, sourceLang, targetLang, config);
+  if (provider === "oci-proxy") return ociProxyTranslate(text, sourceLang, targetLang, config);
+  return googleWebTranslate(text, sourceLang, targetLang);
+}
+
 async function translateOne(text, options, config) {
   if (!text || !text.trim()) return text;
   const provider = options.provider || config.translationProvider || "google-web";
@@ -178,10 +216,15 @@ async function translateOne(text, options, config) {
   if (typeof cached === "string") return cached;
 
   let result;
-  if (provider === "azure") {
-    result = await azureTranslate(text, sourceLang, targetLang, config);
-  } else {
-    result = await googleWebTranslate(text, sourceLang, targetLang);
+  try {
+    result = await runProvider(provider, text, sourceLang, targetLang, config);
+  } catch (error) {
+    if (provider !== "google-web" && config.fallbackGoogle) {
+      console.warn(`[FloatingTranslator] ${provider} 失败，回退 Google Web`, error);
+      result = await googleWebTranslate(text, sourceLang, targetLang);
+    } else {
+      throw error;
+    }
   }
 
   await cacheSet(key, result);
@@ -257,7 +300,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "FT_GET_CONFIG") {
     getConfig()
-      .then(config => sendResponse({ ok: true, config: { ...config, azureKey: config.azureKey ? "__SET__" : "" } }))
+      .then(config => sendResponse({
+        ok: true,
+        config: {
+          ...config,
+          azureKey: config.azureKey ? "__SET__" : "",
+          ociProxyToken: config.ociProxyToken ? "__SET__" : ""
+        }
+      }))
       .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
