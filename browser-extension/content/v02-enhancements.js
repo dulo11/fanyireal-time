@@ -53,18 +53,26 @@
     shadowBusy: new WeakSet(),
     docObserver: null,
     inputStates: new WeakMap(),
+    mutedInputs: new WeakSet(),
     activeEditable: null,
     previewEl: null,
     previewAnchor: null,
     previewInteracting: false,
     lastUrl: location.href,
     routeTimer: null,
-    adapter: null
+    adapter: null,
+    shadowProtectedRestores: 0
   };
 
   const helper = () => globalThis.FTLanguage;
+  const exclusions = () => globalThis.FTSiteExclusions;
   const normalizeLang = value => helper()?.normalizeLang(value) || String(value || "").toLowerCase();
   const pageLang = () => normalizeLang(document.documentElement?.lang || "");
+
+  function isExcluded(element) {
+    try { return Boolean(exclusions()?.isExcluded?.(element)); }
+    catch { return false; }
+  }
 
   function currentSiteRule() {
     return state.settings.siteRules?.[location.hostname] || "default";
@@ -176,13 +184,28 @@
     const anchor = state.previewAnchor;
     if (!panel || !anchor?.isConnected) return removePreview();
     const rect = anchor.getBoundingClientRect();
-    const width = Math.min(420, Math.max(260, rect.width || 320), innerWidth - 16);
+    const width = Math.min(440, Math.max(270, rect.width || 320), innerWidth - 16);
     let top = rect.bottom + 8;
-    if (top + 180 > innerHeight) top = Math.max(8, rect.top - 188);
+    if (top + 210 > innerHeight) top = Math.max(8, rect.top - 218);
     const left = Math.min(innerWidth - width - 8, Math.max(8, rect.left));
     panel.style.width = `${width}px`;
     panel.style.top = `${top}px`;
     panel.style.left = `${left}px`;
+  }
+
+  async function swapInputLanguages(anchor) {
+    const source = state.settings.inputSourceLang || "auto";
+    const target = state.settings.inputTargetLang || "en";
+    if (source === "auto") return false;
+    const patch = { inputSourceLang: target, inputTargetLang: source };
+    state.settings = { ...state.settings, ...patch };
+    await chrome.storage.sync.set(patch);
+    removePreview();
+    if (anchor?.isConnected) {
+      anchor.focus();
+      scheduleInputPreview(anchor);
+    }
+    return true;
   }
 
   function showInputPreview(anchor, original, translated, isError = false) {
@@ -214,22 +237,41 @@
 
       const copy = document.createElement("button");
       copy.type = "button";
-      copy.textContent = "复制译文";
+      copy.textContent = "仅复制译文";
       copy.addEventListener("click", async () => {
         copy.textContent = await copyText(translated) ? "已复制" : "复制失败";
+      });
+
+      const swap = document.createElement("button");
+      swap.type = "button";
+      swap.textContent = state.settings.inputSourceLang === "auto" ? "交换需指定源语言" : "交换语言";
+      swap.disabled = state.settings.inputSourceLang === "auto";
+      swap.addEventListener("click", async () => {
+        const ok = await swapInputLanguages(anchor);
+        if (!ok) swap.textContent = "请先指定源语言";
+      });
+
+      const mute = document.createElement("button");
+      mute.type = "button";
+      mute.textContent = "本次输入暂停预览";
+      mute.addEventListener("click", () => {
+        state.mutedInputs.add(anchor);
+        cancelInputPreview(anchor);
+        removePreview();
+        anchor.focus();
       });
 
       const close = document.createElement("button");
       close.type = "button";
       close.textContent = "关闭";
       close.addEventListener("click", removePreview);
-      actions.append(replace, copy, close);
+      actions.append(replace, copy, swap, mute, close);
       panel.appendChild(actions);
     }
 
     const meta = document.createElement("div");
     meta.className = "ft-input-preview-meta";
-    meta.textContent = `原文：${original}`;
+    meta.textContent = `${state.settings.inputSourceLang || "auto"} → ${state.settings.inputTargetLang || "en"} · 原文：${original}`;
     panel.appendChild(meta);
 
     document.documentElement.appendChild(panel);
@@ -262,6 +304,7 @@
     const seq = record.seq;
     state.activeEditable = element;
 
+    if (state.mutedInputs.has(element) || isExcluded(element)) return removePreview();
     if (!state.settings.enabled || !state.settings.chatMode || !state.settings.inputPreview) return removePreview();
     const text = readEditable(element).trim();
     record.lastText = text;
@@ -271,13 +314,13 @@
     record.timer = setTimeout(async () => {
       try {
         const current = readEditable(element).trim();
-        if (!current || current !== text || seq !== record.seq || state.activeEditable !== element) return;
+        if (!current || current !== text || seq !== record.seq || state.activeEditable !== element || state.mutedInputs.has(element)) return;
         const translated = await translateOne(current, state.settings.inputSourceLang || "auto", state.settings.inputTargetLang || "en");
-        if (seq !== record.seq || !element.isConnected || state.activeEditable !== element || readEditable(element).trim() !== current) return;
+        if (seq !== record.seq || !element.isConnected || state.activeEditable !== element || readEditable(element).trim() !== current || state.mutedInputs.has(element)) return;
         if (translated.trim() === current.trim()) return removePreview();
         showInputPreview(element, current, translated);
       } catch (error) {
-        if (seq !== record.seq || state.activeEditable !== element) return;
+        if (seq !== record.seq || state.activeEditable !== element || state.mutedInputs.has(element)) return;
         showInputPreview(element, text, `实时输入翻译失败：${error?.message || error}`, true);
       }
     }, Math.max(250, Number(state.settings.inputPreviewDelay) || 550));
@@ -305,16 +348,48 @@
     }
   }
 
+  function createShadowSpan(node, translated) {
+    const span = document.createElement("span");
+    span.dataset.ftOwned = "1";
+    span.className = "ft-translation-inline";
+    span.textContent = translated;
+    return span;
+  }
+
+  function restoreShadowRecord(node, record) {
+    if (!node?.isConnected || !record || !translationEnabled() || isExcluded(node.parentElement)) return false;
+    if (node.nodeValue !== record.original) return false;
+    if (state.settings.displayMode === "bilingual") {
+      if (!record.translationEl?.isConnected) {
+        record.translationEl ||= createShadowSpan(node, record.translated || "");
+        node.parentNode?.insertBefore(record.translationEl, node.nextSibling);
+        state.shadowProtectedRestores++;
+        return true;
+      }
+      return false;
+    }
+    node.nodeValue = record.rendered;
+    state.shadowProtectedRestores++;
+    return true;
+  }
+
   function shadowEligible(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
-    if (!parent || parent.closest(SKIP)) return false;
+    if (!parent || parent.closest(SKIP) || isExcluded(parent)) return false;
     const text = node.nodeValue?.trim();
     if (!text || text.length < 2 || !/[\p{L}\p{M}]/u.test(text)) return false;
     if (/^(https?:\/\/|www\.)\S+$/i.test(text)) return false;
     if (shouldSkipBecauseAlreadyTarget(text, state.settings.targetLang, state.settings.sourceLang)) return false;
     const record = state.shadowRecords.get(node);
-    return !(record && (node.nodeValue === record.rendered || node.nodeValue === record.original));
+    if (record) {
+      if (node.nodeValue === record.rendered) return false;
+      if (node.nodeValue === record.original) {
+        restoreShadowRecord(node, record);
+        return false;
+      }
+    }
+    return true;
   }
 
   function collectShadowText(root, max = 80) {
@@ -342,19 +417,16 @@
       if (state.pagePaused) return;
 
       nodes.forEach((node, index) => {
-        if (!node.isConnected) return;
+        if (!node.isConnected || isExcluded(node.parentElement)) return;
         const translated = response.translations?.[index];
         if (typeof translated !== "string") return;
         const original = node.nodeValue;
         const prefix = original.match(/^\s*/)?.[0] || "";
         const suffix = original.match(/\s*$/)?.[0] || "";
         const rendered = `${prefix}${translated}${suffix}`;
-        const record = { original, rendered, translationEl: null };
+        const record = { original, rendered, translated, translationEl: null };
         if (state.settings.displayMode === "bilingual") {
-          const span = document.createElement("span");
-          span.dataset.ftOwned = "1";
-          span.className = "ft-translation-inline";
-          span.textContent = translated;
+          const span = createShadowSpan(node, translated);
           node.parentNode?.insertBefore(span, node.nextSibling);
           record.translationEl = span;
         } else {
@@ -388,7 +460,15 @@
       if (state.shadowBusy.has(root)) return;
       let meaningful = false;
       for (const mutation of mutations) {
-        if (mutation.type === "characterData") meaningful = true;
+        if (mutation.type === "characterData") {
+          const node = mutation.target;
+          const record = state.shadowRecords.get(node);
+          if (record && node.nodeValue === record.original) {
+            restoreShadowRecord(node, record);
+            continue;
+          }
+          meaningful = true;
+        }
         for (const added of mutation.addedNodes || []) {
           if (added.nodeType === Node.ELEMENT_NODE && added.dataset?.ftOwned === "1") continue;
           if (added.nodeType === Node.ELEMENT_NODE || added.nodeType === Node.TEXT_NODE) meaningful = true;
@@ -406,7 +486,9 @@
   }
 
   function discoverShadowRoots(root = document) {
-    const inspect = element => { if (element?.shadowRoot) observeShadowRoot(element.shadowRoot); };
+    const inspect = element => {
+      if (element?.shadowRoot && !isExcluded(element)) observeShadowRoot(element.shadowRoot);
+    };
     if (root instanceof Element) inspect(root);
     if (root.querySelectorAll) for (const element of root.querySelectorAll("*")) inspect(element);
   }
@@ -435,6 +517,12 @@
       if (translationEnabled()) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
     }
     if (!state.settings.inputPreview || !state.settings.chatMode || !state.settings.enabled) removePreview();
+  }
+
+  function handleExclusionsChanged() {
+    restoreShadowTranslations();
+    removePreview();
+    if (translationEnabled()) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
   }
 
   function handleRouteChange() {
@@ -473,7 +561,10 @@
 
   document.addEventListener("focusout", event => {
     const editable = resolveEditable(event.target);
-    if (editable) cancelInputPreview(editable);
+    if (editable) {
+      cancelInputPreview(editable);
+      state.mutedInputs.delete(editable);
+    }
     setTimeout(() => {
       if (state.previewInteracting) return;
       const active = resolveEditable(document.activeElement);
@@ -486,6 +577,7 @@
 
   window.addEventListener("resize", positionPreview, { passive: true });
   window.addEventListener("scroll", positionPreview, { passive: true, capture: true });
+  window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
 
   chrome.runtime.onMessage.addListener(message => {
     if (message?.type === "FT_SET_PAUSED") {
@@ -522,6 +614,7 @@
   });
 
   async function init() {
+    try { await exclusions()?.ready; } catch {}
     await loadSettings();
     markAdapterElements(document);
     startDocumentObserver();
