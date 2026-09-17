@@ -6,7 +6,7 @@ const root = path.resolve(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-assert.equal(manifest.version, '1.2.0');
+assert.equal(manifest.version, '1.3.0');
 assert.equal(manifest.background.service_worker, 'background/main.js');
 
 const scripts = manifest.content_scripts?.[0]?.js || [];
@@ -128,5 +128,8 @@ assert.match(optionHtml, /provider-pool-ui\.js/);
 for (const id of ['addAzureCredential', 'addBaiduCredential', 'addAliyunCredential', 'saveProviderPool', 'providerPoolStatus']) {
   assert.match(optionHtml, new RegExp(`id=["']${id}["']`));
 }
+
+assert.match(manifest.key, /^[A-Za-z0-9+/]+=*$/);
+assert.equal(manifest.update_url, 'https://raw.githubusercontent.com/dulo11/fanyireal-time/extension-update-channel/updates.xml');
 
 console.log('runtime hardening tests passed');
