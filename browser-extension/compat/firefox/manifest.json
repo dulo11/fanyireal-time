@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "FloatingTranslator Browser",
+  "version": "1.1.0",
+  "description": "Firefox 兼容版：Azure 主引擎、Google Web 备用、长网页持续翻译、聊天输入、术语表与诊断。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "compat/browser-api.js",
+      "shared/glossary-core.js",
+      "background/service-worker.js",
+      "background/glossary-runtime.js",
+      "background/runtime-telemetry.js",
+      "background/cache-stats.js",
+      "background/runtime-extras.js"
+    ]
+  },
+  "action": {
+    "default_title": "FloatingTranslator",
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "compat/browser-api.js",
+        "shared/language-core.js",
+        "content/site-exclusions.js",
+        "content/site-input-profile.js",
+        "content/content.js",
+        "content/v02-enhancements.js",
+        "content/mixed-page-guard.js",
+        "content/attribute-translator.js"
+      ],
+      "css": ["styles/injected.css"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "floatingtranslator@966405.xyz",
+      "strict_min_version": "121.0"
+    }
+  }
+}
