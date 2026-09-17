@@ -17,20 +17,41 @@
 - Microsoft / Azure Translator 官方接口配置
 - API Key 只保存到浏览器本地扩展存储，不写入仓库
 - 手机浏览器友好的弹窗布局
+- GitHub Actions 自动校验并打包可安装 ZIP
+
+## 自动生成安装 ZIP
+
+仓库已经加入 `.github/workflows/build-browser-extension.yml`。
+
+当浏览器插件代码更新时，GitHub Actions 会自动：
+
+1. 校验 `manifest.json` 是否为合法 JSON。
+2. 检查 service worker、content script、popup 和 options 等核心文件是否存在。
+3. 从 `manifest.json` 自动读取版本号。
+4. 将 `browser-extension` 目录内容打包，并保证 `manifest.json` 位于 ZIP 根目录。
+5. 生成名为 `FloatingTranslator-Browser-v版本号` 的 Actions Artifact。
+
+例如当前版本会生成：
+
+`FloatingTranslator-Browser-v0.1.0`
+
+进入 GitHub 仓库的 **Actions → Build Browser Extension → 对应运行记录 → Artifacts** 即可下载。
 
 ## 手动安装
 
 ### Chrome / Edge 桌面版
 
-1. 下载或克隆本仓库。
-2. 打开扩展管理页面并开启“开发者模式”。
+1. 下载 Actions 生成的 ZIP 并解压。
+2. 打开浏览器扩展管理页面并开启“开发者模式”。
 3. 选择“加载已解压的扩展程序”。
-4. 选择 `browser-extension` 文件夹。
+4. 选择解压后、包含 `manifest.json` 的目录。
 5. 打开任意普通 `http/https` 网页，点击 FloatingTranslator 图标。
+
+也可以直接克隆仓库，然后加载 `browser-extension` 文件夹。
 
 ### Quetta Android
 
-将 `browser-extension` 打包为 ZIP 后，可按 Quetta 当前支持的扩展安装方式导入测试。手机端弹窗已经按窄屏布局处理。
+优先使用 Actions 自动生成的 `FloatingTranslator-Browser-v版本号` ZIP 进行测试。若当前 Quetta 版本要求导入解压目录或通过其扩展管理页安装，则按浏览器界面提示操作。手机端弹窗已按窄屏布局处理。
 
 ## 使用
 
