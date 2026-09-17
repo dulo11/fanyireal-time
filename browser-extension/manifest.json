@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "0.7.1",
-  "description": "完整网页持续翻译：Azure 主引擎、混合语言页面自动补翻、聊天输入翻译、动态页面与长网页优化。",
+  "version": "0.8.0",
+  "description": "完整网页持续翻译：Azure 主引擎、属性文字翻译、暂停续跑、精确失败重试、用量统计与自动缓存清理。",
   "permissions": [
     "storage",
     "activeTab",
@@ -25,7 +25,8 @@
         "shared/language-core.js",
         "content/content.js",
         "content/v02-enhancements.js",
-        "content/mixed-page-guard.js"
+        "content/mixed-page-guard.js",
+        "content/attribute-translator.js"
       ],
       "css": ["styles/injected.css"],
       "run_at": "document_idle",
