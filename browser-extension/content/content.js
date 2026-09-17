@@ -34,15 +34,19 @@
     queue: new Set(),
     processing: false,
     flushTimer: null,
+    retryTimer: null,
     nodeState: new WeakMap(),
+    nodeRetries: new WeakMap(),
     trackedNodes: new Set(),
     generation: 0,
     observer: null,
     started: false,
     processed: 0,
     failed: 0,
+    retried: 0,
     lastError: "",
-    scanTokens: new Set()
+    scanTokens: new Set(),
+    safetyScanTimer: null
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -103,6 +107,7 @@
   function nodePriority(node) {
     const parent = node.parentElement;
     if (!parent) return Number.MAX_SAFE_INTEGER;
+    if (state.settings.chatMode && parent.closest("[data-ft-chat-feed='1']")) return -100;
     const rect = parent.getBoundingClientRect();
     if (rect.bottom >= -400 && rect.top <= innerHeight + 700) return Math.abs(rect.top) / 1000;
     if (rect.top > innerHeight) return 10 + (rect.top - innerHeight);
@@ -183,15 +188,34 @@
     return batch;
   }
 
+  function retryFailedEntries(entries) {
+    let maxRetry = 0;
+    for (const entry of entries) {
+      if (!entry.node?.isConnected || !isEligibleTextNode(entry.node)) continue;
+      const retries = (state.nodeRetries.get(entry.node) || 0) + 1;
+      state.nodeRetries.set(entry.node, retries);
+      if (retries <= 4) {
+        state.queue.add(entry.node);
+        state.retried++;
+        maxRetry = Math.max(maxRetry, retries);
+      }
+    }
+    if (state.queue.size) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = setTimeout(() => scheduleFlush(0), Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
+    }
+  }
+
   async function processQueue() {
     if (state.processing || !state.active || state.queue.size === 0) return;
     state.processing = true;
     const generation = state.generation;
+    let entries = [];
 
     try {
       const candidates = takeBatch();
       if (!candidates.length) return;
-      const entries = candidates.map(node => {
+      entries = candidates.map(node => {
         const parts = splitWhitespace(node.nodeValue);
         return { node, parts, originalFull: node.nodeValue };
       }).filter(entry => hasLetters(entry.parts.core));
@@ -210,16 +234,18 @@
         const translated = response.translations?.[index];
         if (typeof translated !== "string" || !entry.node.isConnected) return;
         applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
+        state.nodeRetries.delete(entry.node);
         state.processed++;
       });
       state.lastError = "";
     } catch (error) {
       state.failed++;
       state.lastError = String(error?.message || error);
+      retryFailedEntries(entries);
       console.warn("[FloatingTranslator]", error);
     } finally {
       state.processing = false;
-      if (state.active && state.queue.size) scheduleFlush(50);
+      if (state.active && state.queue.size && !state.retryTimer) scheduleFlush(50);
     }
   }
 
@@ -245,6 +271,8 @@
   function restorePage() {
     state.generation++;
     cancelScans();
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
     state.queue.clear();
     for (const node of [...state.trackedNodes]) {
       const record = state.nodeState.get(node);
@@ -256,6 +284,7 @@
     state.trackedNodes.clear();
     state.processed = 0;
     state.failed = 0;
+    state.retried = 0;
     state.lastError = "";
   }
 
@@ -356,6 +385,24 @@
     }
   }
 
+  function handleRouteRescan() {
+    if (!state.active) return;
+    state.generation++;
+    cancelScans();
+    clearTimeout(state.flushTimer);
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+    state.queue.clear();
+    setTimeout(() => scheduleTreeScan(document.body), 100);
+  }
+
+  function scheduleSafetyScan(delay = 250) {
+    clearTimeout(state.safetyScanTimer);
+    state.safetyScanTimer = setTimeout(() => {
+      if (state.active && document.visibilityState === "visible") scheduleTreeScan(document.body);
+    }, delay);
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "FT_REFRESH_SETTINGS") {
       loadSettings().then(() => sendResponse({ ok: true, active: state.active }));
@@ -369,7 +416,7 @@
       return false;
     }
     if (message?.type === "FT_RESCAN_PAGE") {
-      if (state.active) scheduleTreeScan(document.body);
+      handleRouteRescan();
       sendResponse({ ok: true });
       return false;
     }
@@ -393,6 +440,7 @@
         processing: state.processing,
         processed: state.processed,
         failed: state.failed,
+        retried: state.retried,
         lastError: state.lastError
       });
       return false;
@@ -404,6 +452,11 @@
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
   document.addEventListener("keydown", translateFocusedInput, true);
+  window.addEventListener("ft-route-change", handleRouteRescan, true);
+  window.addEventListener("focus", () => scheduleSafetyScan(350), { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") scheduleSafetyScan(350);
+  });
 
   async function init() {
     if (state.started) return;
