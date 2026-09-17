@@ -72,8 +72,8 @@ public final class ScreenTranslationActivity extends Activity {
         LinearLayout modeCard = card(root);
         modeCard.addView(sectionTitle("全局翻译方式"));
         TextView modeTip = text(
-            "优先直接读取网站、系统界面、聊天气泡和普通 App 的无障碍文字。读不到文字时，再用无障碍截图 + ML Kit OCR。"
-                + "不会占用 MediaProjection 录屏会话。",
+            "优先直接读取网站、系统界面、聊天气泡和普通 App 的无障碍文字。默认同时用无障碍截图 + ML Kit OCR 补齐遗漏文字，按所选原语言文字模型与拉丁文字识别。"
+                + "不会占用 MediaProjection 录屏会话。长内容分段处理，点“全文”可滚动查看原文、完整译文及失败原因。",
             13, Color.rgb(205, 194, 224));
         modeTip.setPadding(0, dp(6), 0, dp(8));
         modeCard.addView(modeTip);
@@ -87,7 +87,7 @@ public final class ScreenTranslationActivity extends Activity {
         modeCard.addView(ocrFallback, matchWrap());
 
         smartOcr = secondaryButton("");
-        smartOcr.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_SMART_OCR, false));
+        smartOcr.setOnClickListener(v -> toggle(ScreenTranslationAccessibilityService.PREF_SCREEN_SMART_OCR, true));
         modeCard.addView(smartOcr, matchWrap());
 
         skipTarget = secondaryButton("");
@@ -130,8 +130,8 @@ public final class ScreenTranslationActivity extends Activity {
             "✅ 浏览器网页：普通网页文字、菜单、按钮、滚动内容\n"
                 + "✅ 手机界面：系统设置和大多数普通 App\n"
                 + "✅ 聊天软件：聊天气泡、新出现的消息、普通输入框\n"
-                + "✅ 图片/视频字幕/Canvas：无文字节点时可尝试 OCR\n\n"
-                + "⚠ 银行、密码框、DRM、FLAG_SECURE 页面和部分游戏可能禁止读取或截图，无法保证 100% 覆盖。",
+                + "✅ 图片/视频字幕/Canvas：开启整屏补齐时可尝试 OCR\n\n"
+                + "⚠ 银行、密码框、DRM、FLAG_SECURE 页面和部分游戏可能禁止读取或截图，无法保证 100% 覆盖。OCR 未接入所有文字体系；不支持的文字只能依赖 App 提供的文字节点。",
             13, Color.rgb(205, 194, 224));
         coverage.setPadding(0, dp(6), 0, 0);
         coverageCard.addView(coverage);
@@ -157,14 +157,14 @@ public final class ScreenTranslationActivity extends Activity {
 
         boolean auto = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
         boolean ocr = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_OCR_FALLBACK, true);
-        boolean smart = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_SMART_OCR, false);
+        boolean smart = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_SMART_OCR, true);
         boolean skip = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_SKIP_TARGET, true);
         boolean cache = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_INCREMENTAL_CACHE, true);
         boolean reverse = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_INPUT_REVERSE, true);
 
         if (continuous != null) continuous.setText("全局自动翻译：" + (auto ? "✅ 开" : "关闭"));
-        if (ocrFallback != null) ocrFallback.setText("无障碍截图 OCR 兜底：" + (ocr ? "✅ 开" : "关闭"));
-        if (smartOcr != null) smartOcr.setText("少量文字时强制 OCR 增强：" + (smart ? "✅ 开" : "关闭"));
+        if (ocrFallback != null) ocrFallback.setText("无障碍截图 OCR：" + (ocr ? "✅ 开" : "关闭"));
+        if (smartOcr != null) smartOcr.setText("整屏 OCR 补齐图片 / 漏读文字：" + (smart ? "✅ 开" : "关闭"));
         if (skipTarget != null) skipTarget.setText("跳过已经是目标语言的文字：" + (skip ? "✅ 开" : "关闭"));
         if (incrementalCache != null) incrementalCache.setText("网页 / 聊天增量缓存：" + (cache ? "✅ 开" : "关闭"));
         if (inputReverse != null) inputReverse.setText("双击悬浮球发送前反向翻译：" + (reverse ? "✅ 开" : "关闭"));

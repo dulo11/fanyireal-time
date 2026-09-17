@@ -36,8 +36,14 @@ public final class ScreenTranslationClient implements AutoCloseable {
     public static final class Result {
         public final String sourceLanguage;
         public final String translated;
+        public final String error;
 
         Result(String sourceLanguage, String translated) {
+            this(sourceLanguage, translated, "");
+        }
+
+        Result(String sourceLanguage, String translated, String error) {
+            this.error = error == null ? "" : error;
             this.sourceLanguage = sourceLanguage == null ? "" : sourceLanguage;
             this.translated = translated == null ? "" : translated;
         }
@@ -46,21 +52,27 @@ public final class ScreenTranslationClient implements AutoCloseable {
     public interface Callback {
         void onSuccess(List<Result> results, String engineName);
         void onError(String message);
+        default void onProgress(List<Result> results, int completed, int total, String engineName) {}
     }
 
     private static final String PREFS = "floating_translator";
-    private static final int MAX_ITEMS = 80;
+    private static final int MAX_ITEMS = 60;
     private static final int MAX_ITEM_CHARS = 1000;
-    private static final int MAX_TOTAL_CHARS = 42000;
+    private static final int MAX_TOTAL_CHARS = 30000;
 
     private final Context context;
     private final SharedPreferences prefs;
     private final SecureConfig secure;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService network = Executors.newSingleThreadExecutor();
+    interface BatchEngine { void translate(List<String> texts, String target, Callback callback); }
+    private final BatchEngine batchEngine;
     private volatile boolean closed;
 
-    public ScreenTranslationClient(Context context) {
+    public ScreenTranslationClient(Context context) { this(context, null); }
+
+    ScreenTranslationClient(Context context, BatchEngine batchEngine) {
+        this.batchEngine = batchEngine;
         this.context = context.getApplicationContext();
         this.prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         this.secure = new SecureConfig(this.context);
@@ -71,15 +83,83 @@ public final class ScreenTranslationClient implements AutoCloseable {
             callback.onError("全屏翻译引擎已经关闭");
             return;
         }
-        List<String> texts = sanitize(input);
-        if (texts.isEmpty()) {
-            callback.onError("当前屏幕没有可翻译文字");
-            return;
+        if (input == null || input.isEmpty()) { callback.onError("当前屏幕没有可翻译文字"); return; }
+        new Request(input, targetLanguage, callback).next();
+    }
+
+    private final class Request {
+        final List<String> pieces = new ArrayList<>();
+        final List<Integer> ends = new ArrayList<>();
+        final List<Result> translated = new ArrayList<>();
+        final String target;
+        final Callback callback;
+        int offset;
+        Request(List<String> input, String target, Callback callback) {
+            this.target = target; this.callback = callback;
+            for (String raw : input) {
+                String text = raw == null ? "" : raw.replace('\u0000', ' ').trim();
+                pieces.addAll(ScreenTextPlan.split(text, MAX_ITEM_CHARS));
+                ends.add(pieces.size());
+            }
         }
-        if (secure.hasAnyAzureProfile()) {
-            translateAzureBatch(texts, targetLanguage, callback);
-        } else {
-            translateWithCurrentEngine(texts, targetLanguage, callback);
+        void next() {
+            if (closed) return;
+            if (offset >= pieces.size()) { callback.onSuccess(snapshot(), "全屏分段翻译"); return; }
+            int end = ScreenTextPlan.batchEnd(pieces, offset, MAX_ITEMS, MAX_TOTAL_CHARS);
+            List<String> batch = new ArrayList<>(pieces.subList(offset, end));
+            Callback batchCallback = new Callback() {
+                public void onSuccess(List<Result> results, String engine) {
+                    if (closed) return;
+                    for (int i = 0; i < batch.size(); i++) translated.add(i < results.size()
+                        ? results.get(i) : new Result("", "", "翻译返回缺失"));
+                    offset = end;
+                    callback.onProgress(snapshot(), completed(), ends.size(), engine);
+                    main.post(Request.this::next);
+                }
+                public void onProgress(List<Result> results, int done, int total, String engine) {
+                    if (closed) return;
+                    int originalSize = translated.size();
+                    translated.addAll(results);
+                    callback.onProgress(snapshot(), completed(), ends.size(), engine);
+                    while (translated.size() > originalSize) translated.remove(translated.size() - 1);
+                }
+                public void onError(String message) {
+                    if (closed) return;
+                    List<Result> failed = new ArrayList<>();
+                    for (String ignored : batch) failed.add(new Result("", "", message));
+                    onSuccess(failed, "部分翻译失败，可重试");
+                }
+            };
+            if (batchEngine != null) batchEngine.translate(batch, target, batchCallback);
+            else if (secure.hasAnyAzureProfile()) translateAzureBatch(batch, target, batchCallback);
+            else translateWithCurrentEngine(batch, target, batchCallback);
+        }
+        int completed() {
+            int count = 0;
+            for (int end : ends) if (end <= translated.size()) count++;
+            return count;
+        }
+        List<Result> snapshot() {
+            List<Result> out = new ArrayList<>();
+            int start = 0;
+            for (int end : ends) {
+                if (end > translated.size()) { out.add(null); start = end; continue; }
+                StringBuilder text = new StringBuilder(), errors = new StringBuilder();
+                String language = translated.get(start).sourceLanguage;
+                for (int i = start; i < end; i++) {
+                    Result item = translated.get(i);
+                    if (!language.equals(item.sourceLanguage)) language = "";
+                    if (text.length() > 0) text.append("\n");
+                    if (item.error.isEmpty()) text.append(item.translated);
+                    else {
+                        text.append("[未译] ").append(pieces.get(i));
+                        if (errors.length() == 0) errors.append(item.error);
+                    }
+                }
+                out.add(new Result(language, text.toString(), errors.toString()));
+                start = end;
+            }
+            return out;
         }
     }
 
@@ -126,7 +206,7 @@ public final class ScreenTranslationClient implements AutoCloseable {
                             String source = detected == null ? "" : detected.optString("language", "");
                             JSONArray translations = row.optJSONArray("translations");
                             if (translations == null || translations.length() == 0) {
-                                results.add(new Result(source, ""));
+                                results.add(new Result(source, "", "翻译结果为空"));
                             } else {
                                 results.add(new Result(source,
                                     translations.getJSONObject(0).optString("text", "")));
@@ -196,31 +276,16 @@ public final class ScreenTranslationClient implements AutoCloseable {
                 String detected = router.lastDetectedLanguage();
                 if (detected == null || detected.trim().isEmpty()) detected = fallbackSource;
                 out.add(new Result(detected, translated));
-                translateFallbackNext(router, texts, fallbackSource, index + 1, out, callback);
+                callback.onProgress(new ArrayList<>(out), out.size(), texts.size(), engineName);
+                main.post(() -> translateFallbackNext(router, texts, fallbackSource, index + 1, out, callback));
             }
 
             @Override public void onError(String message) {
-                router.close();
-                callback.onError("第 " + (index + 1) + " 段翻译失败：" + message);
+                out.add(new Result("", "", message));
+                callback.onProgress(new ArrayList<>(out), out.size(), texts.size(), "部分翻译失败");
+                main.post(() -> translateFallbackNext(router, texts, fallbackSource, index + 1, out, callback));
             }
         });
-    }
-
-    private static List<String> sanitize(List<String> input) {
-        List<String> out = new ArrayList<>();
-        if (input == null) return out;
-        int total = 0;
-        for (String raw : input) {
-            if (out.size() >= MAX_ITEMS) break;
-            String text = raw == null ? "" : raw.replace('\u0000', ' ')
-                .replaceAll("[\\t ]+", " ").trim();
-            if (text.isEmpty()) continue;
-            if (text.length() > MAX_ITEM_CHARS) text = text.substring(0, MAX_ITEM_CHARS);
-            if (total + text.length() > MAX_TOTAL_CHARS) break;
-            out.add(text);
-            total += text.length();
-        }
-        return out;
     }
 
     private int clampIndex(int index) {

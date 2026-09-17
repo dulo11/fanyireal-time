@@ -56,7 +56,7 @@ public final class ScreenTranslationOverlayView extends View {
     /**
      * Accessibility trees often expose the same text both on a large container node and on its
      * children. Drawing both creates giant overlapping rectangles and makes translations look
-     * incomplete. Prefer the smaller/leaf-like boxes and remove obvious duplicate containers.
+     * incomplete. Remove only matching text, never discard unique parent paragraph content.
      */
     private List<Entry> normalizeEntries(List<Entry> value) {
         if (value == null || value.isEmpty()) return Collections.emptyList();
@@ -71,7 +71,7 @@ public final class ScreenTranslationOverlayView extends View {
         ArrayList<Entry> kept = new ArrayList<>();
         for (Entry candidate : candidates) {
             boolean skip = false;
-            int containedChildren = 0;
+
             long candidateArea = area(candidate.bounds);
             for (Entry small : kept) {
                 Rect intersection = new Rect();
@@ -87,23 +87,7 @@ public final class ScreenTranslationOverlayView extends View {
                     break;
                 }
 
-                boolean containsSmall = overlap >= smallArea * 0.92f
-                    && candidateArea >= smallArea * 1.45f;
-                if (containsSmall) {
-                    containedChildren++;
-                    String parentText = normalized(candidate.original);
-                    String childText = normalized(small.original);
-                    // Drop a parent duplicate only when the child really looks like a fragment of it.
-                    // Keep a lone large paragraph node otherwise, because some chat apps expose the
-                    // entire message as one node and there is no smaller replacement.
-                    if (!childText.isEmpty() && parentText.contains(childText)
-                        && candidateArea >= smallArea * 3L) {
-                        skip = true;
-                        break;
-                    }
-                }
             }
-            if (!skip && containedChildren >= 2) skip = true;
             if (!skip) kept.add(candidate);
         }
 
@@ -152,13 +136,14 @@ public final class ScreenTranslationOverlayView extends View {
 
             int linesFromSourceHeight = Math.max(4,
                 Math.round(b.height() / Math.max(textSize * 1.12f, 1f)));
-            int maxLines = longBlock ? Math.min(24, Math.max(8, linesFromSourceHeight + 3)) : 4;
+            // Inline preview is intentionally compact; the service exposes all text in its scrollable panel.
+            int maxLines = 4;
             StaticLayout.Builder builder = StaticLayout.Builder
                 .obtain(entry.translated, 0, entry.translated.length(), textPaint, textWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setIncludePad(false)
                 .setMaxLines(maxLines);
-            if (!longBlock) builder.setEllipsize(TextUtils.TruncateAt.END);
+            builder.setEllipsize(TextUtils.TruncateAt.END);
             StaticLayout layout = builder.build();
 
             int boxHeight = layout.getHeight() + pad * 2;

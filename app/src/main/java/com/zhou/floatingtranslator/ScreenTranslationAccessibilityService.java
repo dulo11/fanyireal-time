@@ -23,6 +23,9 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.TextView;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Toast;
 
 import com.google.mlkit.vision.common.InputImage;
@@ -62,7 +65,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     public static final String PREF_SCREEN_LAST_STATUS = "screen_translate_last_status";
 
     private static final String PREFS = "floating_translator";
-    private static final int MAX_NODE_BLOCKS = 80;
+    private static final int MAX_NODE_VISITS = 12000;
     private static final int MAX_CACHE_ENTRIES = 500;
     private static final long EVENT_DEBOUNCE_MS = 650L;
     private static final long MIN_AUTO_SCAN_GAP_MS = 950L;
@@ -84,6 +87,15 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     private TextView bubble;
     private WindowManager.LayoutParams bubbleParams;
 
+    private boolean destroyed;
+    private int screenGeneration;
+    private boolean rescanPending;
+    private int visitedNodes;
+    private View fullTextWindow;
+    private TextView fullTextButton;
+    private List<Block> latestBlocks = new ArrayList<>();
+    private Map<String, CachedTranslation> latestResults = new LinkedHashMap<>();
+    private String scanWarning = "";
     private boolean translating;
     private boolean screenshotBusy;
     private long lastAutoScanAt;
@@ -100,6 +112,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         windowManager = getSystemService(WindowManager.class);
         addOverlayWindow();
         addBubbleWindow();
+        addFullTextButton();
         updateBubbleLabel();
         saveStatus("全局无障碍翻译已启动");
     }
@@ -119,23 +132,26 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
             }
         }
 
-        boolean continuous = prefs.getBoolean(PREF_SCREEN_CONTINUOUS, false);
-        if (!continuous) return;
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             && type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             && type != AccessibilityEvent.TYPE_VIEW_SCROLLED
-            && type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
-            return;
-        }
-
-        // Typing into a chat input box should not cause the whole screen to retranslate on every key.
+            && type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) return;
         if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             AccessibilityNodeInfo source = event.getSource();
             if (source != null && source.isEditable()) return;
         }
-
-        main.removeCallbacks(eventScan);
-        main.postDelayed(eventScan, EVENT_DEBOUNCE_MS);
+        screenGeneration++;
+        lastScreenSignature = "";
+        clearOverlay();
+        latestBlocks.clear(); latestResults.clear();
+        if (fullTextButton != null) fullTextButton.setVisibility(View.INVISIBLE);
+        closeFullText();
+        boolean continuous = prefs.getBoolean(PREF_SCREEN_CONTINUOUS, false);
+        if (translating || screenshotBusy) { rescanPending = continuous; return; }
+        if (continuous) {
+            main.removeCallbacks(eventScan);
+            main.postDelayed(eventScan, EVENT_DEBOUNCE_MS);
+        }
     }
 
     @Override public void onInterrupt() {
@@ -143,6 +159,8 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     }
 
     @Override public void onDestroy() {
+        destroyed = true;
+        screenGeneration++;
         main.removeCallbacksAndMessages(null);
         removeWindows();
         translationCache.clear();
@@ -152,48 +170,54 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     }
 
     private void translateCurrentScreen(boolean userInitiated) {
-        if (prefs == null || translator == null || translating || screenshotBusy) return;
+        if (destroyed || prefs == null || translator == null) return;
+        if (translating || screenshotBusy) { rescanPending = true; return; }
         if (!userInitiated) {
-            long now = SystemClock.elapsedRealtime();
-            if (now - lastAutoScanAt < MIN_AUTO_SCAN_GAP_MS) return;
-            lastAutoScanAt = now;
+            long remaining = MIN_AUTO_SCAN_GAP_MS - (SystemClock.elapsedRealtime() - lastAutoScanAt);
+            if (remaining > 0) { main.removeCallbacks(eventScan); main.postDelayed(eventScan, remaining); return; }
         }
-
+        lastAutoScanAt = SystemClock.elapsedRealtime();
+        rescanPending = false;
+        scanWarning = "";
+        visitedNodes = 0;
+        closeFullText();
         AccessibilityNodeInfo root = getRootInActiveWindow();
         List<Block> blocks = new ArrayList<>();
         if (root != null) {
-            try {
-                collectTextNodes(root, blocks, new HashSet<>(), 0);
-            } catch (Exception ignored) {
-            }
+            try { collectTextNodes(root, blocks, new HashSet<>(), 0); }
+            catch (Exception e) { scanWarning = "部分节点读取失败"; }
         }
-
-        if (!blocks.isEmpty()) {
-            boolean smartOcr = prefs.getBoolean(PREF_SCREEN_SMART_OCR, false);
-            if (smartOcr && blocks.size() <= 1
-                && prefs.getBoolean(PREF_SCREEN_OCR_FALLBACK, true)) {
-                takeAccessibilityScreenshot();
-                return;
-            }
-
+        if (visitedNodes >= MAX_NODE_VISITS) scanWarning = "页面节点过多，已用 OCR 补充；可滚动后重试";
+        boolean ocr = prefs.getBoolean(PREF_SCREEN_OCR_FALLBACK, true);
+        boolean smart = prefs.getBoolean(PREF_SCREEN_SMART_OCR, true);
+        if (ocr && (smart || blocks.isEmpty())) {
+            takeAccessibilityScreenshot(blocks, screenGeneration);
+        } else if (!blocks.isEmpty()) {
             String signature = screenSignature(blocks, targetLanguage());
             if (!userInitiated && signature.equals(lastScreenSignature)) return;
-            lastScreenSignature = signature;
             translateBlocks(blocks, false);
-            return;
+        } else {
+            clearOverlay();
+            saveStatus("当前页面未读到文字；请开启截图 OCR 补齐");
+            if (userInitiated) toast("当前页面未读到文字；请开启截图 OCR 补齐");
         }
+    }
 
-        lastScreenSignature = "";
-        if (prefs.getBoolean(PREF_SCREEN_OCR_FALLBACK, true)) {
-            takeAccessibilityScreenshot();
-        } else if (userInitiated) {
-            toast("当前页面没有可读取的无障碍文字；可开启 OCR 兜底");
+    private void finishScan() {
+        translating = false; screenshotBusy = false;
+        if (destroyed) return;
+        setBubbleTemporarilyHidden(false);
+        updateBubbleLabel();
+        if (rescanPending) {
+            rescanPending = false;
+            main.removeCallbacks(eventScan);
+            main.postDelayed(eventScan, EVENT_DEBOUNCE_MS);
         }
     }
 
     private void collectTextNodes(AccessibilityNodeInfo node, List<Block> out,
                                   Set<String> dedupe, int depth) {
-        if (node == null || out.size() >= MAX_NODE_BLOCKS || depth > 34) return;
+        if (node == null || visitedNodes++ >= MAX_NODE_VISITS || depth > 64) return;
         if (!node.isVisibleToUser()) return;
 
         CharSequence packageName = node.getPackageName();
@@ -205,13 +229,14 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
                 Rect bounds = new Rect();
                 node.getBoundsInScreen(bounds);
                 if (isUsefulBounds(bounds)) {
+                    bounds.intersect(windowManager.getMaximumWindowMetrics().getBounds());
                     String key = text + "@" + bounds.flattenToString();
                     if (dedupe.add(key)) out.add(new Block(text, bounds));
                 }
             }
         }
 
-        for (int i = 0; i < node.getChildCount() && out.size() < MAX_NODE_BLOCKS; i++) {
+        for (int i = 0; i < node.getChildCount() && visitedNodes < MAX_NODE_VISITS; i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) collectTextNodes(child, out, dedupe, depth + 1);
         }
@@ -219,6 +244,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
 
     private void translateBlocks(List<Block> blocks, boolean fromOcr) {
         if (blocks.isEmpty()) return;
+        final int generation = screenGeneration;
         translating = true;
         setBubbleText("…");
         clearOverlay();
@@ -237,31 +263,46 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         }
 
         if (missing.isEmpty()) {
-            translating = false;
-            updateBubbleLabel();
             applyTranslations(blocks, resolved, fromOcr, "缓存");
+            lastScreenSignature = screenSignature(blocks, targetLanguage());
+            finishScan();
             return;
         }
 
         translator.translate(missing, target, new ScreenTranslationClient.Callback() {
-            @Override public void onSuccess(List<ScreenTranslationClient.Result> results, String engineName) {
-                translating = false;
-                updateBubbleLabel();
-                int count = Math.min(missing.size(), results.size());
-                for (int i = 0; i < count; i++) {
+            private boolean accept(List<ScreenTranslationClient.Result> results, String engine) {
+                if (destroyed || generation != screenGeneration) return false;
+                for (int i = 0; i < Math.min(missing.size(), results.size()); i++) {
                     ScreenTranslationClient.Result result = results.get(i);
-                    CachedTranslation cached = new CachedTranslation(result.sourceLanguage, normalize(result.translated));
+                    if (result == null) continue;
+                    CachedTranslation cached = new CachedTranslation(result.sourceLanguage,
+                        normalize(result.translated), result.error);
                     resolved.put(missing.get(i), cached);
-                    if (cacheEnabled) translationCache.put(cacheKey(target, missing.get(i)), cached);
+                    if (cacheEnabled && result.error.isEmpty() && !result.translated.trim().isEmpty())
+                        translationCache.put(cacheKey(target, missing.get(i)), cached);
                 }
-                applyTranslations(blocks, resolved, fromOcr, engineName);
+                applyTranslations(blocks, resolved, fromOcr, engine);
+                return true;
             }
-
+            @Override public void onProgress(List<ScreenTranslationClient.Result> results,
+                                             int completed, int total, String engineName) {
+                if (accept(results, engineName)) setBubbleText(completed + "/" + total);
+            }
+            @Override public void onSuccess(List<ScreenTranslationClient.Result> results, String engineName) {
+                if (accept(results, engineName)) {
+                    boolean failed = false;
+                    for (CachedTranslation value : resolved.values()) if (!value.error.isEmpty()) failed = true;
+                    lastScreenSignature = failed ? "" : screenSignature(blocks, target);
+                }
+                if (!destroyed && generation == screenGeneration && fullTextWindow != null) showFullText();
+                finishScan();
+            }
             @Override public void onError(String message) {
-                translating = false;
-                updateBubbleLabel();
-                saveStatus("翻译失败：" + message);
-                toast("全局翻译失败：" + message);
+                if (!destroyed && generation == screenGeneration) {
+                    applyTranslations(blocks, resolved, fromOcr, "部分失败：" + message);
+                    lastScreenSignature = "";
+                }
+                finishScan();
             }
         });
     }
@@ -280,9 +321,19 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
             if (translated.equals(block.text) && skipTarget) continue;
             entries.add(new ScreenTranslationOverlayView.Entry(block.bounds, block.text, translated));
         }
+        latestBlocks = new ArrayList<>(blocks);
+        latestResults = new LinkedHashMap<>(resolved);
+        int failed = 0;
+        for (CachedTranslation result : resolved.values()) if (!result.error.isEmpty()) failed++;
         if (overlayView != null) overlayView.setEntries(entries);
+        if (fullTextButton != null) {
+            fullTextButton.setText("全文 " + resolved.size() + "/" + new HashSet<>(blockTexts(blocks)).size()
+                + (failed > 0 ? " · 失败" + failed : ""));
+            fullTextButton.setVisibility(View.VISIBLE);
+        }
         String path = fromOcr ? "无障碍截图 OCR" : "全局无障碍文字";
-        saveStatus(path + " · " + engineName + " · " + entries.size() + " 段");
+        saveStatus(path + " · " + engineName + " · 已处理 " + resolved.size() + " 段 · 失败 " + failed
+            + (scanWarning.isEmpty() ? "" : " · " + scanWarning));
     }
 
     private void translateFocusedInput() {
@@ -314,6 +365,9 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
                     if (results.isEmpty()) {
                         toast("输入框翻译没有返回结果");
                         return;
+                    }
+                    if (!results.get(0).error.isEmpty()) {
+                        toast("输入框翻译失败，未替换：" + results.get(0).error); return;
                     }
                     String translated = normalize(results.get(0).translated);
                     if (translated.isEmpty()) {
@@ -372,13 +426,16 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         return null;
     }
 
-    private void takeAccessibilityScreenshot() {
+    private void takeAccessibilityScreenshot(List<Block> nodes, int generation) {
         if (screenshotBusy || translating) return;
         screenshotBusy = true;
         clearOverlay();
         setBubbleTemporarilyHidden(true);
 
-        main.postDelayed(() -> takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(),
+        if (fullTextButton != null) fullTextButton.setVisibility(View.INVISIBLE);
+        main.postDelayed(() -> {
+            if (destroyed || generation != screenGeneration) { finishScan(); return; }
+            try { takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(),
             new TakeScreenshotCallback() {
                 @Override public void onSuccess(ScreenshotResult screenshot) {
                     Bitmap bitmap = null;
@@ -392,61 +449,73 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
                     } catch (Exception e) {
                         screenshotBusy = false;
                         setBubbleTemporarilyHidden(false);
-                        toast("无障碍截图失败：" + safe(e));
+                        screenshotFallback(nodes, generation, "截图失败：" + safe(e));
                         if (buffer != null) try { buffer.close(); } catch (Exception ignored) {}
                         return;
                     }
                     if (buffer != null) try { buffer.close(); } catch (Exception ignored) {}
                     setBubbleTemporarilyHidden(false);
-                    runOcr(bitmap);
+                    if (destroyed || generation != screenGeneration) { bitmap.recycle(); finishScan(); return; }
+                    runOcr(bitmap, nodes, generation);
                 }
 
                 @Override public void onFailure(int errorCode) {
                     screenshotBusy = false;
                     setBubbleTemporarilyHidden(false);
-                    saveStatus("无障碍截图失败，错误码 " + errorCode);
-                    toast("当前页面无法截图，错误码 " + errorCode);
+                    screenshotFallback(nodes, generation, "当前页面无法截图，错误码 " + errorCode);
                 }
-            }), 90L);
+            }); } catch (Exception e) { screenshotFallback(nodes, generation, "截图不可用：" + safe(e)); }
+        }, 90L);
     }
 
-    private void runOcr(Bitmap bitmap) {
-        TextRecognizer recognizer = createRecognizer(sourceLanguageForOcr());
-        InputImage image = InputImage.fromBitmap(bitmap, 0);
-        recognizer.process(image)
+    private void screenshotFallback(List<Block> nodes, int generation, String warning) {
+        screenshotBusy = false;
+        if (destroyed || generation != screenGeneration) { finishScan(); return; }
+        scanWarning = warning + "，仅翻译已读取文字";
+        if (!nodes.isEmpty()) translateBlocks(nodes, false);
+        else { saveStatus(warning); toast(warning); finishScan(); }
+    }
+
+    private void runOcr(Bitmap bitmap, List<Block> nodes, int generation) {
+        // Run the configured script and Latin separately; retain text nodes when OCR misses a script.
+        List<String> scripts = new ArrayList<>();
+        scripts.add(sourceLanguageForOcr());
+        if (!"en".equals(sourceLanguageForOcr())) scripts.add("en");
+        runOcrPass(bitmap, nodes, generation, scripts, 0, new ArrayList<>(nodes));
+    }
+
+    private void runOcrPass(Bitmap bitmap, List<Block> nodes, int generation,
+                            List<String> scripts, int pass, List<Block> merged) {
+        if (destroyed || generation != screenGeneration) { bitmap.recycle(); finishScan(); return; }
+        if (pass >= scripts.size()) {
+            bitmap.recycle(); screenshotBusy = false;
+            merged.sort((a, b) -> a.bounds.top != b.bounds.top
+                ? Integer.compare(a.bounds.top, b.bounds.top) : Integer.compare(a.bounds.left, b.bounds.left));
+            if (merged.isEmpty()) { saveStatus("未识别到文字；当前文字可能不受 OCR 支持"); finishScan(); }
+            else translateBlocks(merged, true);
+            return;
+        }
+        TextRecognizer recognizer = createRecognizer(scripts.get(pass));
+        recognizer.process(InputImage.fromBitmap(bitmap, 0))
             .addOnSuccessListener(result -> {
-                List<Block> blocks = new ArrayList<>();
-                Set<String> dedupe = new HashSet<>();
+                if (destroyed || generation != screenGeneration) return;
                 for (Text.TextBlock textBlock : result.getTextBlocks()) {
                     for (Text.Line line : textBlock.getLines()) {
                         String value = normalize(line.getText());
                         Rect bounds = line.getBoundingBox();
                         if (!isTranslatableText(value) || !isUsefulBounds(bounds)) continue;
-                        String key = value + "@" + bounds.flattenToString();
-                        if (dedupe.add(key)) blocks.add(new Block(value, bounds));
-                        if (blocks.size() >= MAX_NODE_BLOCKS) break;
+                        boolean covered = false;
+                        for (Block existing : merged) {
+                            if (ScreenCoverage.covers(existing.text, existing.bounds, value, bounds)) { covered = true; break; }
+                        }
+                        if (!covered) merged.add(new Block(value, bounds));
                     }
-                    if (blocks.size() >= MAX_NODE_BLOCKS) break;
-                }
-                screenshotBusy = false;
-                updateBubbleLabel();
-                if (blocks.isEmpty()) {
-                    saveStatus("OCR 未识别到可翻译文字");
-                    toast("OCR 没有识别到文字");
-                } else {
-                    lastScreenSignature = screenSignature(blocks, targetLanguage());
-                    translateBlocks(blocks, true);
                 }
             })
-            .addOnFailureListener(e -> {
-                screenshotBusy = false;
-                updateBubbleLabel();
-                saveStatus("OCR 失败：" + safe(e));
-                toast("OCR 失败：" + safe(e));
-            })
+            .addOnFailureListener(e -> scanWarning = "部分 OCR 失败：" + safe(e))
             .addOnCompleteListener(task -> {
-                try { recognizer.close(); } catch (Exception ignored) {}
-                try { bitmap.recycle(); } catch (Exception ignored) {}
+                recognizer.close();
+                runOcrPass(bitmap, nodes, generation, scripts, pass + 1, merged);
             });
     }
 
@@ -525,13 +594,13 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     private static boolean isTranslatableText(String value) {
         if (value == null) return false;
         String text = value.trim();
-        if (text.length() < 2 || text.length() > 1000) return false;
+        if (text.isEmpty()) return false;
         int meaningful = 0;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (Character.isLetter(c) || isCjk(c)) meaningful++;
         }
-        return meaningful >= 2;
+        return meaningful >= 1;
     }
 
     private static boolean isCjk(char c) {
@@ -706,8 +775,85 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         if (overlayView != null) overlayView.clear();
     }
 
+    private static List<String> blockTexts(List<Block> blocks) {
+        List<String> texts = new ArrayList<>();
+        for (Block block : blocks) texts.add(block.text);
+        return texts;
+    }
+
+    private void addFullTextButton() {
+        fullTextButton = new TextView(this);
+        fullTextButton.setTextColor(Color.WHITE);
+        fullTextButton.setTextSize(14);
+        fullTextButton.setPadding(dp(12), dp(9), dp(12), dp(9));
+        fullTextButton.setBackgroundColor(Color.rgb(85, 53, 158));
+        fullTextButton.setVisibility(View.INVISIBLE);
+        fullTextButton.setOnClickListener(v -> showFullText());
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, android.graphics.PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.BOTTOM | Gravity.END;
+        params.y = dp(84); params.x = dp(12);
+        windowManager.addView(fullTextButton, params);
+    }
+
+    private void closeFullText() {
+        if (fullTextWindow != null && windowManager != null) {
+            try { windowManager.removeView(fullTextWindow); } catch (Exception ignored) {}
+            fullTextWindow = null;
+        }
+    }
+
+    private void showFullText() {
+        closeFullText();
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(12), dp(12), dp(12), dp(12));
+        panel.setBackgroundColor(Color.rgb(26, 20, 42));
+        LinearLayout actions = new LinearLayout(this);
+        Button close = new Button(this); close.setText("收起全文");
+        close.setOnClickListener(v -> closeFullText()); actions.addView(close);
+        Button retry = new Button(this); retry.setText("重新扫描 / 重试");
+        retry.setOnClickListener(v -> { closeFullText(); translateCurrentScreen(true); }); actions.addView(retry);
+        panel.addView(actions);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(content);
+        if (!scanWarning.isEmpty()) addFullTextRow(content, scanWarning, 0xffffc66d);
+        Set<String> seen = new HashSet<>();
+        for (Block block : latestBlocks) {
+            if (!seen.add(block.text)) continue;
+            CachedTranslation result = latestResults.get(block.text);
+            addFullTextRow(content, "原文：" + block.text, 0xffbfb4d4);
+            addFullTextRow(content, result == null ? "等待翻译…"
+                : result.translated + (result.error.isEmpty() ? "" : "\n失败原因：" + result.error), Color.WHITE);
+        }
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        Rect bounds = windowManager.getMaximumWindowMetrics().getBounds();
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+            Math.max(dp(200), bounds.width() - dp(24)), Math.round(bounds.height() * 0.72f),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, android.graphics.PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.CENTER;
+        fullTextWindow = panel;
+        windowManager.addView(panel, params);
+    }
+
+    private void addFullTextRow(LinearLayout parent, String value, int color) {
+        TextView text = new TextView(this);
+        text.setText(value); text.setTextColor(color); text.setTextSize(16);
+        text.setPadding(0, dp(6), 0, dp(10));
+        text.setTextIsSelectable(true);
+        parent.addView(text, new LinearLayout.LayoutParams(-1, -2));
+    }
+
     private void removeWindows() {
+        closeFullText();
         if (windowManager == null) return;
+        if (fullTextButton != null) {
+            try { windowManager.removeView(fullTextButton); } catch (Exception ignored) {}
+            fullTextButton = null;
+        }
         if (overlayView != null) {
             try { windowManager.removeView(overlayView); } catch (Exception ignored) {}
             overlayView = null;
@@ -763,8 +909,11 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     private static final class CachedTranslation {
         final String sourceLanguage;
         final String translated;
+        final String error;
 
-        CachedTranslation(String sourceLanguage, String translated) {
+        CachedTranslation(String sourceLanguage, String translated) { this(sourceLanguage, translated, ""); }
+        CachedTranslation(String sourceLanguage, String translated, String error) {
+            this.error = error == null ? "" : error;
             this.sourceLanguage = sourceLanguage == null ? "" : sourceLanguage;
             this.translated = translated == null ? "" : translated;
         }
