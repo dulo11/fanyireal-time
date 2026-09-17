@@ -6,3 +6,9 @@ build/
 app/build/
 captures/
 .DS_Store
+
+# Browser extension signing secrets — never commit these.
+*.pem
+*.key
+*private-key*
+*private.pem
