@@ -10,6 +10,7 @@ on:
       - feature/browser-translator-v0.5-azure
       - feature/browser-translator-v0.7-complete
       - feature/browser-translator-v0.8-complete
+      - feature/browser-translator-v0.9-complete
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -35,10 +36,13 @@ jobs:
           set -euo pipefail
           python -m json.tool browser-extension/manifest.json >/dev/null
           test -f browser-extension/shared/language-core.js
+          test -f browser-extension/shared/glossary-core.js
           test -f browser-extension/background/main.js
           test -f browser-extension/background/service-worker.js
+          test -f browser-extension/background/glossary-runtime.js
           test -f browser-extension/background/cache-stats.js
           test -f browser-extension/background/runtime-extras.js
+          test -f browser-extension/content/site-exclusions.js
           test -f browser-extension/content/content.js
           test -f browser-extension/content/v02-enhancements.js
           test -f browser-extension/content/mixed-page-guard.js
@@ -46,19 +50,24 @@ jobs:
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
           test -f browser-extension/tests/language-core.test.cjs
+          test -f browser-extension/tests/glossary-core.test.cjs
           test -f browser-extension/tests/runtime-hardening.test.cjs
           python - <<'PY'
           import json
           from pathlib import Path
-          manifest = json.loads(Path('browser-extension/manifest.json').read_text(encoding='utf-8'))
+          root = Path('browser-extension')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
           worker = manifest['background']['service_worker']
           assert worker == 'background/main.js', worker
-          assert Path('browser-extension', worker).is_file(), worker
+          assert (root / worker).is_file(), worker
           for block in manifest.get('content_scripts', []):
               for rel in block.get('js', []):
-                  assert Path('browser-extension', rel).is_file(), rel
+                  assert (root / rel).is_file(), rel
               for rel in block.get('css', []):
-                  assert Path('browser-extension', rel).is_file(), rel
+                  assert (root / rel).is_file(), rel
+          main = (root / 'background/main.js').read_text(encoding='utf-8')
+          for rel in ['../shared/glossary-core.js', 'service-worker.js', 'glossary-runtime.js', 'cache-stats.js', 'runtime-extras.js']:
+              assert rel in main, rel
           PY
 
       - name: Validate JavaScript syntax
