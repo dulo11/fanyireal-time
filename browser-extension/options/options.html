@@ -14,18 +14,17 @@
     <section>
       <h2>翻译引擎</h2>
       <label>
-        <span>引擎</span>
+        <span>主引擎</span>
         <select id="provider">
+          <option value="azure">Microsoft / Azure Translator（推荐）</option>
           <option value="google-web">Google Web（实验性，无 Key）</option>
-          <option value="azure">Microsoft / Azure Translator</option>
-          <option value="oci-proxy">Oracle OCI Language（通过安全代理）</option>
         </select>
       </label>
       <label class="check-row">
         <input id="fallbackGoogle" type="checkbox">
-        <span>主引擎失败时自动回退到 Google Web</span>
+        <span>Azure 失败时自动回退到 Google Web</span>
       </label>
-      <p class="note">Google Web 属于非正式接口，可能限流或失效。Microsoft/Azure 与 OCI 都是正式云服务接口。</p>
+      <p class="note">v0.5 起移除 Oracle OCI。默认优先 Azure；Google Web 只用于零配置测试或故障回退。</p>
     </section>
 
     <section id="azureSection">
@@ -36,7 +35,7 @@
       </label>
       <label>
         <span>Region</span>
-        <input id="azureRegion" type="text" placeholder="例如 eastasia">
+        <input id="azureRegion" type="text" placeholder="例如 eastasia；按你的 Azure 资源填写">
       </label>
       <label>
         <span>Key</span>
@@ -46,24 +45,7 @@
         <input id="clearAzureKey" type="checkbox">
         <span>清除本机已保存的 Key</span>
       </label>
-      <p class="note">Key 只保存在当前浏览器的本地扩展存储中，不同步到 GitHub。</p>
-    </section>
-
-    <section id="ociSection" hidden>
-      <h2>Oracle OCI Language</h2>
-      <label>
-        <span>Worker 代理地址</span>
-        <input id="ociProxyEndpoint" type="url" placeholder="https://your-worker.workers.dev/translate">
-      </label>
-      <label>
-        <span>代理 Token</span>
-        <input id="ociProxyToken" type="password" autocomplete="off" placeholder="留空表示不修改已保存 Token">
-      </label>
-      <label class="check-row">
-        <input id="clearOciProxyToken" type="checkbox">
-        <span>清除本机已保存的代理 Token</span>
-      </label>
-      <p class="note">v0.4 已提供完整 Cloudflare Worker → OCI RSA-SHA256 签名代理。OCI 私钥只放 Worker Secret，浏览器只保存 Worker 地址与代理 Token。</p>
+      <p class="note">Key 只保存在当前浏览器的本地扩展存储，不写入 GitHub。v0.5 已把网页节点合并成批量 Azure 请求，减少大量小请求。</p>
     </section>
 
     <section>
@@ -76,7 +58,7 @@
         <input id="autoTranslate" type="checkbox">
         <span>打开网页后自动持续翻译</span>
       </label>
-      <p class="note">动态加载的新帖子、评论和聊天消息会通过 MutationObserver 自动加入翻译队列。</p>
+      <p class="note">动态加载的新帖子、评论和聊天消息会自动加入翻译队列；相同文本优先读取本地缓存。</p>
     </section>
 
     <div class="actions">
