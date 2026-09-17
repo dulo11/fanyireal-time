@@ -6,11 +6,12 @@ const root = path.resolve(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-assert.equal(manifest.version, '1.0.0');
+assert.equal(manifest.version, '1.1.0');
 assert.equal(manifest.background.service_worker, 'background/main.js');
 
 const scripts = manifest.content_scripts?.[0]?.js || [];
-assert.deepEqual(scripts.slice(0, 7), [
+assert.deepEqual(scripts.slice(0, 8), [
+  'compat/browser-api.js',
   'shared/language-core.js',
   'content/site-exclusions.js',
   'content/site-input-profile.js',
@@ -20,6 +21,11 @@ assert.deepEqual(scripts.slice(0, 7), [
   'content/attribute-translator.js'
 ]);
 for (const rel of scripts) assert.equal(fs.existsSync(path.join(root, rel)), true, `${rel} must exist`);
+
+const compat = read('compat/browser-api.js');
+assert.match(compat, /moz-extension/);
+assert.match(compat, /globalThis,\s*["']chrome["']/);
+assert.match(compat, /__FT_BROWSER_FAMILY__/);
 
 const backgroundMain = read('background/main.js');
 assert.match(backgroundMain, /glossary-core\.js/);
@@ -83,6 +89,7 @@ assert.match(popup, /saveSiteInputProfile/);
 assert.match(popup, /runtimeRoute/);
 assert.match(popup, /FT_DIAGNOSTICS/);
 assert.match(popup, /FT_PICK_EXCLUSION/);
+assert.match(read('popup/popup.html'), /\.\.\/compat\/browser-api\.js/);
 
 const options = read('options/options.js');
 assert.match(options, /floating-translator-settings/);
@@ -93,5 +100,6 @@ assert.match(options, /includeAzureKey/);
 assert.match(options, /siteInputLanguagesV1/);
 assert.match(options, /glossaryEntries/);
 assert.match(options, /FT_USAGE_STATS/);
+assert.match(read('options/options.html'), /\.\.\/compat\/browser-api\.js/);
 
 console.log('runtime hardening tests passed');

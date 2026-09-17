@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
   "version": "1.1.0",
-  "description": "跨浏览器主线：Azure 主引擎、Google Web 备用、长网页持续翻译、聊天输入、术语表、诊断与设置备份。",
+  "description": "Firefox 兼容版：Azure 主引擎、Google Web 备用、长网页持续翻译、聊天输入、术语表与诊断。",
   "permissions": [
     "storage",
     "activeTab",
@@ -12,7 +12,15 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background/main.js"
+    "scripts": [
+      "compat/browser-api.js",
+      "shared/glossary-core.js",
+      "background/service-worker.js",
+      "background/glossary-runtime.js",
+      "background/runtime-telemetry.js",
+      "background/cache-stats.js",
+      "background/runtime-extras.js"
+    ]
   },
   "action": {
     "default_title": "FloatingTranslator",
@@ -37,5 +45,14 @@
       "match_about_blank": true
     }
   ],
-  "options_page": "options/options.html"
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "floatingtranslator@966405.xyz",
+      "strict_min_version": "121.0"
+    }
+  }
 }
