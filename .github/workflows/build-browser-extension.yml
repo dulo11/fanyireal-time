@@ -37,17 +37,21 @@ jobs:
           test -f browser-extension/background/main.js
           test -f browser-extension/background/service-worker.js
           test -f browser-extension/background/cache-stats.js
+          test -f browser-extension/background/runtime-extras.js
           test -f browser-extension/content/content.js
           test -f browser-extension/content/v02-enhancements.js
+          test -f browser-extension/content/mixed-page-guard.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
           test -f browser-extension/tests/language-core.test.cjs
+          test -f browser-extension/tests/runtime-hardening.test.cjs
           python - <<'PY'
           import json
           from pathlib import Path
           manifest = json.loads(Path('browser-extension/manifest.json').read_text(encoding='utf-8'))
           worker = manifest['background']['service_worker']
           assert worker == 'background/main.js', worker
+          assert Path('browser-extension', worker).is_file(), worker
           for block in manifest.get('content_scripts', []):
               for rel in block.get('js', []):
                   assert Path('browser-extension', rel).is_file(), rel
@@ -64,11 +68,14 @@ jobs:
             node --check "$file"
           done < <(find browser-extension -type f \( -name '*.js' -o -name '*.cjs' \) -print0)
 
-      - name: Run language regression tests
+      - name: Run regression tests
         shell: bash
         run: |
           set -euo pipefail
-          node browser-extension/tests/language-core.test.cjs
+          for test in browser-extension/tests/*.test.cjs; do
+            echo "Running $test"
+            node "$test"
+          done
 
       - name: Read extension version
         id: version
