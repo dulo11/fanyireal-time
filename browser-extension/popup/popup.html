@@ -24,6 +24,12 @@
         <input id="autoTranslate" type="checkbox">
         <span>自动持续翻译网页</span>
       </label>
+      <div class="host">关闭后不会再随网页自动翻译，只在你点“重新翻译整页”或“补扫遗漏内容”时运行。</div>
+      <label class="check-row">
+        <input id="fallbackGoogleQuick" type="checkbox">
+        <span>Azure 失败时自动使用 Google Web 备用</span>
+      </label>
+      <div class="host">Google Web 在本扩展里无需 API Key、不会走付费账号；它属于非正式 Web 接口，可能被限流或失效。关闭后 Azure 失败就直接报错，不再自动调用 Google。</div>
       <label class="check-row">
         <input id="skipTargetLanguage" type="checkbox">
         <span>自动跳过已经是目标语言的文本</span>
