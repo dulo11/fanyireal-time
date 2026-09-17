@@ -30,7 +30,7 @@ async function load() {
   $("enabled").checked = Boolean(sync.enabled);
   $("autoTranslate").checked = Boolean(sync.autoTranslate);
   toggleProviderSections();
-  await refreshCacheStats();
+  await Promise.all([refreshCacheStats(), refreshDiagnostics()]);
 }
 
 function toggleProviderSections() {
@@ -43,7 +43,7 @@ function setStatus(message) {
   setStatus.timer = setTimeout(() => $("status").textContent = "", 3200);
 }
 
-async function save() {
+async function save({ showStatus = true, reload = true } = {}) {
   const sync = {
     enabled: $("enabled").checked,
     autoTranslate: $("autoTranslate").checked
@@ -69,11 +69,13 @@ async function save() {
 
   $("azureKey").value = "";
   $("clearAzureKey").checked = false;
-  setStatus("已保存");
-  await load();
+  if (showStatus) setStatus("已保存");
+  if (reload) await load();
 }
 
 async function testEngine() {
+  setStatus("正在保存当前配置…");
+  await save({ showStatus: false, reload: false });
   setStatus("正在测试…");
   const response = await chrome.runtime.sendMessage({
     type: "FT_TRANSLATE",
@@ -82,7 +84,20 @@ async function testEngine() {
   });
   if (!response?.ok) throw new Error(response?.error || "测试失败");
   setStatus(`测试成功：${response.translations?.[0] || "已返回译文"}`);
-  await refreshCacheStats();
+  await Promise.all([refreshCacheStats(), refreshDiagnostics()]);
+}
+
+async function refreshDiagnostics() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_DIAGNOSTICS" });
+  if (!response?.ok) {
+    $("engineStatus").textContent = `引擎状态：读取失败${response?.error ? `（${response.error}）` : ""}`;
+    return;
+  }
+  const d = response.diagnostics || {};
+  const provider = d.provider === "google-web" ? "Google Web" : "Azure";
+  const key = d.provider === "google-web" ? "无需 Key" : (d.azureKeySet ? "Key 已设置" : "Key 未设置");
+  const fallback = d.fallbackGoogle ? "Google 回退开启" : "Google 回退关闭";
+  $("engineStatus").textContent = `引擎状态：${provider} · ${key} · ${fallback}`;
 }
 
 async function refreshCacheStats() {
