@@ -1,7 +1,0 @@
-name = "floatingtranslator-oci-proxy"
-main = "src/index.mjs"
-compatibility_date = "2026-09-01"
-workers_dev = true
-
-# 所有 OCI 身份信息和代理 Token 都通过 wrangler secret put 设置。
-# 不要把 Tenancy OCID、User OCID、Fingerprint、私钥或 Token 写进本文件。
