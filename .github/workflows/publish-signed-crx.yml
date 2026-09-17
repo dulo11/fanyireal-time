@@ -1,0 +1,145 @@
+name: Publish Signed Chromium CRX
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'browser-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-signed-crx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version and verify fixed extension ID
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./browser-extension/manifest.json').version")
+          EXTENSION_ID=$(node browser-extension/tests/signed-update.test.cjs | sed -n 's/^signed update ID: //p')
+          test "$EXTENSION_ID" = "hlfnagdelcpfdbpdeackdjelemaaoban"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "extension_id=$EXTENSION_ID" >> "$GITHUB_OUTPUT"
+          echo "tag=browser-v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Require signing key secret
+        shell: bash
+        env:
+          FT_CRX_PRIVATE_KEY_B64: ${{ secrets.FT_CRX_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FT_CRX_PRIVATE_KEY_B64:-}" ]; then
+            echo "::error::Missing repository secret FT_CRX_PRIVATE_KEY_B64. Add the base64-encoded PEM private key before publishing signed CRX updates."
+            exit 1
+          fi
+          printf '%s' "$FT_CRX_PRIVATE_KEY_B64" | base64 --decode > "$RUNNER_TEMP/FloatingTranslator-private.pem"
+          chmod 600 "$RUNNER_TEMP/FloatingTranslator-private.pem"
+          openssl rsa -in "$RUNNER_TEMP/FloatingTranslator-private.pem" -check -noout
+
+      - name: Prepare clean Chromium extension directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build/chromium dist
+          mkdir -p build/chromium dist
+          cp -a browser-extension/. build/chromium/
+          rm -rf build/chromium/tests build/chromium/compat/firefox
+          find build/chromium -name '*.DS_Store' -delete
+          python -m json.tool build/chromium/manifest.json >/dev/null
+
+      - name: Install CRX3 packer
+        shell: bash
+        run: npm install --global --omit=dev crx3@2.0.0
+
+      - name: Build fixed-signature CRX3 and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.meta.outputs.version }}'
+          crx3 -p "$RUNNER_TEMP/FloatingTranslator-private.pem" \
+            -o dist/FloatingTranslator-Chromium.crx \
+            build/chromium
+          (cd build/chromium && zip -qr "../../dist/FloatingTranslator-Chromium-v${VERSION}.zip" .)
+          test -s dist/FloatingTranslator-Chromium.crx
+          test -s "dist/FloatingTranslator-Chromium-v${VERSION}.zip"
+
+      - name: Generate update manifest and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.meta.outputs.version }}'
+          EXTENSION_ID='${{ steps.meta.outputs.extension_id }}'
+          cat > dist/updates.xml <<XML
+          <?xml version="1.0" encoding="UTF-8"?>
+          <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+            <app appid="${EXTENSION_ID}">
+              <updatecheck codebase="https://github.com/dulo11/fanyireal-time/releases/latest/download/FloatingTranslator-Chromium.crx" version="${VERSION}" />
+            </app>
+          </gupdate>
+          XML
+          (cd dist && sha256sum FloatingTranslator-Chromium.crx "FloatingTranslator-Chromium-v${VERSION}.zip" > SHA256SUMS.txt)
+          cat dist/updates.xml
+          cat dist/SHA256SUMS.txt
+
+      - name: Create or refresh GitHub Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.meta.outputs.version }}'
+          TAG='${{ steps.meta.outputs.tag }}'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              dist/FloatingTranslator-Chromium.crx \
+              "dist/FloatingTranslator-Chromium-v${VERSION}.zip" \
+              dist/updates.xml \
+              dist/SHA256SUMS.txt \
+              --clobber
+          else
+            gh release create "$TAG" \
+              dist/FloatingTranslator-Chromium.crx \
+              "dist/FloatingTranslator-Chromium-v${VERSION}.zip" \
+              dist/updates.xml \
+              dist/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" \
+              --title "FloatingTranslator Browser v${VERSION}" \
+              --notes "Signed Chromium CRX update. Extension ID: ${{ steps.meta.outputs.extension_id }}"
+          fi
+
+      - name: Publish static update channel XML
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin extension-update-channel
+          rm -rf /tmp/ft-update-channel
+          git worktree add --detach /tmp/ft-update-channel origin/extension-update-channel
+          cp dist/updates.xml /tmp/ft-update-channel/updates.xml
+          cd /tmp/ft-update-channel
+          git add updates.xml
+          if git diff --cached --quiet; then
+            echo "updates.xml already current"
+          else
+            git commit -m "release(update): FloatingTranslator v${{ steps.meta.outputs.version }}"
+            git push origin HEAD:extension-update-channel
+          fi
+
+      - name: Upload signed build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FloatingTranslator-Signed-Chromium-v${{ steps.meta.outputs.version }}
+          path: |
+            dist/FloatingTranslator-Chromium.crx
+            dist/FloatingTranslator-Chromium-v${{ steps.meta.outputs.version }}.zip
+            dist/updates.xml
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
