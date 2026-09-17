@@ -12,7 +12,7 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background/service-worker.js"
+    "service_worker": "background/main.js"
   },
   "action": {
     "default_title": "FloatingTranslator",
