@@ -131,4 +131,55 @@ public class ScreenTranslationRegressionTest {
         assertTrue(handler.hasCallbacks((Runnable)field(service,"eventScan")));
         handler.removeCallbacksAndMessages(null); service.onDestroy();
     }
+    private Object block(String text) throws Exception {
+        Class<?> c=Class.forName("com.zhou.floatingtranslator.ScreenTranslationAccessibilityService$Block");
+        Constructor<?> constructor=c.getDeclaredConstructor(String.class,Rect.class); constructor.setAccessible(true);
+        return constructor.newInstance(text,new Rect(0,0,400,900));
+    }
+    @Test public void oldTranslationCannotRepopulateOverlayAfterScroll() throws Exception {
+        ScreenTranslationAccessibilityService service=Robolectric.buildService(ScreenTranslationAccessibilityService.class).create().get();
+        android.content.SharedPreferences prefs=context.getSharedPreferences("stale-test",0);
+        prefs.edit().putBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS,true).commit();
+        set(service,"prefs",prefs);
+        ScreenTranslationOverlayView overlay=new ScreenTranslationOverlayView(context); set(service,"overlayView",overlay);
+        ScreenTranslationClient.Callback[] pending={null};
+        ScreenTranslationClient client=new ScreenTranslationClient(context,(batch,target,callback)->pending[0]=callback);
+        set(service,"translator",client);
+        invoke(service,"translateBlocks",new Class<?>[]{List.class,boolean.class},Collections.singletonList(block("old paragraph")),false);
+        AccessibilityEvent event=AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_SCROLLED);
+        event.setPackageName("org.telegram.messenger"); service.onAccessibilityEvent(event);
+        pending[0].onSuccess(Collections.singletonList(new ScreenTranslationClient.Result("en","旧页面译文")),"fake");
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(((List<?>)field(overlay,"entries")).isEmpty());
+        assertTrue(((List<?>)field(service,"latestBlocks")).isEmpty());
+        ((Handler)field(service,"main")).removeCallbacksAndMessages(null); service.onDestroy();
+    }
+    @Test public void fullTextPanelRetainsParagraphTailWithoutLineLimit() throws Exception {
+        ScreenTranslationAccessibilityService service=Robolectric.buildService(ScreenTranslationAccessibilityService.class).create().get();
+        set(service,"windowManager",context.getSystemService(android.view.WindowManager.class));
+        String original="Original long paragraph ".repeat(200);
+        String translated="完整译文很长。".repeat(300)+"末尾必须存在";
+        Class<?> c=Class.forName("com.zhou.floatingtranslator.ScreenTranslationAccessibilityService$CachedTranslation");
+        Constructor<?> constructor=c.getDeclaredConstructor(String.class,String.class); constructor.setAccessible(true);
+        Map<String,Object> results=new LinkedHashMap<>(); results.put(original,constructor.newInstance("en",translated));
+        set(service,"latestBlocks",Collections.singletonList(block(original))); set(service,"latestResults",results);
+        invoke(service,"showFullText",new Class<?>[0]);
+        android.view.View panel=(android.view.View)field(service,"fullTextWindow");
+        android.widget.TextView full=findText(panel,translated);
+        assertNotNull(full); assertEquals(Integer.MAX_VALUE,full.getMaxLines());
+        assertTrue(full.getText().toString().endsWith("末尾必须存在"));
+        invoke(service,"closeFullText",new Class<?>[0]); service.onDestroy();
+    }
+    private android.widget.TextView findText(android.view.View view,String value) {
+        if(view instanceof android.widget.TextView && value.contentEquals(((android.widget.TextView)view).getText()))
+            return (android.widget.TextView)view;
+        if(view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group=(android.view.ViewGroup)view;
+            for(int i=0;i<group.getChildCount();i++) {
+                android.widget.TextView found=findText(group.getChildAt(i),value); if(found!=null)return found;
+            }
+        }
+        return null;
+    }
+
 }
