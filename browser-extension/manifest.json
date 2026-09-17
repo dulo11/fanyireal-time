@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "1.0.0",
-  "description": "正式测试候选版：Azure 主引擎、长网页持续翻译、术语表、区域排除、输入增强、诊断与设置备份。",
+  "version": "1.1.0",
+  "description": "跨浏览器主线：Azure 主引擎、Google Web 备用、长网页持续翻译、聊天输入、术语表、诊断与设置备份。",
   "permissions": [
     "storage",
     "activeTab",
@@ -22,6 +22,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "compat/browser-api.js",
         "shared/language-core.js",
         "content/site-exclusions.js",
         "content/site-input-profile.js",
