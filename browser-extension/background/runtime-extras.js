@@ -1,19 +1,19 @@
-const FT_CACHE_DB = "floating-translator-cache";
-const FT_CACHE_STORE = "translations";
+const FT_RUNTIME_DB = "floating-translator-cache";
+const FT_RUNTIME_STORE = "translations";
 
-function openCacheDbForStats() {
+function openRuntimeDb() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(FT_CACHE_DB, 1);
+    const request = indexedDB.open(FT_RUNTIME_DB, 1);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function countCacheEntries() {
-  const db = await openCacheDbForStats();
+async function runtimeCacheCount() {
+  const db = await openRuntimeDb();
   return await new Promise((resolve, reject) => {
-    const tx = db.transaction(FT_CACHE_STORE, "readonly");
-    const request = tx.objectStore(FT_CACHE_STORE).count();
+    const tx = db.transaction(FT_RUNTIME_STORE, "readonly");
+    const request = tx.objectStore(FT_RUNTIME_STORE).count();
     request.onsuccess = () => resolve(request.result || 0);
     request.onerror = () => reject(request.error);
   });
@@ -37,7 +37,7 @@ async function diagnosticsSnapshot() {
       azureRegion: "",
       azureKey: ""
     }),
-    countCacheEntries().catch(() => 0)
+    runtimeCacheCount().catch(() => 0)
   ]);
 
   return {
@@ -58,13 +58,6 @@ async function diagnosticsSnapshot() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "FT_CACHE_STATS") {
-    countCacheEntries()
-      .then(entries => sendResponse({ ok: true, entries }))
-      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
-    return true;
-  }
-
   if (message?.type === "FT_DIAGNOSTICS") {
     diagnosticsSnapshot()
       .then(diagnostics => sendResponse({ ok: true, diagnostics }))
