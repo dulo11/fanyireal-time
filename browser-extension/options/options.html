@@ -18,9 +18,14 @@
         <select id="provider">
           <option value="google-web">Google Web（实验性，无 Key）</option>
           <option value="azure">Microsoft / Azure Translator</option>
+          <option value="oci-proxy">Oracle OCI Language（通过安全代理）</option>
         </select>
       </label>
-      <p class="note">Google Web 模式用于快速测试，属于非正式接口，可能出现限流或失效。长期使用建议配置官方 Microsoft/Azure Translator。</p>
+      <label class="check-row">
+        <input id="fallbackGoogle" type="checkbox">
+        <span>主引擎失败时自动回退到 Google Web</span>
+      </label>
+      <p class="note">Google Web 属于非正式接口，可能限流或失效。Microsoft/Azure 与 OCI 都是正式云服务接口。</p>
     </section>
 
     <section id="azureSection">
@@ -41,7 +46,24 @@
         <input id="clearAzureKey" type="checkbox">
         <span>清除本机已保存的 Key</span>
       </label>
-      <p class="note">Key 只保存在当前浏览器的本地扩展存储中，不同步到 GitHub，也不会写入源码。</p>
+      <p class="note">Key 只保存在当前浏览器的本地扩展存储中，不同步到 GitHub。</p>
+    </section>
+
+    <section id="ociSection" hidden>
+      <h2>Oracle OCI Language</h2>
+      <label>
+        <span>代理地址</span>
+        <input id="ociProxyEndpoint" type="url" placeholder="https://your-worker.example.workers.dev/translate">
+      </label>
+      <label>
+        <span>代理 Token（可选）</span>
+        <input id="ociProxyToken" type="password" autocomplete="off" placeholder="留空表示不修改已保存 Token">
+      </label>
+      <label class="check-row">
+        <input id="clearOciProxyToken" type="checkbox">
+        <span>清除本机已保存的代理 Token</span>
+      </label>
+      <p class="note">OCI REST API 需要 RSA 请求签名。为避免把 OCI 私钥放进浏览器插件，v0.3 通过你自己的 Worker/服务器代理调用 OCI。浏览器只保存代理地址与可选 Token。</p>
     </section>
 
     <section>
