@@ -39,6 +39,7 @@ const $ = id => document.getElementById(id);
 let activeTab = null;
 let currentHost = "";
 let settings = { ...DEFAULTS };
+let pagePaused = false;
 
 function appendLanguageOptions(select, includeAuto) {
   for (const [value, label] of LANGUAGES) {
@@ -91,6 +92,7 @@ function render() {
   $("siteRule").value = currentHost ? (settings.siteRules?.[currentHost] || "default") : "default";
   $("siteRule").disabled = !currentHost;
   $("host").textContent = currentHost || "此页面不支持扩展脚本";
+  $("pauseResume").textContent = pagePaused ? "继续翻译" : "暂停翻译";
 }
 
 async function saveSync(patch) {
@@ -107,16 +109,18 @@ async function refreshPageState() {
     $("pageState").textContent = "此页面无法注入翻译脚本";
     return;
   }
-  const pieces = [response.active ? "持续翻译中" : "未翻译"];
+  pagePaused = Boolean(response.paused);
+  const pieces = [pagePaused ? "已暂停" : (response.active ? "持续翻译中" : "未翻译")];
   if (response.pageLang) pieces.push(response.pageLang);
   if (response.processing) pieces.push("处理中");
   if (response.queued) pieces.push(`待翻译 ${response.queued}`);
   if (response.processed) pieces.push(`已翻译 ${response.processed}`);
-  if (response.retried) pieces.push(`自动续跑 ${response.retried}`);
-  if (response.failed) pieces.push(`失败批次 ${response.failed}`);
+  if (response.retried) pieces.push(`精确重试 ${response.retried}`);
+  if (response.failed) pieces.push(`失败文本 ${response.failed}`);
   if (settings.chatMode && settings.inputPreview) pieces.push("聊天输入预览开");
   $("pageState").textContent = pieces.join(" · ");
   $("pageState").title = response.lastError || "";
+  render();
 }
 
 async function init() {
@@ -149,20 +153,30 @@ async function init() {
     await saveSync({ siteRules });
   });
 
+  $("pauseResume").addEventListener("click", async () => {
+    const nextPaused = !pagePaused;
+    const response = await sendToPage({ type: "FT_SET_PAUSED", paused: nextPaused });
+    if (response?.ok) pagePaused = Boolean(response.paused);
+    render();
+    setTimeout(refreshPageState, 120);
+  });
+
   $("translateNow").addEventListener("click", async () => {
     $("pageState").textContent = "正在恢复并重新翻译整页…";
     await sendToPage({ type: "FT_TRANSLATE_NOW" });
+    pagePaused = false;
     setTimeout(refreshPageState, 300);
   });
 
   $("rescanPage").addEventListener("click", async () => {
-    $("pageState").textContent = "正在补扫遗漏内容…";
-    await sendToPage({ type: "FT_RESCAN_PAGE" });
+    $("pageState").textContent = pagePaused ? "当前已暂停，继续后再补扫" : "正在补扫遗漏内容…";
+    if (!pagePaused) await sendToPage({ type: "FT_RESCAN_PAGE" });
     setTimeout(refreshPageState, 250);
   });
 
   $("restorePage").addEventListener("click", async () => {
     await sendToPage({ type: "FT_RESTORE_PAGE" });
+    pagePaused = false;
     setTimeout(refreshPageState, 150);
   });
 
