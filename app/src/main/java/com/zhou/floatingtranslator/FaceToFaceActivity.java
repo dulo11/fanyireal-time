@@ -129,12 +129,30 @@ public final class FaceToFaceActivity extends Activity {
         partnerFallback = languageSpinner();
         partnerFallback.setSelection(clamp(prefs.getInt("face_source_index", prefs.getInt("source_index", 2))));
         settings.addView(partnerFallback, params());
+        settings.addView(label("连续对话的语言模式"));
+        recognitionMode = new Spinner(this);
+        recognitionMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+            new String[]{"自动识别 · 双向对话", "限定双方语言 · 自动双向", "固定输入语言 → 我的语言"}));
+        String savedMode = ConversationLanguagePolicy.mode(prefs.getString("face_language_mode", "auto"));
+        recognitionMode.setSelection(java.util.Arrays.asList(ConversationLanguagePolicy.MODES).indexOf(savedMode));
+        settings.addView(recognitionMode, params());
+        fixedInputLabel = label("固定输入语言（例如：英语）");
+        settings.addView(fixedInputLabel);
+        fixedInputLanguage = languageSpinner();
+        fixedInputLanguage.setSelection(clamp(prefs.getInt("face_fixed_input_index", prefs.getInt("face_source_index", 2))));
+        settings.addView(fixedInputLanguage, params());
+        modeHint = text("", 13, Color.rgb(195, 185, 215));
+        settings.addView(modeHint, params());
+        recognitionMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { refreshLanguageMode(); }
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
         settings.addView(label("语音识别引擎（连续模式推荐 Whisper / Qwen3 / Omnilingual）"));
         asrSpinner = new Spinner(this);
         ArrayList<String> asrNames = new ArrayList<>();
         asrIds.add("auto"); asrNames.add("自动：已下载多语言模型优先");
         asrIds.add("system"); asrNames.add("Android 系统语音识别");
-        asrIds.add("vosk"); asrNames.add("Vosk 离线（仅按备用语言识别）");
+        asrIds.add("vosk"); asrNames.add("Vosk 离线（连续模式需固定输入语言）");
         for (String id : new String[]{TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_SMALL,
             TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_QWEN3, TranslationService.ASR_OMNILINGUAL,
             TranslationService.ASR_REAZON, TranslationService.ASR_PARAKEET}) {
@@ -145,7 +163,7 @@ public final class FaceToFaceActivity extends Activity {
         asrSpinner.setSelection(Math.max(0, asrIds.indexOf(prefs.getString("face_asr", "auto"))));
         settings.addView(asrSpinner, params());
         autoSpeak = new CheckBox(this);
-        autoSpeak.setText("自动朗读译文（连续监听不会因朗读而停麦）");
+        autoSpeak.setText("单句模式自动朗读译文");
         autoSpeak.setTextColor(Color.WHITE);
         autoSpeak.setChecked(prefs.getBoolean("face_auto_speak", true));
         settings.addView(autoSpeak);
