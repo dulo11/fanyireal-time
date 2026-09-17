@@ -45,12 +45,19 @@
     processed: 0,
     failed: 0,
     retried: 0,
+    protectedRestores: 0,
     lastError: "",
     scanTokens: new Set(),
     safetyScanTimer: null
   };
 
   const lang = () => globalThis.FTLanguage;
+  const exclusions = () => globalThis.FTSiteExclusions;
+
+  function isExcludedElement(element) {
+    try { return Boolean(exclusions()?.isExcluded?.(element)); }
+    catch { return false; }
+  }
 
   function pageLanguage() {
     return lang()?.normalizeLang(document.documentElement?.lang || document.body?.getAttribute("lang") || "") || "";
@@ -99,7 +106,7 @@
   function isEligibleTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
-    if (!parent || parent.closest(SKIP_SELECTOR)) return false;
+    if (!parent || parent.closest(SKIP_SELECTOR) || isExcludedElement(parent)) return false;
     const { core } = splitWhitespace(node.nodeValue);
     if (!hasLetters(core) || shouldSkipTarget(core)) return false;
     return true;
@@ -115,12 +122,46 @@
     return 10 + Math.abs(rect.bottom);
   }
 
+  function createTranslationSpan(node, translatedCore) {
+    const span = document.createElement("span");
+    span.className = "ft-translation-inline";
+    span.dataset.ftOwned = "1";
+    span.translate = false;
+    span.textContent = translatedCore;
+    if (BLOCK_TAGS.has(node.parentElement?.tagName)) span.dataset.ftBlock = "1";
+    return span;
+  }
+
+  function restoreProtectedNode(node, record) {
+    if (!record || !node?.isConnected || !state.active || state.paused || isExcludedElement(node.parentElement)) return false;
+    if (node.nodeValue !== record.originalFull) return false;
+
+    if (state.settings.displayMode === "bilingual") {
+      if (!record.translationEl?.isConnected) {
+        const span = record.translationEl || createTranslationSpan(node, record.translatedCore);
+        record.translationEl = span;
+        node.parentNode?.insertBefore(span, node.nextSibling);
+        state.protectedRestores++;
+        return true;
+      }
+      return false;
+    }
+
+    node.nodeValue = record.renderedFull;
+    state.protectedRestores++;
+    return true;
+  }
+
   function enqueueNode(node) {
-    if (!state.active || !isEligibleTextNode(node)) return;
+    if (!state.active || state.paused || !isEligibleTextNode(node)) return;
     const previous = state.nodeState.get(node);
     if (previous) {
       const current = node.nodeValue;
-      if (current === previous.renderedFull || current === previous.originalFull) return;
+      if (current === previous.renderedFull) return;
+      if (current === previous.originalFull) {
+        restoreProtectedNode(node, previous);
+        return;
+      }
       previous.translationEl?.remove();
       state.nodeState.delete(node);
       state.trackedNodes.delete(node);
@@ -136,7 +177,7 @@
       return;
     }
     if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
-    if (root.nodeType === Node.ELEMENT_NODE && root.matches?.(SKIP_SELECTOR)) return;
+    if (root.nodeType === Node.ELEMENT_NODE && (root.matches?.(SKIP_SELECTOR) || isExcludedElement(root))) return;
 
     const token = { cancelled: false };
     state.scanTokens.add(token);
@@ -243,12 +284,13 @@
       entries.forEach((entry, index) => {
         const translated = response.translations?.[index];
         const itemError = response.errors?.[index];
-        if (typeof translated === "string" && entry.node.isConnected) {
+        if (typeof translated === "string" && entry.node.isConnected && !isExcludedElement(entry.node.parentElement)) {
           applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
           state.nodeRetries.delete(entry.node);
           state.processed++;
           return;
         }
+        if (isExcludedElement(entry.node?.parentElement)) return;
         failedEntries.push(entry);
         firstError ||= String(itemError || "该文本翻译失败");
       });
@@ -275,12 +317,7 @@
     const renderedFull = `${parts.prefix}${translatedCore}${parts.suffix}`;
     const record = { originalFull, translatedCore, renderedFull, translationEl: null };
     if (state.settings.displayMode === "bilingual") {
-      const span = document.createElement("span");
-      span.className = "ft-translation-inline";
-      span.dataset.ftOwned = "1";
-      span.translate = false;
-      span.textContent = translatedCore;
-      if (BLOCK_TAGS.has(node.parentElement?.tagName)) span.dataset.ftBlock = "1";
+      const span = createTranslationSpan(node, translatedCore);
       node.parentNode?.insertBefore(span, node.nextSibling);
       record.translationEl = span;
     } else {
@@ -308,6 +345,7 @@
     state.processed = 0;
     state.failed = 0;
     state.retried = 0;
+    state.protectedRestores = 0;
     state.lastError = "";
   }
 
@@ -329,7 +367,13 @@
       if (mutation.type === "characterData") {
         const node = mutation.target;
         const record = state.nodeState.get(node);
-        if (record && (node.nodeValue === record.renderedFull || node.nodeValue === record.originalFull)) continue;
+        if (record) {
+          if (node.nodeValue === record.renderedFull) continue;
+          if (node.nodeValue === record.originalFull) {
+            restoreProtectedNode(node, record);
+            continue;
+          }
+        }
         enqueueNode(node);
         continue;
       }
@@ -441,6 +485,14 @@
     }
   }
 
+  function handleExclusionsChanged() {
+    const wasPaused = state.paused;
+    restorePage();
+    state.paused = wasPaused;
+    state.active = shouldTranslatePage();
+    if (state.active && !state.paused) scheduleTreeScan(document.body);
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "FT_REFRESH_SETTINGS") {
       loadSettings().then(() => sendResponse({ ok: true, active: state.active, paused: state.paused }));
@@ -487,6 +539,7 @@
         processed: state.processed,
         failed: state.failed,
         retried: state.retried,
+        protectedRestores: state.protectedRestores,
         lastError: state.lastError
       });
       return false;
@@ -499,6 +552,7 @@
   });
   document.addEventListener("keydown", translateFocusedInput, true);
   window.addEventListener("ft-route-change", handleRouteRescan, true);
+  window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
   window.addEventListener("focus", () => scheduleSafetyScan(350), { passive: true });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") scheduleSafetyScan(350);
@@ -508,6 +562,7 @@
     if (state.started) return;
     state.started = true;
     startObserver();
+    try { await exclusions()?.ready; } catch {}
     await loadSettings({ rescan: false });
     if (state.active && !state.paused) scheduleTreeScan(document.body);
   }

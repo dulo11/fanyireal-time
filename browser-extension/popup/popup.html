@@ -47,7 +47,7 @@
           <option value="bilingual">原文 + 译文</option>
         </select>
       </label>
-      <div class="host">v0.8 会同时翻译正文和 placeholder / title / aria-label / 图片 alt / 按钮 value 等属性文字。</div>
+      <div class="host">v0.9 会保护已经翻好的文字；网页脚本把译文覆盖回原文时会直接恢复，不重复调用翻译接口。</div>
     </section>
 
     <section class="card">
@@ -69,7 +69,10 @@
           <select id="inputTargetLang"></select>
         </label>
       </div>
-      <div class="host">不用轮流一句一句。你可以连续输入，停止输入后自动更新预览；只在你点“替换输入框”时改写，不自动发送。</div>
+      <div class="actions">
+        <button id="swapInputLang">交换输入语言</button>
+      </div>
+      <div class="host">输入预览里新增“仅复制译文 / 交换语言 / 本次输入暂停预览”。自动检测作为源语言时不能直接交换，先指定源语言即可。</div>
     </section>
 
     <section class="card">
@@ -82,6 +85,12 @@
         </select>
       </label>
       <div id="host" class="host"></div>
+      <div id="exclusionCount" class="host">排除区域：正在读取…</div>
+      <div class="actions">
+        <button id="pickExclusion">选择不翻译区域</button>
+        <button id="clearExclusions">清除此网站排除</button>
+      </div>
+      <div class="host">点“选择不翻译区域”后回到网页，再点要排除的区域。代码块、编辑器、用户名区等以后不会自动翻译；Esc 可取消选择。</div>
     </section>
 
     <div class="actions">
@@ -91,8 +100,8 @@
       <button id="restorePage">恢复原文</button>
     </div>
 
-    <div class="tip">暂停后会保留当前译文和剩余队列；继续时从剩余内容接着跑。失败文本只会重新尝试失败项，不会把已经成功的整批重新请求。</div>
-    <button id="openOptions" class="link-button">翻译引擎、用量与缓存设置 ›</button>
+    <div class="tip">暂停后会保留当前译文和剩余队列；继续时从剩余内容接着跑。术语表在高级设置中维护。</div>
+    <button id="openOptions" class="link-button">翻译引擎、术语表、用量与缓存设置 ›</button>
   </main>
   <script src="popup.js"></script>
 </body>
