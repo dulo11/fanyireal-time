@@ -11,7 +11,7 @@ function openRuntimeDb() {
 }
 
 async function runtimeCacheCount() {
-  const db = await openRuntimeDb();
+  const db = await openDb();
   return await new Promise((resolve, reject) => {
     const tx = db.transaction(FT_RUNTIME_STORE, "readonly");
     const request = tx.objectStore(FT_RUNTIME_STORE).count();
@@ -68,14 +68,17 @@ function relayToSender(sender, payload) {
       reject(new Error("无法确定当前标签页"));
       return;
     }
+    const timer = setTimeout(() => reject(new Error("网页响应超时，请刷新网页")), 5000);
     const options = Number.isInteger(sender.frameId) ? { frameId: sender.frameId } : undefined;
     try {
       chrome.tabs.sendMessage(sender.tab.id, payload, options, response => {
+        clearTimeout(timer);
         const lastError = chrome.runtime.lastError;
         if (lastError) reject(new Error(lastError.message));
         else resolve(response || { ok: true });
       });
     } catch (error) {
+      clearTimeout(timer);
       reject(error);
     }
   });

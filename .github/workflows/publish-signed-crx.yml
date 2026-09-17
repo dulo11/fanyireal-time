@@ -32,6 +32,13 @@ jobs:
           echo "extension_id=$EXTENSION_ID" >> "$GITHUB_OUTPUT"
           echo "tag=browser-v$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Validate extension before signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do node --check "$file"; done < <(find browser-extension -name '*.js' -print0)
+          node --test browser-extension/tests/*.test.cjs
+
       - name: Require signing key secret
         shell: bash
         env:
@@ -45,6 +52,14 @@ jobs:
           printf '%s' "$FT_CRX_PRIVATE_KEY_B64" | base64 --decode > "$RUNNER_TEMP/FloatingTranslator-private.pem"
           chmod 600 "$RUNNER_TEMP/FloatingTranslator-private.pem"
           openssl rsa -in "$RUNNER_TEMP/FloatingTranslator-private.pem" -check -noout
+          node <<'JS'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const pem = fs.readFileSync(process.env.RUNNER_TEMP + '/FloatingTranslator-private.pem');
+          const publicDer = crypto.createPublicKey(pem).export({ type: 'spki', format: 'der' });
+          const expected = Buffer.from(require('./browser-extension/manifest.json').key, 'base64');
+          if (!publicDer.equals(expected)) throw new Error('Signing key does not match the existing extension ID');
+          JS
 
       - name: Prepare clean Chromium extension directory
         shell: bash
@@ -83,7 +98,7 @@ jobs:
           <?xml version="1.0" encoding="UTF-8"?>
           <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
             <app appid="${EXTENSION_ID}">
-              <updatecheck codebase="https://github.com/dulo11/fanyireal-time/releases/latest/download/FloatingTranslator-Chromium.crx" version="${VERSION}" />
+              <updatecheck codebase="https://github.com/dulo11/fanyireal-time/releases/download/browser-v${VERSION}/FloatingTranslator-Chromium.crx" version="${VERSION}" />
             </app>
           </gupdate>
           XML
@@ -135,6 +150,11 @@ jobs:
             git commit -m "release(update): 浮译 v${{ steps.meta.outputs.version }}"
             git push origin HEAD:extension-update-channel
           fi
+
+      - name: Remove temporary signing key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/FloatingTranslator-private.pem"
 
       - name: Upload signed build artifact
         uses: actions/upload-artifact@v4

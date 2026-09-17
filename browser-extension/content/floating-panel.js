@@ -23,6 +23,7 @@
   let drag = null;
   let stateRequest = 0;
   let suppressClickUntil = 0;
+  let routeBusy = false;
 
   const host = document.createElement("div");
   host.dataset.ftOwned = "1";
@@ -65,7 +66,7 @@
         <button id="restore" type="button" class="warn">恢复原文</button>
       </div>
       <button id="full" type="button" class="full">打开完整设置</button>
-      <div id="route" class="route">翻译引擎：读取中…</div>
+      <button id="route" type="button" class="full route" aria-label="打开翻译引擎设置">翻译引擎：读取中…</button>
     </section>`;
 
   const $ = id => root.getElementById(id);
@@ -131,6 +132,8 @@
   }
 
   async function refreshRoute() {
+    if (routeBusy) return;
+    routeBusy = true;
     try {
       const r = await chrome.runtime.sendMessage({ type: "FT_DIAGNOSTICS" });
       const runtime = r?.diagnostics?.lastRuntime;
@@ -139,8 +142,8 @@
       const credential = pool?.credentialLabel ? ` · ${pool.credentialLabel}` : (pool?.credentialName ? ` · ${pool.credentialName}` : "");
       $("route").textContent = `翻译引擎：${routeLabel(actual)}${credential}`;
     } catch {
-      $("route").textContent = "翻译引擎：后台未响应";
-    }
+      $("route").textContent = "翻译引擎：后台未响应，点此设置";
+    } finally { routeBusy = false; }
   }
 
   function requestState() {
@@ -180,6 +183,7 @@
   function togglePanel(force) {
     opened = typeof force === "boolean" ? force : !opened;
     panel.classList.toggle("open", opened);
+    panel.style.display = opened ? "block" : "none";
     fab.setAttribute("aria-expanded", opened ? "true" : "false");
     if (opened) {
       requestState();
@@ -269,7 +273,10 @@
       if (!t || !touchStart) return;
       const moved = Math.hypot(t.clientX - touchStart.x, t.clientY - touchStart.y) > 8;
       touchStart = null;
-      if (!moved) togglePanel();
+      if (!moved) {
+        togglePanel();
+        suppressClickUntil = Date.now() + 450;
+      }
     }, { passive: true });
   }
 
@@ -283,6 +290,7 @@
   $("rescan").addEventListener("click", () => command("rescan"));
   $("restore").addEventListener("click", () => command("restore"));
   $("full").addEventListener("click", openOptionsSafe);
+  $("route").addEventListener("click", openOptionsSafe);
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync") return;

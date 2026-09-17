@@ -31,6 +31,10 @@ let currentHost = "";
 let settings = { ...DEFAULTS };
 let localSettings = { ...LOCAL_DEFAULTS };
 let pagePaused = false;
+let repairing = null;
+let repairAttempted = false;
+let pageError = "";
+let refreshBusy = false;
 
 function appendLanguageOptions(select, includeAuto) {
   for (const [value, label] of LANGUAGES) {
@@ -61,10 +65,40 @@ function hostFromTab(tab) {
   } catch { return ""; }
 }
 
+async function repairPage() {
+  if (repairing) return repairing;
+  if (repairAttempted) throw new Error("网页脚本恢复失败，请刷新网页后重试");
+  repairAttempted = true;
+  repairing = (async () => {
+    if (!currentHost) throw new Error("浏览器内部页不允许注入，请打开普通网页");
+    if (!chrome.scripting?.executeScript) throw new Error("当前浏览器不支持脚本恢复，请刷新网页并检查扩展的网站访问权限");
+    const block = chrome.runtime.getManifest().content_scripts[0];
+    const target = { tabId: activeTab.id, frameIds: [0] };
+    await chrome.scripting.insertCSS({ target, files: block.css });
+    await chrome.scripting.executeScript({ target, files: block.js });
+  })();
+  try { await repairing; } finally { repairing = null; }
+}
+
 async function sendToPage(message) {
   if (!activeTab?.id) return null;
-  try { return await chrome.tabs.sendMessage(activeTab.id, message, { frameId: 0 }); }
-  catch { return null; }
+  try {
+    const response = await chrome.tabs.sendMessage(activeTab.id, message, { frameId: 0 });
+    if (!response) throw new Error("网页脚本没有响应");
+    pageError = "";
+    return response;
+  } catch (error) {
+    try {
+      await repairPage();
+      const response = await chrome.tabs.sendMessage(activeTab.id, message, { frameId: 0 });
+      if (!response) throw new Error("网页脚本没有响应，请刷新网页");
+      pageError = "";
+      return response;
+    } catch (repairError) {
+      pageError = String(repairError?.message || error?.message || error);
+      return null;
+    }
+  }
 }
 
 async function loadSiteInputProfile() {
@@ -154,7 +188,7 @@ async function saveInputLanguages(patch) {
 async function refreshPageState() {
   const response = await sendToPage({ type: "FT_GET_PAGE_STATE" });
   if (!response?.ok) {
-    $("pageState").textContent = "此页面无法注入翻译脚本";
+    $("pageState").textContent = `网页连接失败：${pageError || "请刷新网页，并允许扩展访问此网站"}`;
     return;
   }
   pagePaused = Boolean(response.paused);
@@ -187,27 +221,7 @@ async function refreshExclusions() {
   $("clearExclusions").disabled = count === 0;
 }
 
-async function init() {
-  populateLanguages();
-  [settings, localSettings, activeTab] = await Promise.all([
-    chrome.storage.sync.get(DEFAULTS),
-    chrome.storage.local.get(LOCAL_DEFAULTS),
-    getActiveTab()
-  ]);
-  settings = { ...DEFAULTS, ...settings };
-  localSettings = { ...LOCAL_DEFAULTS, ...localSettings };
-  currentHost = hostFromTab(activeTab);
-
-  const profile = await loadSiteInputProfile();
-  if (profile) {
-    settings.inputSourceLang = profile.sourceLang;
-    settings.inputTargetLang = profile.targetLang;
-    await chrome.storage.sync.set({ inputSourceLang: profile.sourceLang, inputTargetLang: profile.targetLang });
-  }
-
-  render();
-  await Promise.all([refreshPageState(), refreshExclusions(), refreshRuntimeRoute()]);
-
+function bindControls() {
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
   $("fallbackGoogleQuick").addEventListener("change", event => saveLocal({ fallbackGoogle: event.target.checked }));
@@ -271,8 +285,41 @@ async function init() {
     setTimeout(refreshPageState, 150);
   });
 
-  $("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
-  setInterval(() => { refreshPageState(); refreshRuntimeRoute(); }, 1400);
+  $("openOptions").addEventListener("click", () => {
+    chrome.runtime.openOptionsPage().catch(error => {
+      $("pageState").textContent = `打开设置失败：${error.message}`;
+    });
+  });
+}
+
+async function init() {
+  bindControls();
+  populateLanguages();
+  [settings, localSettings, activeTab] = await Promise.all([
+    chrome.storage.sync.get(DEFAULTS),
+    chrome.storage.local.get(LOCAL_DEFAULTS),
+    getActiveTab()
+  ]);
+  settings = { ...DEFAULTS, ...settings };
+  localSettings = { ...LOCAL_DEFAULTS, ...localSettings };
+  currentHost = hostFromTab(activeTab);
+
+  const profile = await loadSiteInputProfile();
+  if (profile) {
+    settings.inputSourceLang = profile.sourceLang;
+    settings.inputTargetLang = profile.targetLang;
+    await chrome.storage.sync.set({ inputSourceLang: profile.sourceLang, inputTargetLang: profile.targetLang });
+  }
+
+  render();
+  void Promise.allSettled([refreshPageState(), refreshExclusions(), refreshRuntimeRoute()]);
+
+  setInterval(async () => {
+    if (refreshBusy) return;
+    refreshBusy = true;
+    try { await Promise.allSettled([refreshPageState(), refreshRuntimeRoute()]); }
+    finally { refreshBusy = false; }
+  }, 1400);
 }
 
 init().catch(error => {

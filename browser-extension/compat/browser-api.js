@@ -80,7 +80,7 @@
             if (message) reject(new Error(message));
             else resolve(response);
           });
-        }, 20000, "扩展消息通信");
+        }, /^FT_TRANSLATE/.test(args[0]?.type || "") ? 120000 : 6000, "扩展消息通信");
       };
 
       try { runtime.sendMessage = runtimeSendCompat; }
@@ -111,6 +111,26 @@
         try { Object.defineProperty(runtime, "openOptionsPage", { configurable: true, value: openOptionsCompat }); } catch {}
       }
     }
+
+    function wrapAsync(owner, name, timeoutMs = 5000) {
+      if (typeof owner?.[name] !== "function") return;
+      const native = owner[name].bind(owner);
+      owner[name] = (...args) => {
+        if (typeof args.at(-1) === "function") return native(...args);
+        return timeoutPromise((resolve, reject) => {
+          const result = native(...args, value => {
+            const message = lastErrorMessage();
+            if (message) reject(new Error(message)); else resolve(value);
+          });
+          if (result && typeof result.then === "function") result.then(resolve, reject);
+        }, timeoutMs, name);
+      };
+    }
+    for (const area of [chrome.storage?.sync, chrome.storage?.local]) {
+      for (const name of ["get", "set", "remove", "clear"]) wrapAsync(area, name);
+    }
+    for (const name of ["executeScript", "insertCSS"]) wrapAsync(chrome.scripting, name, 10000);
+    wrapAsync(chrome.tabs, "create");
 
     if (globalThis.chrome?.tabs) {
       const tabs = chrome.tabs;

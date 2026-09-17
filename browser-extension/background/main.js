@@ -30,6 +30,7 @@
   }
 
   // shared/provider/telemetry 都属于增强模块；任何一个失败都不应拖死核心翻译。
+  safeImport("../compat/browser-api.js", true);
   safeImport("../shared/crypto-lite.js");
   safeImport("../shared/glossary-core.js");
   safeImport("service-worker.js", true);
