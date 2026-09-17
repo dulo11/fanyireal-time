@@ -8,7 +8,7 @@ const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const chromium = JSON.parse(read('manifest.json'));
 const firefox = JSON.parse(read('compat/firefox/manifest.json'));
 
-assert.equal(chromium.version, '1.2.0');
+assert.equal(chromium.version, '1.3.0');
 assert.equal(firefox.version, chromium.version);
 assert.equal(chromium.background.service_worker, 'background/main.js');
 assert.ok(Array.isArray(firefox.background.scripts));
