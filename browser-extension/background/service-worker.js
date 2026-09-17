@@ -4,7 +4,8 @@ const SYNC_DEFAULTS = {
   sourceLang: "auto",
   targetLang: "zh-CN",
   displayMode: "translated",
-  siteRules: {}
+  siteRules: {},
+  skipTargetLanguage: true
 };
 
 const LOCAL_DEFAULTS = {
@@ -12,7 +13,9 @@ const LOCAL_DEFAULTS = {
   fallbackGoogle: true,
   azureEndpoint: "https://api.cognitive.microsofttranslator.com",
   azureRegion: "",
-  azureKey: ""
+  azureKey: "",
+  requestTimeoutMs: 15000,
+  maxRetries: 3
 };
 
 const DB_NAME = "floating-translator-cache";
@@ -20,6 +23,8 @@ const DB_VERSION = 1;
 const STORE = "translations";
 const AZURE_BATCH_MAX_ITEMS = 50;
 const AZURE_BATCH_MAX_CHARS = 20000;
+const AZURE_ITEM_CHARS = 4500;
+const azureHealth = { failures: 0, openUntil: 0 };
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -57,8 +62,20 @@ async function cacheSet(key, value) {
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // 缓存失败不影响翻译本身。
+    // 缓存失败不影响翻译。
   }
+}
+
+async function cacheClear() {
+  try {
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).clear();
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {}
 }
 
 async function getConfig() {
@@ -66,26 +83,25 @@ async function getConfig() {
     chrome.storage.sync.get(SYNC_DEFAULTS),
     chrome.storage.local.get(LOCAL_DEFAULTS)
   ]);
-
   const merged = { ...SYNC_DEFAULTS, ...LOCAL_DEFAULTS, ...sync, ...local };
-  // 从曾经的 OCI 测试版升级时，自动迁回 Azure，不让旧设置把翻译卡死。
   if (merged.translationProvider === "oci-proxy") merged.translationProvider = "azure";
   return merged;
 }
 
 function normalizeGoogleLang(lang) {
   if (!lang) return "auto";
-  const value = lang.toLowerCase();
-  if (value === "zh-hans") return "zh-CN";
-  if (value === "zh-hant") return "zh-TW";
+  const value = String(lang).toLowerCase();
+  if (value === "zh-hans" || value === "zh-cn") return "zh-CN";
+  if (value === "zh-hant" || value === "zh-tw") return "zh-TW";
   return lang;
 }
 
 function normalizeAzureLang(lang) {
   if (!lang) return "";
-  const value = lang.toLowerCase();
+  const value = String(lang).toLowerCase();
   if (value === "zh-cn" || value === "zh-hans") return "zh-Hans";
   if (value === "zh-tw" || value === "zh-hant") return "zh-Hant";
+  if (value === "fil") return "fil";
   return lang;
 }
 
@@ -96,8 +112,7 @@ function splitLongText(text, maxLength = 3500) {
   while (rest.length > maxLength) {
     let cut = maxLength;
     const searchFrom = Math.floor(maxLength * 0.55);
-    const candidates = ["\n", "。", "！", "？", ". ", "! ", "? ", "; ", "，", ", "];
-    for (const marker of candidates) {
+    for (const marker of ["\n", "。", "！", "？", ". ", "! ", "? ", "; ", "，", ", ", " "]) {
       const index = rest.lastIndexOf(marker, maxLength);
       if (index >= searchFrom) {
         cut = index + marker.length;
@@ -111,11 +126,47 @@ function splitLongText(text, maxLength = 3500) {
   return pieces;
 }
 
-async function googleWebTranslate(text, sourceLang, targetLang) {
-  const pieces = splitLongText(text);
-  const translated = [];
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  for (const piece of pieces) {
+function retryDelay(response, attempt) {
+  const retryAfter = response?.headers?.get?.("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.min(10000, Math.max(400, seconds * 1000));
+  }
+  return Math.min(5000, 450 * (2 ** attempt) + Math.floor(Math.random() * 180));
+}
+
+function isRetryableStatus(status) {
+  return [408, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
+async function fetchWithRetry(url, init, config, label) {
+  const retries = Math.max(0, Math.min(5, Number(config.maxRetries ?? 3)));
+  const timeoutMs = Math.max(3000, Math.min(45000, Number(config.requestTimeoutMs ?? 15000)));
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(timer);
+      if (response.ok || !isRetryableStatus(response.status) || attempt === retries) return response;
+      await sleep(retryDelay(response, attempt));
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error;
+      if (attempt === retries) break;
+      await sleep(Math.min(5000, 450 * (2 ** attempt)));
+    }
+  }
+  throw new Error(`${label}请求失败：${lastError?.message || lastError || "网络异常"}`);
+}
+
+async function googleWebTranslate(text, sourceLang, targetLang, config) {
+  const translated = [];
+  for (const piece of splitLongText(text, 3400)) {
     const params = new URLSearchParams({
       client: "gtx",
       sl: normalizeGoogleLang(sourceLang || "auto"),
@@ -123,15 +174,17 @@ async function googleWebTranslate(text, sourceLang, targetLang) {
       dt: "t",
       q: piece
     });
-    const response = await fetch(`https://translate.googleapis.com/translate_a/single?${params.toString()}`);
+    const response = await fetchWithRetry(
+      `https://translate.googleapis.com/translate_a/single?${params.toString()}`,
+      {},
+      { ...config, maxRetries: Math.min(2, Number(config.maxRetries ?? 2)) },
+      "Google Web"
+    );
     if (!response.ok) throw new Error(`Google Web 翻译失败：HTTP ${response.status}`);
     const data = await response.json();
-    const result = Array.isArray(data?.[0])
-      ? data[0].map(segment => segment?.[0] || "").join("")
-      : "";
+    const result = Array.isArray(data?.[0]) ? data[0].map(segment => segment?.[0] || "").join("") : "";
     translated.push(result || piece);
   }
-
   return translated.join("");
 }
 
@@ -147,30 +200,27 @@ function azureHeaders(config) {
 
 function azureUrl(sourceLang, targetLang, config) {
   const endpoint = String(config.azureEndpoint || LOCAL_DEFAULTS.azureEndpoint).replace(/\/$/, "");
-  const params = new URLSearchParams({
-    "api-version": "3.0",
-    to: normalizeAzureLang(targetLang)
-  });
+  const params = new URLSearchParams({ "api-version": "3.0", to: normalizeAzureLang(targetLang) });
   if (sourceLang && sourceLang !== "auto") params.set("from", normalizeAzureLang(sourceLang));
   return `${endpoint}/translate?${params.toString()}`;
 }
 
 async function azureTranslateMany(texts, sourceLang, targetLang, config) {
-  const response = await fetch(azureUrl(sourceLang, targetLang, config), {
+  const response = await fetchWithRetry(azureUrl(sourceLang, targetLang, config), {
     method: "POST",
     headers: azureHeaders(config),
     body: JSON.stringify(texts.map(text => ({ text })))
-  });
+  }, config, "Microsoft/Azure");
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Microsoft/Azure 翻译失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 180)}` : ""}`);
+    const error = new Error(`Microsoft/Azure 翻译失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 180)}` : ""}`);
+    error.status = response.status;
+    throw error;
   }
 
   const data = await response.json();
-  if (!Array.isArray(data) || data.length !== texts.length) {
-    throw new Error("Microsoft/Azure 返回条数与请求不一致");
-  }
+  if (!Array.isArray(data) || data.length !== texts.length) throw new Error("Microsoft/Azure 返回条数与请求不一致");
   return data.map((item, index) => item?.translations?.[0]?.text ?? texts[index]);
 }
 
@@ -178,7 +228,6 @@ function makeAzureBatches(items) {
   const batches = [];
   let current = [];
   let chars = 0;
-
   for (const item of items) {
     const size = item.text.length;
     if (current.length && (current.length >= AZURE_BATCH_MAX_ITEMS || chars + size > AZURE_BATCH_MAX_CHARS)) {
@@ -197,52 +246,98 @@ function cacheKey(provider, sourceLang, targetLang, text) {
   return `${provider}\u0000${sourceLang}\u0000${targetLang}\u0000${text}`;
 }
 
-async function translateAzureBatch(texts, sourceLang, targetLang, config) {
+function groupUniqueTexts(texts) {
+  const map = new Map();
+  texts.forEach((text, index) => {
+    if (!map.has(text)) map.set(text, { text, indexes: [] });
+    map.get(text).indexes.push(index);
+  });
+  return [...map.values()];
+}
+
+async function translateGoogleBatch(texts, sourceLang, targetLang, config) {
   const results = new Array(texts.length);
-  const misses = [];
+  const unique = groupUniqueTexts(texts);
+  let cursor = 0;
 
-  await Promise.all(texts.map(async (text, index) => {
-    if (!text.trim()) {
-      results[index] = text;
-      return;
-    }
-    const key = cacheKey("azure", sourceLang, targetLang, text);
-    const cached = await cacheGet(key);
-    if (typeof cached === "string") results[index] = cached;
-    else misses.push({ index, text, key });
-  }));
-
-  for (const batch of makeAzureBatches(misses)) {
-    try {
-      const translated = await azureTranslateMany(batch.map(item => item.text), sourceLang, targetLang, config);
-      await Promise.all(batch.map(async (item, i) => {
-        results[item.index] = translated[i];
-        await cacheSet(item.key, translated[i]);
-      }));
-    } catch (error) {
-      if (!config.fallbackGoogle) throw error;
-      console.warn("[FloatingTranslator] Azure 批量翻译失败，回退 Google Web", error);
-      await Promise.all(batch.map(async item => {
-        const translated = await googleWebTranslate(item.text, sourceLang, targetLang);
-        results[item.index] = translated;
-        await cacheSet(item.key, translated);
-      }));
+  async function worker() {
+    while (cursor < unique.length) {
+      const item = unique[cursor++];
+      if (!item.text.trim()) {
+        item.indexes.forEach(index => { results[index] = item.text; });
+        continue;
+      }
+      const key = cacheKey("google-web", sourceLang, targetLang, item.text);
+      let translated = await cacheGet(key);
+      if (typeof translated !== "string") {
+        translated = await googleWebTranslate(item.text, sourceLang, targetLang, config);
+        await cacheSet(key, translated);
+      }
+      item.indexes.forEach(index => { results[index] = translated; });
     }
   }
 
+  await Promise.all(Array.from({ length: Math.min(4, unique.length || 1) }, worker));
   return results;
 }
 
-async function translateGoogleBatch(texts, sourceLang, targetLang) {
-  return Promise.all(texts.map(async text => {
-    if (!text.trim()) return text;
-    const key = cacheKey("google-web", sourceLang, targetLang, text);
+async function translateAzureBatch(texts, sourceLang, targetLang, config) {
+  const results = new Array(texts.length);
+  const unique = groupUniqueTexts(texts);
+  const misses = [];
+
+  for (const item of unique) {
+    if (!item.text.trim()) {
+      item.indexes.forEach(index => { results[index] = item.text; });
+      continue;
+    }
+    const key = cacheKey("azure", sourceLang, targetLang, item.text);
     const cached = await cacheGet(key);
-    if (typeof cached === "string") return cached;
-    const translated = await googleWebTranslate(text, sourceLang, targetLang);
-    await cacheSet(key, translated);
-    return translated;
-  }));
+    if (typeof cached === "string") item.indexes.forEach(index => { results[index] = cached; });
+    else misses.push({ ...item, key });
+  }
+
+  if (!misses.length) return results;
+
+  if (azureHealth.openUntil > Date.now()) {
+    if (!config.fallbackGoogle) throw new Error("Azure 临时熔断中，请稍后重试");
+    const fallback = await translateGoogleBatch(misses.map(item => item.text), sourceLang, targetLang, config);
+    misses.forEach((item, i) => item.indexes.forEach(index => { results[index] = fallback[i]; }));
+    return results;
+  }
+
+  const expanded = [];
+  misses.forEach((item, missIndex) => {
+    splitLongText(item.text, AZURE_ITEM_CHARS).forEach((piece, pieceIndex) => {
+      expanded.push({ missIndex, pieceIndex, text: piece });
+    });
+  });
+
+  try {
+    const pieceResults = Array.from({ length: misses.length }, () => []);
+    for (const batch of makeAzureBatches(expanded)) {
+      const translated = await azureTranslateMany(batch.map(item => item.text), sourceLang, targetLang, config);
+      batch.forEach((item, i) => { pieceResults[item.missIndex][item.pieceIndex] = translated[i]; });
+    }
+
+    azureHealth.failures = 0;
+    azureHealth.openUntil = 0;
+    for (let i = 0; i < misses.length; i++) {
+      const item = misses[i];
+      const translated = pieceResults[i].join("");
+      item.indexes.forEach(index => { results[index] = translated; });
+      await cacheSet(item.key, translated);
+    }
+    return results;
+  } catch (error) {
+    azureHealth.failures += 1;
+    if (azureHealth.failures >= 3) azureHealth.openUntil = Date.now() + 60000;
+    if (!config.fallbackGoogle) throw error;
+    console.warn("[FloatingTranslator] Azure 失败，回退 Google Web", error);
+    const fallback = await translateGoogleBatch(misses.map(item => item.text), sourceLang, targetLang, config);
+    misses.forEach((item, i) => item.indexes.forEach(index => { results[index] = fallback[i]; }));
+    return results;
+  }
 }
 
 async function translateBatch(texts, options = {}) {
@@ -251,35 +346,25 @@ async function translateBatch(texts, options = {}) {
   const provider = options.provider || config.translationProvider || "azure";
   const sourceLang = options.sourceLang || config.sourceLang || "auto";
   const targetLang = options.targetLang || config.targetLang || "zh-CN";
-
-  if (provider === "google-web") return translateGoogleBatch(clean, sourceLang, targetLang);
+  if (provider === "google-web") return translateGoogleBatch(clean, sourceLang, targetLang, config);
   return translateAzureBatch(clean, sourceLang, targetLang, config);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
   const currentSync = await chrome.storage.sync.get(Object.keys(SYNC_DEFAULTS));
   const missingSync = {};
-  for (const [key, value] of Object.entries(SYNC_DEFAULTS)) {
-    if (currentSync[key] === undefined) missingSync[key] = value;
-  }
+  for (const [key, value] of Object.entries(SYNC_DEFAULTS)) if (currentSync[key] === undefined) missingSync[key] = value;
   if (Object.keys(missingSync).length) await chrome.storage.sync.set(missingSync);
 
   const currentLocal = await chrome.storage.local.get(null);
   const patch = {};
-  for (const [key, value] of Object.entries(LOCAL_DEFAULTS)) {
-    if (currentLocal[key] === undefined) patch[key] = value;
-  }
+  for (const [key, value] of Object.entries(LOCAL_DEFAULTS)) if (currentLocal[key] === undefined) patch[key] = value;
   if (currentLocal.translationProvider === "oci-proxy") patch.translationProvider = "azure";
-  // 删除旧 OCI 测试配置，避免升级后继续残留敏感/无用数据。
   await chrome.storage.local.remove(["ociProxyEndpoint", "ociProxyToken"]);
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
 
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "ft-translate-selection",
-      title: "FloatingTranslator：翻译选中文字",
-      contexts: ["selection"]
-    });
+    chrome.contextMenus.create({ id: "ft-translate-selection", title: "FloatingTranslator：翻译选中文字", contexts: ["selection"] });
   });
 });
 
@@ -287,11 +372,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "ft-translate-selection" || !info.selectionText || !tab?.id) return;
   try {
     const [translated] = await translateBatch([info.selectionText]);
-    await chrome.tabs.sendMessage(tab.id, {
-      type: "FT_SHOW_SELECTION_TRANSLATION",
-      original: info.selectionText,
-      translated
-    });
+    await chrome.tabs.sendMessage(tab.id, { type: "FT_SHOW_SELECTION_TRANSLATION", original: info.selectionText, translated });
   } catch (error) {
     await chrome.tabs.sendMessage(tab.id, {
       type: "FT_SHOW_SELECTION_TRANSLATION",
@@ -304,15 +385,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "FT_GET_CONFIG") {
-    getConfig()
-      .then(config => sendResponse({
-        ok: true,
-        config: {
-          ...config,
-          azureKey: config.azureKey ? "__SET__" : ""
-        }
-      }))
-      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    getConfig().then(config => sendResponse({
+      ok: true,
+      config: { ...config, azureKey: config.azureKey ? "__SET__" : "" },
+      health: { azureCircuitOpen: azureHealth.openUntil > Date.now(), azureFailures: azureHealth.failures }
+    })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
@@ -320,6 +397,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     translateBatch(message.texts, message.options)
       .then(translations => sendResponse({ ok: true, translations }))
       .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
+  if (message?.type === "FT_CLEAR_CACHE") {
+    cacheClear().then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 

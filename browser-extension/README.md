@@ -1,101 +1,137 @@
-# FloatingTranslator Browser v0.5
+# FloatingTranslator Browser v0.7.1 Complete
 
-浏览器持续网页翻译版。v0.5 起收敛翻译引擎路线：**Microsoft / Azure Translator 作为主引擎，Google Web 作为可选故障回退**，不再继续维护 Oracle OCI 翻译链路。
+v0.7 系列先集中做 Chromium 主版本，不继续扩展 X浏览器 / UserScript / Firefox / Safari 兼容层。目标是先把真正影响日常使用的网页翻译体验做完整、稳定，再进行跨浏览器适配。
 
-## 当前功能
+## 完整版核心能力
 
 - Manifest V3
-- 自动持续翻译网页 DOM 文本
-- MutationObserver 监听动态新增/变化内容
-- 当前可视区域优先处理
-- 仅译文 / 原文+译文
-- 始终翻译此网站 / 永不翻译此网站
-- IndexedDB 翻译缓存
-- 选中文字右键翻译
-- 输入框 `Alt + Enter` 翻译
-- 网页聊天输入实时预翻译
-- Open Shadow DOM 扫描与动态监听
 - Microsoft / Azure Translator 主引擎
-- Google Web 实验性备用引擎
-- Azure 失败时可选自动回退 Google Web
-- API Key 只保存在当前浏览器本地扩展存储，不写入仓库
-- GitHub Actions 自动校验并打包浏览器插件 ZIP
+- Google Web 可选故障回退
+- 整页持续 DOM 翻译
+- 超长页面增量扫描，不再只处理最前面的少量文本
+- 当前可视区域优先
+- 动态帖子 / 评论 / 聊天消息持续监听
+- Open Shadow DOM 扫描与持续监听
+- SPA 页面切换后整页重新扫描
+- 页面重新获得焦点后执行安全补扫
+- 翻译失败的页面节点自动重新入队并续跑，单个节点最多重试 4 次
+- 仅译文 / 原文 + 译文
+- 始终翻译 / 永不翻译网站规则
+- 选中文字右键翻译
+- 输入框 Alt + Enter 立即翻译
+- 聊天输入停止后实时预览译文
+- 输入译文一键替换 / 复制，不自动发送
+- IndexedDB 翻译缓存
+- 缓存条数统计与一键清空
+- 同批文本自动去重
+- Azure 批量请求
+- Azure 超长文本拆段后自动合并
+- 429 / 5xx / 网络超时自动重试与指数退避
+- Azure 连续失败短暂熔断，避免整页持续卡死
+- Azure 失败时回退 Google Web 不再污染 Azure 缓存
+- 可在高级设置中测试引擎、调整超时/重试、查看/清空缓存
+- “补扫遗漏内容”不会先恢复已翻内容，适合超长页和虚拟列表手动补扫
 
-## v0.5 Azure 优化
+## v0.7.1 混合语言页面补翻
 
-相比 v0.4，v0.5 已移除 OCI 设置、OCI Worker 构建和相关代理代码，并对 Azure 调用做了专项优化。
+旧版曾经把“只要出现汉字”直接判断为中文，这会造成日文汉字、英语 + 日语混合页面等场景误判。v0.7.1 在 v0.7 的混合语言识别基础上继续修正：
 
-### Azure 批量翻译
+- 平假名 / 片假名明确识别为日语
+- 韩文、泰文、阿拉伯文、西里尔文、印地文单独识别
+- 越南语重音字符单独处理
+- 纯汉字段标记为“汉字歧义”，不再强制判断为中文或日文
+- 英文不会因为页面本身标记为日语 / 中文，就被误认为已经是目标语言
+- 手动选择源语言时，手动设置优先于自动判断
+- 可开启“自动跳过已经是目标语言的文本”
+- 当页面 `lang` 已经等于目标语言，但页面里仍有明显不同脚本的外语片段时，会自动触发补翻
+- 为避免拉丁语系之间误判，自动强制补翻目前只用于中文、日文、韩文、泰文、阿拉伯文等非拉丁目标语言
 
-网页扫描出来的多个文本节点不再全部逐条请求 Azure。后台会先检查本地缓存，再把未命中的文本按保守阈值合成批量请求：
+仓库内有回归测试，专门防止“英语被当成日语”“英文出现在中文/日文页面却被跳过”和“纯汉字强制中文”等问题重新出现。
+
+## 长网页与动态网页
+
+正文扫描改为分片增量执行，避免一次 TreeWalker 扫完整个超长页面造成卡顿。文本会进入优先队列：
 
 ```text
-网页文本节点
-   ↓
-IndexedDB 缓存命中检查
-   ↓
-未命中内容合批
-   ↓
-Azure Translator
-   ↓
-按原顺序写回网页
+聊天新消息 / 当前可视区域
+          ↓
+       附近内容
+          ↓
+     页面更远位置
 ```
 
-这样可以减少大量短句造成的网络请求次数，同时保留每段文本独立缓存。
+每批同时限制节点数量和字符总量。无限滚动、新增评论、聊天新消息继续由 MutationObserver 加入队列。
 
-### 升级迁移
+当某批网络请求失败时，已取出的节点不会直接丢失，而是自动重新入队，并按退避时间继续跑。这样长网页遇到临时网络错误或 Azure 限流后，不会出现“前面翻了几句，后面永远停住”的情况。
 
-如果浏览器之前安装过带 OCI 测试配置的版本，v0.5 会：
+SPA 路由切换、页面重新可见或重新获得焦点时，会执行补扫，处理虚拟列表、路由切换后复用 DOM 等场景。Popup 另提供“补扫遗漏内容”，不会先恢复已完成译文。
 
-- 将旧的 `oci-proxy` 主引擎自动迁回 `azure`
-- 删除本机旧 `ociProxyEndpoint`
-- 删除本机旧 `ociProxyToken`
+## Azure 稳定性
 
-不会把旧 OCI 配置继续带到后续版本。
+后台会先查缓存并去重，再执行 Azure 批量翻译。长文本会自动拆段。对于 408 / 429 / 5xx 等临时错误，会按退避策略重试。
 
-## Azure 设置
+如果 Azure 连续失败多次，会短暂进入熔断状态，避免长网页不断重复打失败请求。启用 Google Web 回退时，熔断期间继续尝试备用引擎。
 
-打开“翻译引擎与高级设置”，填写：
+Google 回退结果只写入 Google 缓存，不会伪装成 Azure 结果写进 Azure 缓存，因此 Azure 恢复后可以重新正常调用。
 
-- Endpoint
-- Region（按你的 Azure Translator 资源要求填写）
-- Key
+高级设置页现在会显示引擎诊断信息，包括当前主引擎、Azure Key 是否已设置、Google 回退是否开启；“保存并测试翻译引擎”会先保存当前刚填写的 Endpoint / Region / Key，再执行测试，避免误用旧配置。
 
-Key 使用 `chrome.storage.local` 仅保存在当前浏览器扩展本地数据中，不会提交到 GitHub。
+## 网页聊天
 
-如果开启“Azure 失败时自动回退到 Google Web”，遇到 Azure Key、网络或接口异常时，当前批次会尝试继续翻译；如果不想使用非正式 Google Web 接口，可以关闭该选项。
+聊天正文和聊天输入分开处理：
 
-## 自动生成安装包
+- 网页中的对方消息持续进入正文翻译队列
+- WhatsApp Web、Telegram Web、Discord 增加语义适配，聊天消息区域优先于普通页面内容
+- 适配不依赖单一混淆 class，仍保留通用 contenteditable / role="textbox" 回退
+- 每个输入框单独维护防抖与请求序号，不同输入框不会互相取消
+- 你可以连续输入，不需要“一人一句”交替
+- 停止输入约 0.55 秒后刷新译文预览
+- 只有点击“替换输入框”才会修改输入内容
+- 不自动点击发送
+- Alt + Enter 使用“我输入的语言 → 我发送为”立即替换
+- Clipboard API 不可用时提供传统复制回退
+- 对 contenteditable 尽量使用浏览器原生插入文本事件，提升 React / Vue / 聊天网页兼容性
 
-`.github/workflows/build-browser-extension.yml` 会自动：
+## 高级设置
 
-1. 校验 `manifest.json`。
-2. 检查浏览器插件核心文件。
-3. 对全部浏览器 JavaScript 执行 `node --check`。
-4. 自动读取版本号。
-5. 生成 `FloatingTranslator-Browser-v0.5.0.zip`。
-6. 上传到 GitHub Actions Artifacts。
+可设置：
 
-## 安装
+- Azure Endpoint
+- Azure Region
+- Azure Key
+- Azure 请求超时时间
+- 自动重试次数
+- Azure 失败是否回退 Google Web
+- 保存并测试翻译引擎
+- 查看当前引擎诊断状态
+- 查看 IndexedDB 译文缓存条数
+- 清空翻译缓存
 
-### Chrome / Edge 桌面版
+Key 只保存在 `chrome.storage.local`，不会提交到 GitHub。
 
-1. 下载 Actions 生成的 ZIP 并解压。
-2. 打开扩展管理页面并开启开发者模式。
-3. 选择“加载已解压的扩展程序”。
-4. 选择包含 `manifest.json` 的目录。
+## 自动构建
 
-### Quetta Android
+GitHub Actions 会执行：
 
-使用 Actions 自动生成的浏览器插件 ZIP 测试。手机弹窗已按窄屏布局处理；具体扩展导入入口以当前 Quetta 版本为准。
+1. 校验 manifest 和所有声明的脚本路径。
+2. 校验后台入口、缓存统计、运行时扩展和混合页面补翻模块。
+3. 对全部 JS / CJS 执行 `node --check`。
+4. 执行全部 `tests/*.test.cjs` 回归测试，包括语言识别与完整运行时结构检查。
+5. 自动读取 manifest 版本号。
+6. 生成 `FloatingTranslator-Browser-v0.7.1.zip`。
+7. 上传 Actions Artifact。
 
-## 下一步
+## 当前测试范围
 
-- 长页面调度、取消和并发优化
-- 混合语言页面逐段识别
-- Telegram Web / WhatsApp Web / Discord 专项适配
-- Azure 请求失败重试与节流
-- PDF 翻译
-- YouTube / 网页视频双语字幕
-- 图片 OCR
-- Android 与 Browser 共用规则、术语表和语言偏好
+先测试 Chromium 主版本：
+
+- Quetta Android
+- Chrome Desktop
+- Edge Desktop
+- Brave / Vivaldi / Opera 等 Chromium 桌面浏览器
+
+X浏览器 UserScript、Firefox、Safari 等兼容版本暂缓。等主版本功能和稳定性测试通过后，再基于稳定核心做适配，避免多个版本同时修同一批 bug。
+
+## 后续主版本功能
+
+主版本测试通过前，优先继续处理实际测试发现的问题。兼容层之后再做。

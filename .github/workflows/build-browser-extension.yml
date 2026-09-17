@@ -8,6 +8,7 @@ on:
       - feature/browser-translator-v0.3
       - feature/browser-translator-v0.4
       - feature/browser-translator-v0.5-azure
+      - feature/browser-translator-v0.7-complete
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -32,11 +33,31 @@ jobs:
         run: |
           set -euo pipefail
           python -m json.tool browser-extension/manifest.json >/dev/null
+          test -f browser-extension/shared/language-core.js
+          test -f browser-extension/background/main.js
           test -f browser-extension/background/service-worker.js
+          test -f browser-extension/background/cache-stats.js
+          test -f browser-extension/background/runtime-extras.js
           test -f browser-extension/content/content.js
           test -f browser-extension/content/v02-enhancements.js
+          test -f browser-extension/content/mixed-page-guard.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
+          test -f browser-extension/tests/language-core.test.cjs
+          test -f browser-extension/tests/runtime-hardening.test.cjs
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('browser-extension/manifest.json').read_text(encoding='utf-8'))
+          worker = manifest['background']['service_worker']
+          assert worker == 'background/main.js', worker
+          assert Path('browser-extension', worker).is_file(), worker
+          for block in manifest.get('content_scripts', []):
+              for rel in block.get('js', []):
+                  assert Path('browser-extension', rel).is_file(), rel
+              for rel in block.get('css', []):
+                  assert Path('browser-extension', rel).is_file(), rel
+          PY
 
       - name: Validate JavaScript syntax
         shell: bash
@@ -45,7 +66,16 @@ jobs:
           while IFS= read -r -d '' file; do
             echo "Checking $file"
             node --check "$file"
-          done < <(find browser-extension -type f -name '*.js' -print0)
+          done < <(find browser-extension -type f \( -name '*.js' -o -name '*.cjs' \) -print0)
+
+      - name: Run regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test in browser-extension/tests/*.test.cjs; do
+            echo "Running $test"
+            node "$test"
+          done
 
       - name: Read extension version
         id: version
@@ -67,7 +97,8 @@ jobs:
           cd browser-extension
           zip -r "../dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip" . \
             -x '*.DS_Store' \
-            -x '*.git*'
+            -x '*.git*' \
+            -x 'tests/*'
           cd ..
           unzip -l "dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip"
 

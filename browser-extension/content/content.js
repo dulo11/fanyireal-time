@@ -8,18 +8,24 @@
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated",
-    siteRules: {}
+    siteRules: {},
+    skipTargetLanguage: true,
+    chatMode: true,
+    inputPreview: true,
+    inputSourceLang: "auto",
+    inputTargetLang: "en",
+    inputPreviewDelay: 550
   };
 
   const BLOCK_TAGS = new Set([
-    "P", "DIV", "LI", "ARTICLE", "SECTION", "HEADER", "FOOTER", "MAIN",
-    "ASIDE", "TD", "TH", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE"
+    "P", "DIV", "LI", "ARTICLE", "SECTION", "HEADER", "FOOTER", "MAIN", "ASIDE",
+    "TD", "TH", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE"
   ]);
 
   const SKIP_SELECTOR = [
     "script", "style", "noscript", "code", "pre", "textarea", "input", "select", "option",
     "svg", "canvas", "math", "[contenteditable='true']", "[contenteditable='']",
-    ".ft-translation-inline", ".ft-selection-bubble", "[data-ft-owned='1']"
+    ".ft-translation-inline", ".ft-selection-bubble", ".ft-input-preview", "[data-ft-owned='1']"
   ].join(",");
 
   const state = {
@@ -28,33 +34,30 @@
     queue: new Set(),
     processing: false,
     flushTimer: null,
+    retryTimer: null,
     nodeState: new WeakMap(),
+    nodeRetries: new WeakMap(),
     trackedNodes: new Set(),
     generation: 0,
     observer: null,
-    started: false
+    started: false,
+    processed: 0,
+    failed: 0,
+    retried: 0,
+    lastError: "",
+    scanTokens: new Set(),
+    safetyScanTimer: null
   };
 
-  function normalizeLang(lang) {
-    if (!lang) return "";
-    const value = String(lang).trim().toLowerCase().replace("_", "-");
-    if (value.startsWith("zh")) {
-      if (value.includes("tw") || value.includes("hk") || value.includes("hant")) return "zh-hant";
-      return "zh-hans";
-    }
-    return value.split("-")[0];
-  }
+  const lang = () => globalThis.FTLanguage;
 
   function pageLanguage() {
-    return normalizeLang(document.documentElement?.lang || document.body?.getAttribute("lang") || "");
+    return lang()?.normalizeLang(document.documentElement?.lang || document.body?.getAttribute("lang") || "") || "";
   }
 
   function siteRule() {
-    try {
-      return state.settings.siteRules?.[location.hostname] || "default";
-    } catch {
-      return "default";
-    }
+    try { return state.settings.siteRules?.[location.hostname] || "default"; }
+    catch { return "default"; }
   }
 
   function shouldTranslatePage() {
@@ -63,21 +66,15 @@
     if (rule === "never") return false;
     if (rule === "always") return true;
     if (!state.settings.autoTranslate) return false;
-
     if (state.settings.sourceLang !== "auto") return true;
-    const current = pageLanguage();
-    const target = normalizeLang(state.settings.targetLang);
-    if (current && target && current === target) return false;
-    return true;
+    const page = pageLanguage();
+    const target = lang()?.normalizeLang(state.settings.targetLang) || "";
+    return !(page && target && page === target);
   }
 
   function splitWhitespace(value) {
     const match = String(value ?? "").match(/^(\s*)([\s\S]*?)(\s*)$/);
-    return {
-      prefix: match?.[1] || "",
-      core: match?.[2] || "",
-      suffix: match?.[3] || ""
-    };
+    return { prefix: match?.[1] || "", core: match?.[2] || "", suffix: match?.[3] || "" };
   }
 
   function hasLetters(text) {
@@ -87,39 +84,34 @@
     return /[\p{L}\p{M}]/u.test(text);
   }
 
+  function shouldSkipTarget(text) {
+    if (!state.settings.skipTargetLanguage || state.settings.sourceLang !== "auto") return false;
+    const helper = lang();
+    if (!helper) return false;
+    return !helper.shouldTranslateText(text, {
+      sourceLang: "auto",
+      targetLang: state.settings.targetLang,
+      pageLang: pageLanguage()
+    });
+  }
+
   function isEligibleTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP_SELECTOR)) return false;
     const { core } = splitWhitespace(node.nodeValue);
-    if (!hasLetters(core)) return false;
+    if (!hasLetters(core) || shouldSkipTarget(core)) return false;
     return true;
-  }
-
-  function collectTextNodes(root) {
-    if (!root) return [];
-    if (root.nodeType === Node.TEXT_NODE) return isEligibleTextNode(root) ? [root] : [];
-    if (![Node.ELEMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE, Node.DOCUMENT_NODE].includes(root.nodeType)) return [];
-
-    if (root.nodeType === Node.ELEMENT_NODE && root.matches?.(SKIP_SELECTOR)) return [];
-
-    const result = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        return isEligibleTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      }
-    });
-    while (walker.nextNode()) result.push(walker.currentNode);
-    return result;
   }
 
   function nodePriority(node) {
     const parent = node.parentElement;
     if (!parent) return Number.MAX_SAFE_INTEGER;
+    if (state.settings.chatMode && parent.closest("[data-ft-chat-feed='1']")) return -100;
     const rect = parent.getBoundingClientRect();
-    if (rect.bottom >= -300 && rect.top <= innerHeight + 500) return 0;
-    if (rect.top > innerHeight) return rect.top - innerHeight;
-    return Math.abs(rect.bottom);
+    if (rect.bottom >= -400 && rect.top <= innerHeight + 700) return Math.abs(rect.top) / 1000;
+    if (rect.top > innerHeight) return 10 + (rect.top - innerHeight);
+    return 10 + Math.abs(rect.bottom);
   }
 
   function enqueueNode(node) {
@@ -136,74 +128,133 @@
     scheduleFlush();
   }
 
-  function scan(root = document.body) {
+  function scheduleTreeScan(root = document.body) {
     if (!state.active || !root) return;
-    for (const node of collectTextNodes(root)) enqueueNode(node);
+    if (root.nodeType === Node.TEXT_NODE) {
+      enqueueNode(root);
+      return;
+    }
+    if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
+    if (root.nodeType === Node.ELEMENT_NODE && root.matches?.(SKIP_SELECTOR)) return;
+
+    const token = { cancelled: false };
+    state.scanTokens.add(token);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+    const step = deadline => {
+      if (token.cancelled || !state.active) {
+        state.scanTokens.delete(token);
+        return;
+      }
+      let count = 0;
+      while (count < 700 && (!deadline || deadline.timeRemaining() > 2)) {
+        const node = walker.nextNode();
+        if (!node) {
+          state.scanTokens.delete(token);
+          return;
+        }
+        if (isEligibleTextNode(node)) enqueueNode(node);
+        count++;
+      }
+      if (typeof requestIdleCallback === "function") requestIdleCallback(step, { timeout: 250 });
+      else setTimeout(() => step(null), 12);
+    };
+
+    if (typeof requestIdleCallback === "function") requestIdleCallback(step, { timeout: 250 });
+    else setTimeout(() => step(null), 0);
   }
 
-  function scheduleFlush(delay = 120) {
+  function cancelScans() {
+    for (const token of state.scanTokens) token.cancelled = true;
+    state.scanTokens.clear();
+  }
+
+  function scheduleFlush(delay = 90) {
     clearTimeout(state.flushTimer);
     state.flushTimer = setTimeout(processQueue, delay);
+  }
+
+  function takeBatch() {
+    const candidates = [...state.queue].filter(isEligibleTextNode).sort((a, b) => nodePriority(a) - nodePriority(b));
+    const batch = [];
+    let chars = 0;
+    for (const node of candidates) {
+      const core = splitWhitespace(node.nodeValue).core;
+      if (batch.length >= 40 || (batch.length && chars + core.length > 16000)) break;
+      batch.push(node);
+      chars += core.length;
+    }
+    for (const node of batch) state.queue.delete(node);
+    return batch;
+  }
+
+  function retryFailedEntries(entries) {
+    let maxRetry = 0;
+    for (const entry of entries) {
+      if (!entry.node?.isConnected || !isEligibleTextNode(entry.node)) continue;
+      const retries = (state.nodeRetries.get(entry.node) || 0) + 1;
+      state.nodeRetries.set(entry.node, retries);
+      if (retries <= 4) {
+        state.queue.add(entry.node);
+        state.retried++;
+        maxRetry = Math.max(maxRetry, retries);
+      }
+    }
+    if (state.queue.size) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = setTimeout(() => {
+        state.retryTimer = null;
+        scheduleFlush(0);
+      }, Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
+    }
   }
 
   async function processQueue() {
     if (state.processing || !state.active || state.queue.size === 0) return;
     state.processing = true;
     const generation = state.generation;
+    let entries = [];
 
     try {
-      const candidates = [...state.queue]
-        .filter(isEligibleTextNode)
-        .sort((a, b) => nodePriority(a) - nodePriority(b))
-        .slice(0, 24);
-
-      for (const node of candidates) state.queue.delete(node);
+      const candidates = takeBatch();
       if (!candidates.length) return;
-
-      const payload = [];
-      const nodes = [];
-      for (const node of candidates) {
+      entries = candidates.map(node => {
         const parts = splitWhitespace(node.nodeValue);
-        if (!hasLetters(parts.core)) continue;
-        payload.push(parts.core);
-        nodes.push({ node, parts, originalFull: node.nodeValue });
-      }
-      if (!payload.length) return;
+        return { node, parts, originalFull: node.nodeValue };
+      }).filter(entry => hasLetters(entry.parts.core));
+      if (!entries.length) return;
 
       const response = await chrome.runtime.sendMessage({
         type: "FT_TRANSLATE",
-        texts: payload,
-        options: {
-          sourceLang: state.settings.sourceLang,
-          targetLang: state.settings.targetLang
-        }
+        texts: entries.map(entry => entry.parts.core),
+        options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
       });
 
       if (generation !== state.generation || !state.active) return;
       if (!response?.ok) throw new Error(response?.error || "翻译失败");
 
-      nodes.forEach((entry, index) => {
+      entries.forEach((entry, index) => {
         const translated = response.translations?.[index];
         if (typeof translated !== "string" || !entry.node.isConnected) return;
         applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
+        state.nodeRetries.delete(entry.node);
+        state.processed++;
       });
+      state.lastError = "";
     } catch (error) {
+      state.failed++;
+      state.lastError = String(error?.message || error);
+      retryFailedEntries(entries);
       console.warn("[FloatingTranslator]", error);
     } finally {
       state.processing = false;
-      if (state.active && state.queue.size) scheduleFlush(80);
+      if (state.active && state.queue.size && !state.retryTimer) scheduleFlush(50);
     }
   }
 
   function applyTranslation(node, parts, originalFull, translatedCore) {
     const renderedFull = `${parts.prefix}${translatedCore}${parts.suffix}`;
-    const record = {
-      originalFull,
-      translatedCore,
-      renderedFull,
-      translationEl: null
-    };
-
+    const record = { originalFull, translatedCore, renderedFull, translationEl: null };
     if (state.settings.displayMode === "bilingual") {
       const span = document.createElement("span");
       span.className = "ft-translation-inline";
@@ -213,41 +264,43 @@
       if (BLOCK_TAGS.has(node.parentElement?.tagName)) span.dataset.ftBlock = "1";
       node.parentNode?.insertBefore(span, node.nextSibling);
       record.translationEl = span;
-    } else if (state.settings.displayMode === "translated") {
+    } else {
       node.nodeValue = renderedFull;
     }
-
     state.nodeState.set(node, record);
     state.trackedNodes.add(node);
   }
 
   function restorePage() {
     state.generation++;
+    cancelScans();
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
     state.queue.clear();
     for (const node of [...state.trackedNodes]) {
       const record = state.nodeState.get(node);
       if (!record) continue;
       record.translationEl?.remove();
-      if (node.isConnected && node.nodeValue === record.renderedFull) {
-        node.nodeValue = record.originalFull;
-      }
+      if (node.isConnected && node.nodeValue === record.renderedFull) node.nodeValue = record.originalFull;
       state.nodeState.delete(node);
     }
     state.trackedNodes.clear();
+    state.processed = 0;
+    state.failed = 0;
+    state.retried = 0;
+    state.lastError = "";
   }
 
   async function loadSettings({ rescan = true } = {}) {
-    const next = await chrome.storage.sync.get(DEFAULTS);
-    const materiallyChanged = ["sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate"]
-      .some(key => state.settings[key] !== next[key]) || JSON.stringify(state.settings.siteRules) !== JSON.stringify(next.siteRules);
+    const next = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
+    const materiallyChanged = [
+      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"
+    ].some(key => state.settings[key] !== next[key]) || JSON.stringify(state.settings.siteRules) !== JSON.stringify(next.siteRules);
 
     if (materiallyChanged) restorePage();
-    state.settings = { ...DEFAULTS, ...next };
+    state.settings = next;
     state.active = shouldTranslatePage();
-
-    if (rescan && state.active) {
-      scan(document.body);
-    }
+    if (rescan && state.active) scheduleTreeScan(document.body);
   }
 
   function handleMutations(mutations) {
@@ -260,10 +313,9 @@
         enqueueNode(node);
         continue;
       }
-
       for (const added of mutation.addedNodes) {
         if (added.nodeType === Node.ELEMENT_NODE && added.dataset?.ftOwned === "1") continue;
-        scan(added);
+        scheduleTreeScan(added);
       }
     }
   }
@@ -271,11 +323,7 @@
   function startObserver() {
     if (state.observer || !document.documentElement) return;
     state.observer = new MutationObserver(handleMutations);
-    state.observer.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      characterData: true
-    });
+    state.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
   }
 
   function showSelectionBubble(original, translated, isError = false) {
@@ -283,30 +331,22 @@
     const bubble = document.createElement("div");
     bubble.className = `ft-selection-bubble${isError ? " ft-error" : ""}`;
     bubble.dataset.ftOwned = "1";
-    bubble.innerHTML = "";
-
     const translatedEl = document.createElement("div");
     translatedEl.className = "ft-selection-result";
     translatedEl.textContent = translated;
-    bubble.appendChild(translatedEl);
-
     const originalEl = document.createElement("div");
     originalEl.className = "ft-selection-original";
     originalEl.textContent = original;
-    bubble.appendChild(originalEl);
-
+    bubble.append(translatedEl, originalEl);
     document.documentElement.appendChild(bubble);
-    const selection = window.getSelection();
+
     let rect = null;
     try {
+      const selection = window.getSelection();
       if (selection?.rangeCount) rect = selection.getRangeAt(0).getBoundingClientRect();
     } catch {}
-
-    const top = rect ? Math.min(innerHeight - 120, Math.max(10, rect.bottom + 8)) : 20;
-    const left = rect ? Math.min(innerWidth - 320, Math.max(10, rect.left)) : 20;
-    bubble.style.top = `${top}px`;
-    bubble.style.left = `${left}px`;
-
+    bubble.style.top = `${rect ? Math.min(innerHeight - 120, Math.max(10, rect.bottom + 8)) : 20}px`;
+    bubble.style.left = `${rect ? Math.min(innerWidth - 320, Math.max(10, rect.left)) : 20}px`;
     setTimeout(() => bubble.classList.add("ft-visible"), 0);
     setTimeout(() => bubble.remove(), 9000);
   }
@@ -314,11 +354,9 @@
   async function translateFocusedInput(event) {
     if (!(event.altKey && event.key === "Enter")) return;
     const el = event.target;
-    const isTextInput = el instanceof HTMLTextAreaElement ||
-      (el instanceof HTMLInputElement && ["text", "search", "email", "url", "tel"].includes(el.type));
+    const isTextInput = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && ["text", "search", "email", "url", "tel"].includes(el.type));
     const simpleEditable = el?.isContentEditable && el.children.length === 0;
     if (!isTextInput && !simpleEditable) return;
-
     const text = isTextInput ? el.value : el.textContent;
     if (!text?.trim()) return;
     event.preventDefault();
@@ -329,16 +367,17 @@
         type: "FT_TRANSLATE",
         texts: [text],
         options: {
-          sourceLang: state.settings.sourceLang,
-          targetLang: state.settings.targetLang
+          sourceLang: state.settings.chatMode ? state.settings.inputSourceLang : state.settings.sourceLang,
+          targetLang: state.settings.chatMode ? state.settings.inputTargetLang : state.settings.targetLang
         }
       });
       if (!response?.ok) throw new Error(response?.error || "翻译失败");
       const translated = response.translations?.[0] || text;
       if (isTextInput) {
-        const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
-        descriptor?.set ? descriptor.set.call(el, translated) : (el.value = translated);
-        el.dispatchEvent(new Event("input", { bubbles: true }));
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+        if (descriptor?.set) descriptor.set.call(el, translated); else el.value = translated;
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: translated }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
       } else {
         el.textContent = translated;
@@ -349,16 +388,38 @@
     }
   }
 
+  function handleRouteRescan() {
+    if (!state.active) return;
+    state.generation++;
+    cancelScans();
+    clearTimeout(state.flushTimer);
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+    state.queue.clear();
+    setTimeout(() => scheduleTreeScan(document.body), 100);
+  }
+
+  function scheduleSafetyScan(delay = 250) {
+    clearTimeout(state.safetyScanTimer);
+    state.safetyScanTimer = setTimeout(() => {
+      if (state.active && document.visibilityState === "visible") scheduleTreeScan(document.body);
+    }, delay);
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "FT_REFRESH_SETTINGS") {
       loadSettings().then(() => sendResponse({ ok: true, active: state.active }));
       return true;
     }
     if (message?.type === "FT_TRANSLATE_NOW") {
-      state.active = true;
       restorePage();
       state.active = true;
-      scan(document.body);
+      scheduleTreeScan(document.body);
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (message?.type === "FT_RESCAN_PAGE") {
+      handleRouteRescan();
       sendResponse({ ok: true });
       return false;
     }
@@ -378,7 +439,12 @@
         active: state.active,
         host: location.hostname,
         pageLang: pageLanguage(),
-        queued: state.queue.size
+        queued: state.queue.size,
+        processing: state.processing,
+        processed: state.processed,
+        failed: state.failed,
+        retried: state.retried,
+        lastError: state.lastError
       });
       return false;
     }
@@ -386,23 +452,23 @@
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "sync") return;
-    if (Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
+    if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
-
   document.addEventListener("keydown", translateFocusedInput, true);
+  window.addEventListener("ft-route-change", handleRouteRescan, true);
+  window.addEventListener("focus", () => scheduleSafetyScan(350), { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") scheduleSafetyScan(350);
+  });
 
   async function init() {
     if (state.started) return;
     state.started = true;
     startObserver();
     await loadSettings({ rescan: false });
-    if (state.active) scan(document.body);
+    if (state.active) scheduleTreeScan(document.body);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
-  } else {
-    init();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });
+  else init();
 })();

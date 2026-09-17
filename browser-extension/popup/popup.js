@@ -5,6 +5,7 @@ const DEFAULTS = {
   targetLang: "zh-CN",
   displayMode: "translated",
   siteRules: {},
+  skipTargetLanguage: true,
   chatMode: true,
   inputPreview: true,
   inputSourceLang: "auto",
@@ -72,16 +73,14 @@ function hostFromTab(tab) {
 
 async function sendToPage(message) {
   if (!activeTab?.id) return null;
-  try {
-    return await chrome.tabs.sendMessage(activeTab.id, message);
-  } catch {
-    return null;
-  }
+  try { return await chrome.tabs.sendMessage(activeTab.id, message); }
+  catch { return null; }
 }
 
 function render() {
   $("enabled").checked = Boolean(settings.enabled);
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
+  $("skipTargetLanguage").checked = settings.skipTargetLanguage !== false;
   $("sourceLang").value = settings.sourceLang || "auto";
   $("targetLang").value = settings.targetLang || "zh-CN";
   $("displayMode").value = settings.displayMode || "translated";
@@ -108,10 +107,16 @@ async function refreshPageState() {
     $("pageState").textContent = "此页面无法注入翻译脚本";
     return;
   }
-  const lang = response.pageLang ? ` · ${response.pageLang}` : "";
-  const queue = response.queued ? ` · 待翻译 ${response.queued}` : "";
-  const chat = settings.chatMode && settings.inputPreview ? " · 聊天输入预览开" : "";
-  $("pageState").textContent = `${response.active ? "持续翻译中" : "未翻译"}${lang}${queue}${chat}`;
+  const pieces = [response.active ? "持续翻译中" : "未翻译"];
+  if (response.pageLang) pieces.push(response.pageLang);
+  if (response.processing) pieces.push("处理中");
+  if (response.queued) pieces.push(`待翻译 ${response.queued}`);
+  if (response.processed) pieces.push(`已翻译 ${response.processed}`);
+  if (response.retried) pieces.push(`自动续跑 ${response.retried}`);
+  if (response.failed) pieces.push(`失败批次 ${response.failed}`);
+  if (settings.chatMode && settings.inputPreview) pieces.push("聊天输入预览开");
+  $("pageState").textContent = pieces.join(" · ");
+  $("pageState").title = response.lastError || "";
 }
 
 async function init() {
@@ -127,6 +132,7 @@ async function init() {
 
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
+  $("skipTargetLanguage").addEventListener("change", event => saveSync({ skipTargetLanguage: event.target.checked }));
   $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
   $("targetLang").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
   $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
@@ -144,17 +150,24 @@ async function init() {
   });
 
   $("translateNow").addEventListener("click", async () => {
-    $("pageState").textContent = "正在开始翻译…";
+    $("pageState").textContent = "正在恢复并重新翻译整页…";
     await sendToPage({ type: "FT_TRANSLATE_NOW" });
+    setTimeout(refreshPageState, 300);
+  });
+
+  $("rescanPage").addEventListener("click", async () => {
+    $("pageState").textContent = "正在补扫遗漏内容…";
+    await sendToPage({ type: "FT_RESCAN_PAGE" });
     setTimeout(refreshPageState, 250);
   });
 
   $("restorePage").addEventListener("click", async () => {
     await sendToPage({ type: "FT_RESTORE_PAGE" });
-    setTimeout(refreshPageState, 120);
+    setTimeout(refreshPageState, 150);
   });
 
   $("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
+  setInterval(refreshPageState, 1200);
 }
 
 init().catch(error => {

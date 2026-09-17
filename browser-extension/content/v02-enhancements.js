@@ -1,6 +1,6 @@
 (() => {
-  if (window.__FLOATING_TRANSLATOR_V02__) return;
-  window.__FLOATING_TRANSLATOR_V02__ = true;
+  if (window.__FLOATING_TRANSLATOR_V07__) return;
+  window.__FLOATING_TRANSLATOR_V07__ = true;
 
   const DEFAULTS = {
     enabled: true,
@@ -9,6 +9,7 @@
     targetLang: "zh-CN",
     displayMode: "translated",
     siteRules: {},
+    skipTargetLanguage: true,
     chatMode: true,
     inputPreview: true,
     inputSourceLang: "auto",
@@ -22,38 +23,47 @@
     ".ft-translation-inline", ".ft-selection-bubble", ".ft-input-preview", "[data-ft-owned='1']"
   ].join(",");
 
+  const CHAT_ADAPTERS = [
+    {
+      id: "whatsapp",
+      hosts: ["web.whatsapp.com"],
+      composers: ["[contenteditable='true'][role='textbox']", "footer [contenteditable='true']"],
+      feeds: ["[role='application']", "[data-testid='conversation-panel-messages']"]
+    },
+    {
+      id: "telegram",
+      hosts: ["web.telegram.org"],
+      composers: [".input-message-input[contenteditable='true']", "[contenteditable='true'][role='textbox']"],
+      feeds: [".MessageList", ".messages-container", "[class*='message-list']"]
+    },
+    {
+      id: "discord",
+      hosts: ["discord.com", "www.discord.com"],
+      composers: ["[role='textbox'][contenteditable='true']", "[data-slate-editor='true']"],
+      feeds: ["[data-list-id='chat-messages']", "[role='log']"]
+    }
+  ];
+
   const state = {
     settings: { ...DEFAULTS },
     shadowObservers: new Map(),
     shadowRecords: new WeakMap(),
     trackedShadowNodes: new Set(),
+    shadowBusy: new WeakSet(),
     docObserver: null,
-    inputTimer: null,
-    inputSeq: 0,
+    inputStates: new WeakMap(),
+    activeEditable: null,
     previewEl: null,
     previewAnchor: null,
+    previewInteracting: false,
     lastUrl: location.href,
-    urlTimer: null
+    routeTimer: null,
+    adapter: null
   };
 
-  const normalizeLang = value => {
-    const lang = String(value || "").toLowerCase().replace("_", "-");
-    if (lang.startsWith("zh")) return lang.includes("tw") || lang.includes("hk") || lang.includes("hant") ? "zh-hant" : "zh-hans";
-    return lang.split("-")[0];
-  };
-
-  function detectStrongLanguage(text) {
-    const value = String(text || "").trim();
-    if (!value) return "";
-    if (/[ぁ-ゟ゠-ヿ]/u.test(value)) return "ja";
-    if (/[가-힣]/u.test(value)) return "ko";
-    if (/[฀-๿]/u.test(value)) return "th";
-    if (/[؀-ۿ]/u.test(value)) return "ar";
-    if (/[Ѐ-ӿ]/u.test(value)) return "ru";
-    if (/[一-鿿]/u.test(value)) return "zh-hans";
-    if (/[ăâđêôơưĂÂĐÊÔƠƯàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]/iu.test(value)) return "vi";
-    return "";
-  }
+  const helper = () => globalThis.FTLanguage;
+  const normalizeLang = value => helper()?.normalizeLang(value) || String(value || "").toLowerCase();
+  const pageLang = () => normalizeLang(document.documentElement?.lang || "");
 
   function currentSiteRule() {
     return state.settings.siteRules?.[location.hostname] || "default";
@@ -67,10 +77,11 @@
     return Boolean(state.settings.autoTranslate);
   }
 
-  function shouldSkipBecauseAlreadyTarget(text, targetLang) {
-    const detected = detectStrongLanguage(text);
-    if (!detected) return false;
-    return detected === normalizeLang(targetLang);
+  function shouldSkipBecauseAlreadyTarget(text, targetLang, sourceLang = "auto") {
+    if (!state.settings.skipTargetLanguage || sourceLang !== "auto") return false;
+    const api = helper();
+    if (!api) return false;
+    return !api.shouldTranslateText(text, { sourceLang, targetLang, pageLang: pageLang() });
   }
 
   async function translateOne(text, sourceLang, targetLang) {
@@ -103,27 +114,60 @@
 
   function readEditable(element) {
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return element.value;
-    return element.textContent || "";
+    return element.innerText || element.textContent || "";
+  }
+
+  function dispatchEditableEvents(element, value) {
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   function writeEditable(element, value) {
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
       const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-      if (descriptor?.set) descriptor.set.call(element, value);
-      else element.value = value;
-      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
+      if (descriptor?.set) descriptor.set.call(element, value); else element.value = value;
+      dispatchEditableEvents(element, value);
       return;
     }
-    element.textContent = value;
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+
+    element.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    let inserted = false;
+    try { inserted = document.execCommand?.("insertText", false, value) === true; } catch {}
+    if (!inserted) element.textContent = value;
+    selection?.removeAllRanges();
+    dispatchEditableEvents(element, value);
+  }
+
+  async function copyText(value) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      textarea.dataset.ftOwned = "1";
+      document.documentElement.appendChild(textarea);
+      textarea.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch {}
+      textarea.remove();
+      return ok;
+    }
   }
 
   function removePreview() {
     state.previewEl?.remove();
     state.previewEl = null;
     state.previewAnchor = null;
+    state.previewInteracting = false;
   }
 
   function positionPreview() {
@@ -133,7 +177,7 @@
     const rect = anchor.getBoundingClientRect();
     const width = Math.min(420, Math.max(260, rect.width || 320), innerWidth - 16);
     let top = rect.bottom + 8;
-    if (top + 170 > innerHeight) top = Math.max(8, rect.top - 178);
+    if (top + 180 > innerHeight) top = Math.max(8, rect.top - 188);
     const left = Math.min(innerWidth - width - 8, Math.max(8, rect.left));
     panel.style.width = `${width}px`;
     panel.style.top = `${top}px`;
@@ -141,10 +185,13 @@
   }
 
   function showInputPreview(anchor, original, translated, isError = false) {
+    if (state.activeEditable !== anchor) return;
     removePreview();
     const panel = document.createElement("div");
     panel.className = `ft-input-preview${isError ? " ft-error" : ""}`;
     panel.dataset.ftOwned = "1";
+    panel.addEventListener("pointerdown", () => { state.previewInteracting = true; }, true);
+    panel.addEventListener("pointerup", () => setTimeout(() => { state.previewInteracting = false; }, 120), true);
 
     const result = document.createElement("div");
     result.className = "ft-input-preview-result";
@@ -168,19 +215,13 @@
       copy.type = "button";
       copy.textContent = "复制译文";
       copy.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(translated);
-          copy.textContent = "已复制";
-        } catch {
-          copy.textContent = "复制失败";
-        }
+        copy.textContent = await copyText(translated) ? "已复制" : "复制失败";
       });
 
       const close = document.createElement("button");
       close.type = "button";
       close.textContent = "关闭";
       close.addEventListener("click", removePreview);
-
       actions.append(replace, copy, close);
       panel.appendChild(actions);
     }
@@ -196,36 +237,71 @@
     positionPreview();
   }
 
+  function inputStateFor(element) {
+    let record = state.inputStates.get(element);
+    if (!record) {
+      record = { timer: null, seq: 0, lastText: "" };
+      state.inputStates.set(element, record);
+    }
+    return record;
+  }
+
+  function cancelInputPreview(element) {
+    const record = state.inputStates.get(element);
+    if (!record) return;
+    clearTimeout(record.timer);
+    record.timer = null;
+    record.seq++;
+  }
+
   function scheduleInputPreview(element) {
-    clearTimeout(state.inputTimer);
+    const record = inputStateFor(element);
+    clearTimeout(record.timer);
+    record.seq++;
+    const seq = record.seq;
+    state.activeEditable = element;
+
     if (!state.settings.enabled || !state.settings.chatMode || !state.settings.inputPreview) return removePreview();
     const text = readEditable(element).trim();
+    record.lastText = text;
     if (text.length < 2) return removePreview();
-    if (shouldSkipBecauseAlreadyTarget(text, state.settings.inputTargetLang)) return removePreview();
+    if (shouldSkipBecauseAlreadyTarget(text, state.settings.inputTargetLang, state.settings.inputSourceLang)) return removePreview();
 
-    const seq = ++state.inputSeq;
-    state.inputTimer = setTimeout(async () => {
+    record.timer = setTimeout(async () => {
       try {
         const current = readEditable(element).trim();
-        if (!current || current !== text || seq !== state.inputSeq) return;
-        const translated = await translateOne(
-          current,
-          state.settings.inputSourceLang || "auto",
-          state.settings.inputTargetLang || "en"
-        );
-        if (seq !== state.inputSeq || !element.isConnected) return;
+        if (!current || current !== text || seq !== record.seq || state.activeEditable !== element) return;
+        const translated = await translateOne(current, state.settings.inputSourceLang || "auto", state.settings.inputTargetLang || "en");
+        if (seq !== record.seq || !element.isConnected || state.activeEditable !== element || readEditable(element).trim() !== current) return;
+        if (translated.trim() === current.trim()) return removePreview();
         showInputPreview(element, current, translated);
       } catch (error) {
-        if (seq !== state.inputSeq) return;
+        if (seq !== record.seq || state.activeEditable !== element) return;
         showInputPreview(element, text, `实时输入翻译失败：${error?.message || error}`, true);
       }
     }, Math.max(250, Number(state.settings.inputPreviewDelay) || 550));
   }
 
-  function onInput(event) {
-    const editable = resolveEditable(event.target);
-    if (!editable) return;
-    scheduleInputPreview(editable);
+  function findAdapter() {
+    const host = location.hostname.toLowerCase();
+    return CHAT_ADAPTERS.find(adapter => adapter.hosts.some(item => host === item || host.endsWith(`.${item}`))) || null;
+  }
+
+  function markAdapterElements(root = document) {
+    state.adapter = findAdapter();
+    const adapter = state.adapter;
+    if (!adapter || !root?.querySelectorAll) return;
+
+    for (const selector of adapter.composers) {
+      let elements = [];
+      try { elements = root.querySelectorAll(selector); } catch {}
+      for (const element of elements) element.dataset.ftChatComposer = "1";
+    }
+    for (const selector of adapter.feeds) {
+      let elements = [];
+      try { elements = root.querySelectorAll(selector); } catch {}
+      for (const element of elements) element.dataset.ftChatFeed = "1";
+    }
   }
 
   function shadowEligible(node) {
@@ -233,41 +309,36 @@
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP)) return false;
     const text = node.nodeValue?.trim();
-    if (!text || text.length < 2) return false;
-    if (!/[\p{L}\p{M}]/u.test(text)) return false;
+    if (!text || text.length < 2 || !/[\p{L}\p{M}]/u.test(text)) return false;
     if (/^(https?:\/\/|www\.)\S+$/i.test(text)) return false;
-    if (shouldSkipBecauseAlreadyTarget(text, state.settings.targetLang)) return false;
+    if (shouldSkipBecauseAlreadyTarget(text, state.settings.targetLang, state.settings.sourceLang)) return false;
     const record = state.shadowRecords.get(node);
-    if (record && (node.nodeValue === record.rendered || node.nodeValue === record.original)) return false;
-    return true;
+    return !(record && (node.nodeValue === record.rendered || node.nodeValue === record.original));
   }
 
-  function collectShadowText(root) {
+  function collectShadowText(root, max = 80) {
     const nodes = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        return shadowEligible(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      }
+      acceptNode(node) { return shadowEligible(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }
     });
-    while (walker.nextNode() && nodes.length < 40) nodes.push(walker.currentNode);
+    while (walker.nextNode() && nodes.length < max) nodes.push(walker.currentNode);
     return nodes;
   }
 
   async function translateShadowRoot(root) {
-    if (!translationEnabled()) return;
+    if (!translationEnabled() || state.shadowBusy.has(root)) return;
     const nodes = collectShadowText(root);
     if (!nodes.length) return;
-    const texts = nodes.map(node => node.nodeValue.trim());
+    state.shadowBusy.add(root);
     try {
+      const texts = nodes.map(node => node.nodeValue.trim());
       const response = await chrome.runtime.sendMessage({
         type: "FT_TRANSLATE",
         texts,
-        options: {
-          sourceLang: state.settings.sourceLang,
-          targetLang: state.settings.targetLang
-        }
+        options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
       });
       if (!response?.ok) throw new Error(response?.error || "Shadow DOM 翻译失败");
+
       nodes.forEach((node, index) => {
         if (!node.isConnected) return;
         const translated = response.translations?.[index];
@@ -291,7 +362,9 @@
         state.trackedShadowNodes.add(node);
       });
     } catch (error) {
-      console.warn("[FloatingTranslator v0.2 shadow]", error);
+      console.warn("[FloatingTranslator shadow]", error);
+    } finally {
+      state.shadowBusy.delete(root);
     }
   }
 
@@ -308,17 +381,21 @@
 
   function observeShadowRoot(root) {
     if (!root || state.shadowObservers.has(root)) return;
+    let timer = null;
     const observer = new MutationObserver(mutations => {
+      if (state.shadowBusy.has(root)) return;
+      let meaningful = false;
       for (const mutation of mutations) {
-        if (mutation.type === "characterData") {
-          translateShadowRoot(root);
-          break;
+        if (mutation.type === "characterData") meaningful = true;
+        for (const added of mutation.addedNodes || []) {
+          if (added.nodeType === Node.ELEMENT_NODE && added.dataset?.ftOwned === "1") continue;
+          if (added.nodeType === Node.ELEMENT_NODE || added.nodeType === Node.TEXT_NODE) meaningful = true;
+          if (added.nodeType === Node.ELEMENT_NODE) discoverShadowRoots(added);
         }
-        if ([...mutation.addedNodes].some(node => node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE)) {
-          discoverShadowRoots(root);
-          translateShadowRoot(root);
-          break;
-        }
+      }
+      if (meaningful) {
+        clearTimeout(timer);
+        timer = setTimeout(() => translateShadowRoot(root), 90);
       }
     });
     observer.observe(root, { subtree: true, childList: true, characterData: true });
@@ -327,13 +404,9 @@
   }
 
   function discoverShadowRoots(root = document) {
-    const inspect = element => {
-      if (element?.shadowRoot) observeShadowRoot(element.shadowRoot);
-    };
+    const inspect = element => { if (element?.shadowRoot) observeShadowRoot(element.shadowRoot); };
     if (root instanceof Element) inspect(root);
-    if (root.querySelectorAll) {
-      for (const element of root.querySelectorAll("*")) inspect(element);
-    }
+    if (root.querySelectorAll) for (const element of root.querySelectorAll("*")) inspect(element);
   }
 
   function startDocumentObserver() {
@@ -341,7 +414,9 @@
     state.docObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
         for (const added of mutation.addedNodes) {
-          if (added.nodeType === Node.ELEMENT_NODE) discoverShadowRoots(added);
+          if (added.nodeType !== Node.ELEMENT_NODE) continue;
+          discoverShadowRoots(added);
+          markAdapterElements(added);
         }
       }
     });
@@ -351,12 +426,8 @@
   async function loadSettings() {
     const previous = state.settings;
     state.settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
-    const shadowChanged = previous.targetLang !== state.settings.targetLang ||
-      previous.sourceLang !== state.settings.sourceLang ||
-      previous.displayMode !== state.settings.displayMode ||
-      previous.enabled !== state.settings.enabled ||
-      previous.autoTranslate !== state.settings.autoTranslate ||
-      JSON.stringify(previous.siteRules) !== JSON.stringify(state.settings.siteRules);
+    const shadowChanged = ["targetLang", "sourceLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"]
+      .some(key => previous[key] !== state.settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(state.settings.siteRules);
     if (shadowChanged) {
       restoreShadowTranslations();
       if (translationEnabled()) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
@@ -364,45 +435,65 @@
     if (!state.settings.inputPreview || !state.settings.chatMode || !state.settings.enabled) removePreview();
   }
 
-  function onStorageChanged(changes, area) {
-    if (area !== "sync") return;
-    if (Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
+  function handleRouteChange() {
+    if (location.href === state.lastUrl) return;
+    state.lastUrl = location.href;
+    if (state.activeEditable) cancelInputPreview(state.activeEditable);
+    state.activeEditable = null;
+    removePreview();
+    setTimeout(() => {
+      markAdapterElements(document);
+      window.dispatchEvent(new CustomEvent("ft-route-change", { detail: { url: location.href } }));
+      discoverShadowRoots(document);
+      for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+    }, 120);
   }
 
-  function startUrlWatch() {
-    if (state.urlTimer) return;
-    state.urlTimer = setInterval(() => {
-      if (location.href === state.lastUrl) return;
-      state.lastUrl = location.href;
-      removePreview();
-      setTimeout(() => {
-        discoverShadowRoots(document);
-        for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
-      }, 300);
-    }, 800);
+  function startRouteWatch() {
+    window.addEventListener("popstate", handleRouteChange, true);
+    window.addEventListener("hashchange", handleRouteChange, true);
+    try { window.navigation?.addEventListener?.("navigate", () => setTimeout(handleRouteChange, 0)); } catch {}
+    if (!state.routeTimer) state.routeTimer = setInterval(handleRouteChange, 1200);
   }
 
-  document.addEventListener("input", onInput, true);
-  document.addEventListener("focusin", event => {
+  document.addEventListener("input", event => {
     const editable = resolveEditable(event.target);
     if (editable) scheduleInputPreview(editable);
   }, true);
-  document.addEventListener("focusout", event => {
-    const next = event.relatedTarget;
-    if (state.previewEl?.contains(next)) return;
-    setTimeout(() => {
-      if (!state.previewEl?.matches(":hover")) removePreview();
-    }, 160);
+
+  document.addEventListener("focusin", event => {
+    const editable = resolveEditable(event.target);
+    if (!editable) return;
+    if (state.activeEditable && state.activeEditable !== editable) cancelInputPreview(state.activeEditable);
+    state.activeEditable = editable;
+    scheduleInputPreview(editable);
   }, true);
+
+  document.addEventListener("focusout", event => {
+    const editable = resolveEditable(event.target);
+    if (editable) cancelInputPreview(editable);
+    setTimeout(() => {
+      if (state.previewInteracting) return;
+      const active = resolveEditable(document.activeElement);
+      if (!active) {
+        state.activeEditable = null;
+        removePreview();
+      }
+    }, 220);
+  }, true);
+
   window.addEventListener("resize", positionPreview, { passive: true });
   window.addEventListener("scroll", positionPreview, { passive: true, capture: true });
-  chrome.storage.onChanged.addListener(onStorageChanged);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
+  });
 
   async function init() {
     await loadSettings();
+    markAdapterElements(document);
     startDocumentObserver();
     discoverShadowRoots(document);
-    startUrlWatch();
+    startRouteWatch();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });

@@ -4,7 +4,9 @@ const LOCAL_DEFAULTS = {
   fallbackGoogle: true,
   azureEndpoint: "https://api.cognitive.microsofttranslator.com",
   azureRegion: "",
-  azureKey: ""
+  azureKey: "",
+  requestTimeoutMs: 15000,
+  maxRetries: 3
 };
 
 const $ = id => document.getElementById(id);
@@ -23,16 +25,25 @@ async function load() {
   $("azureEndpoint").value = local.azureEndpoint || LOCAL_DEFAULTS.azureEndpoint;
   $("azureRegion").value = local.azureRegion || "";
   $("azureKey").placeholder = local.azureKey ? "已保存（留空表示不修改）" : "请输入 Azure Translator Key";
+  $("requestTimeoutMs").value = String(local.requestTimeoutMs || 15000);
+  $("maxRetries").value = String(local.maxRetries ?? 3);
   $("enabled").checked = Boolean(sync.enabled);
   $("autoTranslate").checked = Boolean(sync.autoTranslate);
   toggleProviderSections();
+  await Promise.all([refreshCacheStats(), refreshDiagnostics()]);
 }
 
 function toggleProviderSections() {
   $("azureSection").hidden = $("provider").value !== "azure";
 }
 
-async function save() {
+function setStatus(message) {
+  $("status").textContent = message;
+  clearTimeout(setStatus.timer);
+  setStatus.timer = setTimeout(() => $("status").textContent = "", 3200);
+}
+
+async function save({ showStatus = true, reload = true } = {}) {
   const sync = {
     enabled: $("enabled").checked,
     autoTranslate: $("autoTranslate").checked
@@ -42,7 +53,9 @@ async function save() {
     translationProvider: $("provider").value,
     fallbackGoogle: $("fallbackGoogle").checked,
     azureEndpoint: $("azureEndpoint").value.trim() || LOCAL_DEFAULTS.azureEndpoint,
-    azureRegion: $("azureRegion").value.trim()
+    azureRegion: $("azureRegion").value.trim(),
+    requestTimeoutMs: Math.max(3000, Math.min(45000, Number($("requestTimeoutMs").value) || 15000)),
+    maxRetries: Math.max(0, Math.min(5, Number($("maxRetries").value) || 0))
   };
 
   if ($("clearAzureKey").checked) local.azureKey = "";
@@ -56,16 +69,57 @@ async function save() {
 
   $("azureKey").value = "";
   $("clearAzureKey").checked = false;
-  $("status").textContent = "已保存";
-  setTimeout(() => $("status").textContent = "", 1800);
-  await load();
+  if (showStatus) setStatus("已保存");
+  if (reload) await load();
+}
+
+async function testEngine() {
+  setStatus("正在保存当前配置…");
+  await save({ showStatus: false, reload: false });
+  setStatus("正在测试…");
+  const response = await chrome.runtime.sendMessage({
+    type: "FT_TRANSLATE",
+    texts: ["Hello, this is a translation test."],
+    options: { sourceLang: "en", targetLang: "zh-CN" }
+  });
+  if (!response?.ok) throw new Error(response?.error || "测试失败");
+  setStatus(`测试成功：${response.translations?.[0] || "已返回译文"}`);
+  await Promise.all([refreshCacheStats(), refreshDiagnostics()]);
+}
+
+async function refreshDiagnostics() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_DIAGNOSTICS" });
+  if (!response?.ok) {
+    $("engineStatus").textContent = `引擎状态：读取失败${response?.error ? `（${response.error}）` : ""}`;
+    return;
+  }
+  const d = response.diagnostics || {};
+  const provider = d.provider === "google-web" ? "Google Web" : "Azure";
+  const key = d.provider === "google-web" ? "无需 Key" : (d.azureKeySet ? "Key 已设置" : "Key 未设置");
+  const fallback = d.fallbackGoogle ? "Google 回退开启" : "Google 回退关闭";
+  $("engineStatus").textContent = `引擎状态：${provider} · ${key} · ${fallback}`;
+}
+
+async function refreshCacheStats() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_CACHE_STATS" });
+  if (!response?.ok) {
+    $("cacheStats").textContent = `缓存统计：读取失败${response?.error ? `（${response.error}）` : ""}`;
+    return;
+  }
+  $("cacheStats").textContent = `缓存统计：${response.entries || 0} 条译文缓存`;
+}
+
+async function clearCache() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_CLEAR_CACHE" });
+  if (!response?.ok) throw new Error(response?.error || "清理失败");
+  await refreshCacheStats();
+  setStatus("翻译缓存已清空");
 }
 
 $("provider").addEventListener("change", toggleProviderSections);
-$("save").addEventListener("click", () => save().catch(error => {
-  $("status").textContent = `保存失败：${error?.message || error}`;
-}));
+$("save").addEventListener("click", () => save().catch(error => setStatus(`保存失败：${error?.message || error}`)));
+$("testEngine").addEventListener("click", () => testEngine().catch(error => setStatus(`测试失败：${error?.message || error}`)));
+$("refreshCacheStats").addEventListener("click", () => refreshCacheStats().catch(error => setStatus(`统计失败：${error?.message || error}`)));
+$("clearCache").addEventListener("click", () => clearCache().catch(error => setStatus(`清理失败：${error?.message || error}`)));
 
-load().catch(error => {
-  $("status").textContent = `加载失败：${error?.message || error}`;
-});
+load().catch(error => setStatus(`加载失败：${error?.message || error}`));
