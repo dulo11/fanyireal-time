@@ -45,9 +45,9 @@
       .route{font-size:11px;color:#777;margin-top:9px;text-align:center}.muted{opacity:.55}
       @media (prefers-color-scheme:dark){#panel{background:rgba(31,31,36,.98);color:#f3f3f7;border-color:#494950}.status{background:#2b2b31;color:#c7c7cf}.field{color:#aaa}.field select,.actions button{background:#29292f;color:#f1f1f4;border-color:#4a4a54}.close{background:#383840;color:#eee}.full{background:#34304a;color:#cfc6ff}.route{color:#aaa}}
     </style>
-    <button id="fab" aria-label="打开 FloatingTranslator 小窗口" title="FloatingTranslator">译</button>
-    <section id="panel" role="dialog" aria-label="FloatingTranslator 快捷控制">
-      <div class="head"><div class="logo">F</div><div class="title">FloatingTranslator</div><button id="close" class="close">×</button></div>
+    <button id="fab" aria-label="打开浮译小窗口" title="浮译">译</button>
+    <section id="panel" role="dialog" aria-label="浮译快捷控制">
+      <div class="head"><div class="logo">浮</div><div class="title">浮译</div><button id="close" class="close">×</button></div>
       <div id="status" class="status">正在读取页面状态…</div>
       <label class="toggle"><input id="enabled" type="checkbox"><span>启用翻译</span></label>
       <label class="toggle"><input id="auto" type="checkbox"><span>自动持续翻译网页</span></label>
