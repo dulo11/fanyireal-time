@@ -52,18 +52,18 @@
     <section id="ociSection" hidden>
       <h2>Oracle OCI Language</h2>
       <label>
-        <span>代理地址</span>
-        <input id="ociProxyEndpoint" type="url" placeholder="https://your-worker.example.workers.dev/translate">
+        <span>Worker 代理地址</span>
+        <input id="ociProxyEndpoint" type="url" placeholder="https://your-worker.workers.dev/translate">
       </label>
       <label>
-        <span>代理 Token（可选）</span>
+        <span>代理 Token</span>
         <input id="ociProxyToken" type="password" autocomplete="off" placeholder="留空表示不修改已保存 Token">
       </label>
       <label class="check-row">
         <input id="clearOciProxyToken" type="checkbox">
         <span>清除本机已保存的代理 Token</span>
       </label>
-      <p class="note">OCI REST API 需要 RSA 请求签名。为避免把 OCI 私钥放进浏览器插件，v0.3 通过你自己的 Worker/服务器代理调用 OCI。浏览器只保存代理地址与可选 Token。</p>
+      <p class="note">v0.4 已提供完整 Cloudflare Worker → OCI RSA-SHA256 签名代理。OCI 私钥只放 Worker Secret，浏览器只保存 Worker 地址与代理 Token。</p>
     </section>
 
     <section>
