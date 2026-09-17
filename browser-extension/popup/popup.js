@@ -1,0 +1,150 @@
+const DEFAULTS = {
+  enabled: true,
+  autoTranslate: true,
+  sourceLang: "auto",
+  targetLang: "zh-CN",
+  displayMode: "translated",
+  siteRules: {}
+};
+
+const LANGUAGES = [
+  ["auto", "自动检测"],
+  ["zh-CN", "中文（简体）"],
+  ["zh-TW", "中文（繁体）"],
+  ["en", "英语"],
+  ["ja", "日语"],
+  ["ko", "韩语"],
+  ["vi", "越南语"],
+  ["th", "泰语"],
+  ["ms", "马来语"],
+  ["id", "印度尼西亚语"],
+  ["fil", "菲律宾语"],
+  ["fr", "法语"],
+  ["de", "德语"],
+  ["es", "西班牙语"],
+  ["pt", "葡萄牙语"],
+  ["ru", "俄语"],
+  ["ar", "阿拉伯语"],
+  ["hi", "印地语"],
+  ["it", "意大利语"],
+  ["tr", "土耳其语"]
+];
+
+const $ = id => document.getElementById(id);
+let activeTab = null;
+let currentHost = "";
+let settings = { ...DEFAULTS };
+
+function populateLanguages() {
+  const source = $("sourceLang");
+  const target = $("targetLang");
+  for (const [value, label] of LANGUAGES) {
+    const sourceOption = document.createElement("option");
+    sourceOption.value = value;
+    sourceOption.textContent = label;
+    source.appendChild(sourceOption);
+
+    if (value !== "auto") {
+      const targetOption = document.createElement("option");
+      targetOption.value = value;
+      targetOption.textContent = label;
+      target.appendChild(targetOption);
+    }
+  }
+}
+
+async function getActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] || null;
+}
+
+function hostFromTab(tab) {
+  try {
+    const url = new URL(tab?.url || "");
+    return ["http:", "https:"].includes(url.protocol) ? url.hostname : "";
+  } catch {
+    return "";
+  }
+}
+
+async function sendToPage(message) {
+  if (!activeTab?.id) return null;
+  try {
+    return await chrome.tabs.sendMessage(activeTab.id, message);
+  } catch {
+    return null;
+  }
+}
+
+function render() {
+  $("enabled").checked = Boolean(settings.enabled);
+  $("autoTranslate").checked = Boolean(settings.autoTranslate);
+  $("sourceLang").value = settings.sourceLang || "auto";
+  $("targetLang").value = settings.targetLang || "zh-CN";
+  $("displayMode").value = settings.displayMode || "translated";
+  $("siteRule").value = currentHost ? (settings.siteRules?.[currentHost] || "default") : "default";
+  $("siteRule").disabled = !currentHost;
+  $("host").textContent = currentHost || "此页面不支持扩展脚本";
+}
+
+async function saveSync(patch) {
+  settings = { ...settings, ...patch };
+  await chrome.storage.sync.set(patch);
+  render();
+  await sendToPage({ type: "FT_REFRESH_SETTINGS" });
+  await refreshPageState();
+}
+
+async function refreshPageState() {
+  const response = await sendToPage({ type: "FT_GET_PAGE_STATE" });
+  if (!response?.ok) {
+    $("pageState").textContent = "此页面无法注入翻译脚本";
+    return;
+  }
+  const lang = response.pageLang ? ` · ${response.pageLang}` : "";
+  const queue = response.queued ? ` · 待翻译 ${response.queued}` : "";
+  $("pageState").textContent = `${response.active ? "持续翻译中" : "未翻译"}${lang}${queue}`;
+}
+
+async function init() {
+  populateLanguages();
+  [settings, activeTab] = await Promise.all([
+    chrome.storage.sync.get(DEFAULTS),
+    getActiveTab()
+  ]);
+  settings = { ...DEFAULTS, ...settings };
+  currentHost = hostFromTab(activeTab);
+  render();
+  await refreshPageState();
+
+  $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
+  $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
+  $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
+  $("targetLang").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
+  $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
+
+  $("siteRule").addEventListener("change", async event => {
+    if (!currentHost) return;
+    const siteRules = { ...(settings.siteRules || {}) };
+    if (event.target.value === "default") delete siteRules[currentHost];
+    else siteRules[currentHost] = event.target.value;
+    await saveSync({ siteRules });
+  });
+
+  $("translateNow").addEventListener("click", async () => {
+    $("pageState").textContent = "正在开始翻译…";
+    await sendToPage({ type: "FT_TRANSLATE_NOW" });
+    setTimeout(refreshPageState, 250);
+  });
+
+  $("restorePage").addEventListener("click", async () => {
+    await sendToPage({ type: "FT_RESTORE_PAGE" });
+    setTimeout(refreshPageState, 120);
+  });
+
+  $("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
+}
+
+init().catch(error => {
+  $("pageState").textContent = `加载失败：${error?.message || error}`;
+});

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FloatingTranslator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="panel">
+    <header>
+      <div>
+        <h1>FloatingTranslator</h1>
+        <p id="pageState">正在读取当前网页…</p>
+      </div>
+      <label class="switch" title="总开关">
+        <input id="enabled" type="checkbox">
+        <span></span>
+      </label>
+    </header>
+
+    <section class="card">
+      <label class="check-row">
+        <input id="autoTranslate" type="checkbox">
+        <span>自动持续翻译网页</span>
+      </label>
+
+      <div class="grid">
+        <label>
+          <span>源语言</span>
+          <select id="sourceLang"></select>
+        </label>
+        <label>
+          <span>翻译为</span>
+          <select id="targetLang"></select>
+        </label>
+      </div>
+
+      <label>
+        <span>显示方式</span>
+        <select id="displayMode">
+          <option value="translated">仅译文</option>
+          <option value="bilingual">原文 + 译文</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="card">
+      <label>
+        <span>当前网站规则</span>
+        <select id="siteRule">
+          <option value="default">跟随全局设置</option>
+          <option value="always">始终翻译此网站</option>
+          <option value="never">永不翻译此网站</option>
+        </select>
+      </label>
+      <div id="host" class="host"></div>
+    </section>
+
+    <div class="actions">
+      <button id="translateNow" class="primary">翻译当前页面</button>
+      <button id="restorePage">恢复原文</button>
+    </div>
+
+    <div class="tip">输入框中按 <b>Alt + Enter</b>，可把当前输入内容翻译成目标语言。</div>
+
+    <button id="openOptions" class="link-button">翻译引擎与高级设置 ›</button>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
