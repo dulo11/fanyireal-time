@@ -1,6 +1,7 @@
 package com.zhou.floatingtranslator;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
@@ -9,23 +10,34 @@ import android.os.Looper;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Foreground, one-utterance microphone capture. Never changes the chosen input source. */
+/** Continuous foreground microphone capture for face-to-face local ASR. */
 final class FaceOfflineSession implements AutoCloseable {
     interface Callback {
         void status(String text);
         void result(String text, String language);
         void error(String text);
     }
+
+    private static final String PREFS = "floating_translator";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService capture = Executors.newSingleThreadExecutor();
+    private final Callback callback;
+    private final String myLanguage;
     private volatile boolean closed;
     private volatile AudioRecord record;
     private SherpaSpeechEngine sherpa;
     private OfflineSpeechEngine vosk;
-    private final Callback callback;
+
     FaceOfflineSession(Context context, String engine, String language, boolean auto, Callback callback) {
         this.callback = callback;
-        if ("vosk".equals(engine)) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        int targetIndex = Math.max(0, Math.min(
+            prefs.getInt("face_target_index", prefs.getInt("target_index", 0)),
+            LanguageOption.ALL.length - 1));
+        myLanguage = LanguageOption.ALL[targetIndex].mlKitTag;
+
+        String resolvedEngine = resolveAutoConversationEngine(context, engine, auto, prefs);
+        if ("vosk".equals(resolvedEngine)) {
             vosk = new OfflineSpeechEngine(context, language, new OfflineSpeechEngine.Callback() {
                 public void onStatus(String text) { if (!closed) callback.status(text); }
                 public void onReady(String name) { startCapture(name); }
@@ -34,7 +46,7 @@ final class FaceOfflineSession implements AutoCloseable {
                 public void onError(String text) { if (!closed) callback.error(text); }
             });
         } else {
-            sherpa = new SherpaSpeechEngine(context, engine,
+            sherpa = new SherpaSpeechEngine(context, resolvedEngine,
                 auto ? SherpaSpeechEngine.LANG_AUTO : SherpaSpeechEngine.LANG_SINGLE,
                 language, new SherpaSpeechEngine.Callback() {
                     public void onStatus(String text) { if (!closed) callback.status(text); }
@@ -44,13 +56,49 @@ final class FaceOfflineSession implements AutoCloseable {
                 });
         }
     }
+
     void start() { if (vosk != null) vosk.prepare(); else sherpa.prepare(); }
+
     private void deliver(String text, String language) {
-        if (!closed && text != null && !text.trim().isEmpty()) callback.result(text.trim(), language);
+        if (closed) return;
+        String cleaned = AsrTranscriptGuard.clean(text);
+        if (cleaned.isEmpty()) {
+            callback.status("持续监听 · 已忽略 ASR 控制标记/空结果");
+            return;
+        }
+        String stableLanguage = AsrTranscriptGuard.stabilizeLanguage(cleaned, language, myLanguage);
+        callback.result(cleaned, stableLanguage);
     }
+
+    /**
+     * Face-to-face Auto mode is optimized for language switching rather than the normal realtime
+     * battery/latency balance. Prefer Qwen3 when installed, then Whisper Medium/Small. Explicit
+     * user model selections are never replaced here.
+     */
+    private static String resolveAutoConversationEngine(Context context, String requested,
+                                                        boolean autoLanguage, SharedPreferences prefs) {
+        if (!autoLanguage || !"auto".equals(prefs.getString("face_asr", "auto"))) return requested;
+        OfflineModelStore store = new OfflineModelStore(context);
+        try {
+            String[] preference = {
+                TranslationService.ASR_QWEN3,
+                TranslationService.ASR_WHISPER_MEDIUM,
+                TranslationService.ASR_WHISPER_SMALL,
+                TranslationService.ASR_OMNILINGUAL,
+                TranslationService.ASR_SENSEVOICE
+            };
+            for (String id : preference) {
+                if (store.isInstalled(id)) return id;
+            }
+            return requested;
+        } finally {
+            store.close();
+        }
+    }
+
     private void startCapture(String name) {
         if (closed) return;
-        callback.status(name + " · 请说话，停顿后自动翻译");
+        callback.status(name + " · 持续监听，停顿后自动切句");
         capture.execute(() -> {
             AudioRecord local = null;
             MicAudioEffects effects = null;
@@ -98,11 +146,11 @@ final class FaceOfflineSession implements AutoCloseable {
             }
         });
     }
+
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
         if (record != null) try { record.stop(); } catch (Exception ignored) {}
-        // Serialize native cleanup after any in-flight PCM feed; keep the UI thread free.
         capture.execute(() -> {
             if (vosk != null) vosk.close();
             if (sherpa != null) sherpa.close();
