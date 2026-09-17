@@ -31,7 +31,8 @@
   function eligibleToProbe() {
     const api = helper();
     if (!api || !settings.enabled || !settings.autoTranslate) return false;
-    if (siteRule() === "never") return false;
+    const rule = siteRule();
+    if (rule === "never" || rule === "always") return false;
     if (settings.sourceLang !== "auto" || settings.skipTargetLanguage === false) return false;
 
     const page = api.normalizeLang(document.documentElement?.lang || "");
