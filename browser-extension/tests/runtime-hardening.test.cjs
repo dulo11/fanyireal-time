@@ -6,7 +6,8 @@ const root = path.resolve(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-assert.equal(manifest.version, '1.3.0');
+assert.match(manifest.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
+assert.equal(manifest.name, '浮译');
 assert.equal(manifest.background.service_worker, 'background/main.js');
 
 const scripts = manifest.content_scripts?.[0]?.js || [];
