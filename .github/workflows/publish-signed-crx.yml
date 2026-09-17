@@ -7,13 +7,14 @@ on:
       - 'browser-v*'
     branches:
       - feature/browser-translator-v1.3-signed-update
+    paths:
+      - 'browser-extension/manifest.json'
 
 permissions:
   contents: write
 
 jobs:
   publish-signed-crx:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/browser-v') || contains(github.event.head_commit.message, '[publish-crx]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -112,8 +113,8 @@ jobs:
               dist/updates.xml \
               dist/SHA256SUMS.txt \
               --target "$GITHUB_SHA" \
-              --title "FloatingTranslator Browser v${VERSION}" \
-              --notes "Signed Chromium CRX update. Extension ID: ${{ steps.meta.outputs.extension_id }}"
+              --title "浮译 浏览器版 v${VERSION}" \
+              --notes "浮译固定签名 Chromium 更新。Extension ID: ${{ steps.meta.outputs.extension_id }}"
           fi
 
       - name: Publish static update channel XML
@@ -131,7 +132,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "updates.xml already current"
           else
-            git commit -m "release(update): FloatingTranslator v${{ steps.meta.outputs.version }}"
+            git commit -m "release(update): 浮译 v${{ steps.meta.outputs.version }}"
             git push origin HEAD:extension-update-channel
           fi
 
