@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>FloatingTranslator Browser</h1>
-    <p class="sub">完整翻译引擎与高级设置</p>
+    <p class="sub">v0.8 Complete · 翻译引擎、用量、缓存与高级设置</p>
 
     <section>
       <h2>翻译引擎</h2>
@@ -25,7 +25,7 @@
         <span>Azure 失败时自动回退到 Google Web</span>
       </label>
       <p id="engineStatus" class="note">引擎状态：正在读取…</p>
-      <p class="note">v0.7.1 以 Azure 为正式主引擎。连续失败会短暂熔断 Azure，避免长网页反复卡死；恢复后自动重试。</p>
+      <p class="note">v0.8 会记录真正发往翻译服务的请求次数和字符数；缓存命中不会重复计入 Azure / Google 字符用量。</p>
     </section>
 
     <section id="azureSection">
@@ -54,7 +54,7 @@
         <span>失败自动重试次数</span>
         <input id="maxRetries" type="number" min="0" max="5" step="1" value="3">
       </label>
-      <p class="note">网页文本会自动去重、合批；429/5xx/超时会指数退避重试。超长文本会拆段后再合并。</p>
+      <p class="note">网页文本会自动去重、合批；429/5xx/超时会指数退避。可精确隔离的坏文本只重试失败项，不会把成功项整批重跑。</p>
     </section>
 
     <section>
@@ -67,18 +67,45 @@
         <input id="autoTranslate" type="checkbox">
         <span>打开网页后自动持续翻译</span>
       </label>
-      <p class="note">长页面采用增量扫描；动态帖子、评论、聊天消息和 Open Shadow DOM 会继续跟进。中文/日文等目标语言页面里出现明显外语片段时，v0.7.1 会自动补翻。</p>
+      <p class="note">v0.8 除正文外，还会处理 placeholder、title、aria-label、图片 alt 和按钮 value。Popup 可以暂停并保留当前译文，继续后从剩余内容接着跑。</p>
+    </section>
+
+    <section>
+      <h2>翻译用量</h2>
+      <p id="usageToday" class="note">今日用量：正在读取…</p>
+      <p id="usageMonth" class="note">本月用量：正在读取…</p>
+      <div class="actions">
+        <button id="refreshUsage">刷新用量</button>
+        <button id="resetUsage">重置本地用量统计</button>
+      </div>
+      <p class="note">这里统计扩展实际发出的字符和请求，只用于本机参考，不替代 Azure / Google 官方账单。</p>
+    </section>
+
+    <section>
+      <h2>缓存</h2>
+      <label>
+        <span>最多保留缓存条数</span>
+        <input id="cacheMaxEntries" type="number" min="1000" max="200000" step="1000" value="30000">
+      </label>
+      <label>
+        <span>缓存保留天数（0 = 不按日期过期）</span>
+        <input id="cacheTtlDays" type="number" min="0" max="3650" step="1" value="30">
+      </label>
+      <div class="actions">
+        <button id="refreshCacheStats">刷新缓存统计</button>
+        <button id="pruneCache">立即整理缓存</button>
+        <button id="clearCache">清空全部缓存</button>
+      </div>
+      <p id="cacheStats" class="note">缓存统计：正在读取…</p>
+      <p class="note">默认最多 30,000 条、保留 30 天。翻译过程中会定期自动整理，避免长期使用后 IndexedDB 无限增长。</p>
     </section>
 
     <section>
       <h2>维护</h2>
       <div class="actions">
         <button id="testEngine">保存并测试翻译引擎</button>
-        <button id="refreshCacheStats">刷新缓存统计</button>
-        <button id="clearCache">清空翻译缓存</button>
       </div>
-      <p id="cacheStats" class="note">缓存统计：正在读取…</p>
-      <p class="note">测试会先保存当前页面里填写的 Endpoint / Region / Key，再翻译一条很短的测试文本。清缓存不会删除 Azure Key 或其他设置。</p>
+      <p class="note">测试会先保存当前页面里填写的 Endpoint / Region / Key，再翻译一条很短的测试文本。</p>
     </section>
 
     <div class="actions">

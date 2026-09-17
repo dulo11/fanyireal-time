@@ -15,16 +15,22 @@ const LOCAL_DEFAULTS = {
   azureRegion: "",
   azureKey: "",
   requestTimeoutMs: 15000,
-  maxRetries: 3
+  maxRetries: 3,
+  cacheMaxEntries: 30000,
+  cacheTtlDays: 30
 };
 
 const DB_NAME = "floating-translator-cache";
 const DB_VERSION = 1;
 const STORE = "translations";
+const USAGE_KEY = "translationUsageV2";
 const AZURE_BATCH_MAX_ITEMS = 50;
 const AZURE_BATCH_MAX_CHARS = 20000;
 const AZURE_ITEM_CHARS = 4500;
+const CACHE_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
 const azureHealth = { failures: 0, openUntil: 0 };
+let lastCachePruneAt = 0;
+let usageWriteQueue = Promise.resolve();
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -38,15 +44,44 @@ function openDb() {
   });
 }
 
-async function cacheGet(key) {
+function cacheRecordText(record) {
+  if (typeof record === "string") return record;
+  if (record && typeof record.text === "string") return record.text;
+  return null;
+}
+
+async function cacheDelete(key) {
   try {
     const db = await openDb();
-    return await new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).delete(key);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {}
+}
+
+async function cacheGet(key, config = LOCAL_DEFAULTS) {
+  try {
+    const db = await openDb();
+    const record = await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly");
       const request = tx.objectStore(STORE).get(key);
       request.onsuccess = () => resolve(request.result ?? null);
       request.onerror = () => reject(request.error);
     });
+    if (record == null) return null;
+    const text = cacheRecordText(record);
+    if (typeof text !== "string") return null;
+    const ttlDays = Math.max(0, Math.min(3650, Number(config.cacheTtlDays ?? 30)));
+    if (ttlDays > 0 && record && typeof record === "object" && Number(record.ts) > 0) {
+      if (Date.now() - Number(record.ts) > ttlDays * 86400000) {
+        cacheDelete(key);
+        return null;
+      }
+    }
+    return text;
   } catch {
     return null;
   }
@@ -57,7 +92,7 @@ async function cacheSet(key, value) {
     const db = await openDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).put(value, key);
+      tx.objectStore(STORE).put({ text: String(value ?? ""), ts: Date.now() }, key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -78,6 +113,51 @@ async function cacheClear() {
   } catch {}
 }
 
+async function cachePrune(config = LOCAL_DEFAULTS) {
+  const maxEntries = Math.max(1000, Math.min(200000, Number(config.cacheMaxEntries ?? 30000)));
+  const ttlDays = Math.max(0, Math.min(3650, Number(config.cacheTtlDays ?? 30)));
+  const cutoff = ttlDays > 0 ? Date.now() - ttlDays * 86400000 : 0;
+  const db = await openDb();
+  const rows = await new Promise((resolve, reject) => {
+    const items = [];
+    const tx = db.transaction(STORE, "readonly");
+    const request = tx.objectStore(STORE).openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolve(items);
+      const value = cursor.value;
+      const ts = value && typeof value === "object" ? Number(value.ts) || 0 : 0;
+      items.push({ key: cursor.key, ts });
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+  const expiredKeys = ttlDays > 0 ? rows.filter(row => row.ts > 0 && row.ts < cutoff).map(row => row.key) : [];
+  const expiredSet = new Set(expiredKeys);
+  const survivors = rows.filter(row => !expiredSet.has(row.key)).sort((a, b) => a.ts - b.ts);
+  const excess = Math.max(0, survivors.length - maxEntries);
+  const deleteKeys = [...expiredKeys, ...survivors.slice(0, excess).map(row => row.key)];
+
+  if (deleteKeys.length) {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const store = tx.objectStore(STORE);
+      deleteKeys.forEach(key => store.delete(key));
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  lastCachePruneAt = Date.now();
+  return { before: rows.length, deleted: deleteKeys.length, remaining: Math.max(0, rows.length - deleteKeys.length) };
+}
+
+async function maybePruneCache(config) {
+  if (Date.now() - lastCachePruneAt < CACHE_PRUNE_INTERVAL_MS) return;
+  try { await cachePrune(config); } catch {}
+}
+
 async function getConfig() {
   const [sync, local] = await Promise.all([
     chrome.storage.sync.get(SYNC_DEFAULTS),
@@ -86,6 +166,73 @@ async function getConfig() {
   const merged = { ...SYNC_DEFAULTS, ...LOCAL_DEFAULTS, ...sync, ...local };
   if (merged.translationProvider === "oci-proxy") merged.translationProvider = "azure";
   return merged;
+}
+
+function dateKeys(now = new Date()) {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return { dayKey: `${y}-${m}-${d}`, monthKey: `${y}-${m}` };
+}
+
+function emptyUsageBucket() {
+  return {
+    azure: { requests: 0, chars: 0 },
+    googleWeb: { requests: 0, chars: 0 },
+    cacheHits: 0
+  };
+}
+
+function normalizeUsage(raw) {
+  const { dayKey, monthKey } = dateKeys();
+  const usage = raw && typeof raw === "object" ? structuredClone(raw) : {};
+  if (usage.dayKey !== dayKey) {
+    usage.dayKey = dayKey;
+    usage.day = emptyUsageBucket();
+  }
+  if (usage.monthKey !== monthKey) {
+    usage.monthKey = monthKey;
+    usage.month = emptyUsageBucket();
+  }
+  usage.day ||= emptyUsageBucket();
+  usage.month ||= emptyUsageBucket();
+  return usage;
+}
+
+function queueUsageMutation(mutator) {
+  usageWriteQueue = usageWriteQueue.then(async () => {
+    const stored = await chrome.storage.local.get({ [USAGE_KEY]: null });
+    const usage = normalizeUsage(stored[USAGE_KEY]);
+    mutator(usage);
+    await chrome.storage.local.set({ [USAGE_KEY]: usage });
+  }).catch(() => {});
+  return usageWriteQueue;
+}
+
+function recordUsage(provider, texts) {
+  const chars = texts.reduce((sum, text) => sum + String(text ?? "").length, 0);
+  const key = provider === "google-web" ? "googleWeb" : "azure";
+  return queueUsageMutation(usage => {
+    for (const bucket of [usage.day, usage.month]) {
+      bucket[key] ||= { requests: 0, chars: 0 };
+      bucket[key].requests += 1;
+      bucket[key].chars += chars;
+    }
+  });
+}
+
+function recordCacheHits(count) {
+  if (!count) return Promise.resolve();
+  return queueUsageMutation(usage => {
+    usage.day.cacheHits = Number(usage.day.cacheHits || 0) + count;
+    usage.month.cacheHits = Number(usage.month.cacheHits || 0) + count;
+  });
+}
+
+async function getUsageStats() {
+  await usageWriteQueue;
+  const stored = await chrome.storage.local.get({ [USAGE_KEY]: null });
+  return normalizeUsage(stored[USAGE_KEY]);
 }
 
 function normalizeGoogleLang(lang) {
@@ -184,6 +331,7 @@ async function googleWebTranslate(text, sourceLang, targetLang, config) {
     const data = await response.json();
     const result = Array.isArray(data?.[0]) ? data[0].map(segment => segment?.[0] || "").join("") : "";
     translated.push(result || piece);
+    await recordUsage("google-web", [piece]);
   }
   return translated.join("");
 }
@@ -221,6 +369,7 @@ async function azureTranslateMany(texts, sourceLang, targetLang, config) {
 
   const data = await response.json();
   if (!Array.isArray(data) || data.length !== texts.length) throw new Error("Microsoft/Azure 返回条数与请求不一致");
+  await recordUsage("azure", texts);
   return data.map((item, index) => item?.translations?.[0]?.text ?? texts[index]);
 }
 
@@ -259,6 +408,7 @@ async function translateGoogleBatch(texts, sourceLang, targetLang, config) {
   const results = new Array(texts.length);
   const unique = groupUniqueTexts(texts);
   let cursor = 0;
+  let cacheHits = 0;
 
   async function worker() {
     while (cursor < unique.length) {
@@ -268,16 +418,19 @@ async function translateGoogleBatch(texts, sourceLang, targetLang, config) {
         continue;
       }
       const key = cacheKey("google-web", sourceLang, targetLang, item.text);
-      let translated = await cacheGet(key);
+      let translated = await cacheGet(key, config);
       if (typeof translated !== "string") {
         translated = await googleWebTranslate(item.text, sourceLang, targetLang, config);
         await cacheSet(key, translated);
+      } else {
+        cacheHits++;
       }
       item.indexes.forEach(index => { results[index] = translated; });
     }
   }
 
   await Promise.all(Array.from({ length: Math.min(4, unique.length || 1) }, worker));
+  await recordCacheHits(cacheHits);
   return results;
 }
 
@@ -285,6 +438,7 @@ async function translateAzureBatch(texts, sourceLang, targetLang, config) {
   const results = new Array(texts.length);
   const unique = groupUniqueTexts(texts);
   const misses = [];
+  let cacheHits = 0;
 
   for (const item of unique) {
     if (!item.text.trim()) {
@@ -292,11 +446,16 @@ async function translateAzureBatch(texts, sourceLang, targetLang, config) {
       continue;
     }
     const key = cacheKey("azure", sourceLang, targetLang, item.text);
-    const cached = await cacheGet(key);
-    if (typeof cached === "string") item.indexes.forEach(index => { results[index] = cached; });
-    else misses.push({ ...item, key });
+    const cached = await cacheGet(key, config);
+    if (typeof cached === "string") {
+      cacheHits++;
+      item.indexes.forEach(index => { results[index] = cached; });
+    } else {
+      misses.push({ ...item, key });
+    }
   }
 
+  await recordCacheHits(cacheHits);
   if (!misses.length) return results;
 
   if (azureHealth.openUntil > Date.now()) {
@@ -346,8 +505,41 @@ async function translateBatch(texts, options = {}) {
   const provider = options.provider || config.translationProvider || "azure";
   const sourceLang = options.sourceLang || config.sourceLang || "auto";
   const targetLang = options.targetLang || config.targetLang || "zh-CN";
+  await maybePruneCache(config);
   if (provider === "google-web") return translateGoogleBatch(clean, sourceLang, targetLang, config);
   return translateAzureBatch(clean, sourceLang, targetLang, config);
+}
+
+function canSplitDetailedError(error) {
+  const message = String(error?.message || error || "");
+  return /HTTP\s+(400|413|422)\b/i.test(message);
+}
+
+async function translateDetailed(texts, options = {}) {
+  const clean = Array.isArray(texts) ? texts.map(value => String(value ?? "")) : [];
+  const translations = new Array(clean.length).fill(null);
+  const errors = new Array(clean.length).fill(null);
+
+  async function solve(indexes) {
+    if (!indexes.length) return;
+    const subset = indexes.map(index => clean[index]);
+    try {
+      const translated = await translateBatch(subset, options);
+      indexes.forEach((originalIndex, i) => { translations[originalIndex] = translated[i]; });
+    } catch (error) {
+      const message = String(error?.message || error || "翻译失败");
+      if (indexes.length === 1 || !canSplitDetailedError(error)) {
+        indexes.forEach(index => { errors[index] = message; });
+        return;
+      }
+      const middle = Math.ceil(indexes.length / 2);
+      await solve(indexes.slice(0, middle));
+      await solve(indexes.slice(middle));
+    }
+  }
+
+  await solve(clean.map((_, index) => index));
+  return { translations, errors };
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -362,6 +554,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (currentLocal.translationProvider === "oci-proxy") patch.translationProvider = "azure";
   await chrome.storage.local.remove(["ociProxyEndpoint", "ociProxyToken"]);
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
+
+  try { await cachePrune({ ...LOCAL_DEFAULTS, ...currentLocal, ...patch }); } catch {}
 
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: "ft-translate-selection", title: "FloatingTranslator：翻译选中文字", contexts: ["selection"] });
@@ -400,8 +594,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "FT_TRANSLATE_DETAILED") {
+    translateDetailed(message.texts, message.options)
+      .then(result => sendResponse({ ok: true, ...result }))
+      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
   if (message?.type === "FT_CLEAR_CACHE") {
     cacheClear().then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
+  if (message?.type === "FT_PRUNE_CACHE") {
+    getConfig().then(cachePrune).then(stats => sendResponse({ ok: true, ...stats }))
+      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
+  if (message?.type === "FT_USAGE_STATS") {
+    getUsageStats().then(usage => sendResponse({ ok: true, usage }))
+      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
+  if (message?.type === "FT_RESET_USAGE_STATS") {
+    chrome.storage.local.remove(USAGE_KEY).then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 

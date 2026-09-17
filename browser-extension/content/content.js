@@ -31,6 +31,7 @@
   const state = {
     settings: { ...DEFAULTS },
     active: false,
+    paused: false,
     queue: new Set(),
     processing: false,
     flushTimer: null,
@@ -129,7 +130,7 @@
   }
 
   function scheduleTreeScan(root = document.body) {
-    if (!state.active || !root) return;
+    if (!state.active || state.paused || !root) return;
     if (root.nodeType === Node.TEXT_NODE) {
       enqueueNode(root);
       return;
@@ -142,7 +143,7 @@
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 
     const step = deadline => {
-      if (token.cancelled || !state.active) {
+      if (token.cancelled || !state.active || state.paused) {
         state.scanTokens.delete(token);
         return;
       }
@@ -170,6 +171,7 @@
   }
 
   function scheduleFlush(delay = 90) {
+    if (state.paused) return;
     clearTimeout(state.flushTimer);
     state.flushTimer = setTimeout(processQueue, delay);
   }
@@ -200,17 +202,16 @@
         maxRetry = Math.max(maxRetry, retries);
       }
     }
-    if (state.queue.size) {
-      clearTimeout(state.retryTimer);
-      state.retryTimer = setTimeout(() => {
-        state.retryTimer = null;
-        scheduleFlush(0);
-      }, Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
-    }
+    if (!state.queue.size || state.paused) return;
+    clearTimeout(state.retryTimer);
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = null;
+      scheduleFlush(0);
+    }, Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
   }
 
   async function processQueue() {
-    if (state.processing || !state.active || state.queue.size === 0) return;
+    if (state.processing || !state.active || state.paused || state.queue.size === 0) return;
     state.processing = true;
     const generation = state.generation;
     let entries = [];
@@ -225,30 +226,48 @@
       if (!entries.length) return;
 
       const response = await chrome.runtime.sendMessage({
-        type: "FT_TRANSLATE",
+        type: "FT_TRANSLATE_DETAILED",
         texts: entries.map(entry => entry.parts.core),
         options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
       });
 
       if (generation !== state.generation || !state.active) return;
+      if (state.paused) {
+        for (const entry of entries) if (entry.node?.isConnected) state.queue.add(entry.node);
+        return;
+      }
       if (!response?.ok) throw new Error(response?.error || "翻译失败");
 
+      const failedEntries = [];
+      let firstError = "";
       entries.forEach((entry, index) => {
         const translated = response.translations?.[index];
-        if (typeof translated !== "string" || !entry.node.isConnected) return;
-        applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
-        state.nodeRetries.delete(entry.node);
-        state.processed++;
+        const itemError = response.errors?.[index];
+        if (typeof translated === "string" && entry.node.isConnected) {
+          applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
+          state.nodeRetries.delete(entry.node);
+          state.processed++;
+          return;
+        }
+        failedEntries.push(entry);
+        firstError ||= String(itemError || "该文本翻译失败");
       });
-      state.lastError = "";
+
+      if (failedEntries.length) {
+        state.failed += failedEntries.length;
+        state.lastError = firstError;
+        retryFailedEntries(failedEntries);
+      } else {
+        state.lastError = "";
+      }
     } catch (error) {
-      state.failed++;
+      state.failed += Math.max(1, entries.length);
       state.lastError = String(error?.message || error);
       retryFailedEntries(entries);
       console.warn("[FloatingTranslator]", error);
     } finally {
       state.processing = false;
-      if (state.active && state.queue.size && !state.retryTimer) scheduleFlush(50);
+      if (state.active && !state.paused && state.queue.size && !state.retryTimer) scheduleFlush(50);
     }
   }
 
@@ -274,6 +293,7 @@
   function restorePage() {
     state.generation++;
     cancelScans();
+    clearTimeout(state.flushTimer);
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
     state.queue.clear();
@@ -300,7 +320,7 @@
     if (materiallyChanged) restorePage();
     state.settings = next;
     state.active = shouldTranslatePage();
-    if (rescan && state.active) scheduleTreeScan(document.body);
+    if (rescan && state.active && !state.paused) scheduleTreeScan(document.body);
   }
 
   function handleMutations(mutations) {
@@ -389,7 +409,7 @@
   }
 
   function handleRouteRescan() {
-    if (!state.active) return;
+    if (!state.active || state.paused) return;
     state.generation++;
     cancelScans();
     clearTimeout(state.flushTimer);
@@ -402,17 +422,33 @@
   function scheduleSafetyScan(delay = 250) {
     clearTimeout(state.safetyScanTimer);
     state.safetyScanTimer = setTimeout(() => {
-      if (state.active && document.visibilityState === "visible") scheduleTreeScan(document.body);
+      if (state.active && !state.paused && document.visibilityState === "visible") scheduleTreeScan(document.body);
     }, delay);
+  }
+
+  function setPaused(paused) {
+    state.paused = Boolean(paused);
+    if (state.paused) {
+      cancelScans();
+      clearTimeout(state.flushTimer);
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+      return;
+    }
+    if (state.active) {
+      scheduleTreeScan(document.body);
+      if (state.queue.size) scheduleFlush(0);
+    }
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "FT_REFRESH_SETTINGS") {
-      loadSettings().then(() => sendResponse({ ok: true, active: state.active }));
+      loadSettings().then(() => sendResponse({ ok: true, active: state.active, paused: state.paused }));
       return true;
     }
     if (message?.type === "FT_TRANSLATE_NOW") {
       restorePage();
+      state.paused = false;
       state.active = true;
       scheduleTreeScan(document.body);
       sendResponse({ ok: true });
@@ -420,11 +456,17 @@
     }
     if (message?.type === "FT_RESCAN_PAGE") {
       handleRouteRescan();
-      sendResponse({ ok: true });
+      sendResponse({ ok: true, paused: state.paused });
+      return false;
+    }
+    if (message?.type === "FT_SET_PAUSED") {
+      setPaused(Boolean(message.paused));
+      sendResponse({ ok: true, paused: state.paused, queued: state.queue.size });
       return false;
     }
     if (message?.type === "FT_RESTORE_PAGE") {
       state.active = false;
+      state.paused = false;
       restorePage();
       sendResponse({ ok: true });
       return false;
@@ -437,6 +479,7 @@
       sendResponse({
         ok: true,
         active: state.active,
+        paused: state.paused,
         host: location.hostname,
         pageLang: pageLanguage(),
         queued: state.queue.size,
@@ -466,7 +509,7 @@
     state.started = true;
     startObserver();
     await loadSettings({ rescan: false });
-    if (state.active) scheduleTreeScan(document.body);
+    if (state.active && !state.paused) scheduleTreeScan(document.body);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });

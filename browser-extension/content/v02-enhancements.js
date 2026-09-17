@@ -46,6 +46,7 @@
 
   const state = {
     settings: { ...DEFAULTS },
+    pagePaused: false,
     shadowObservers: new Map(),
     shadowRecords: new WeakMap(),
     trackedShadowNodes: new Set(),
@@ -70,7 +71,7 @@
   }
 
   function translationEnabled() {
-    if (!state.settings.enabled) return false;
+    if (!state.settings.enabled || state.pagePaused) return false;
     const rule = currentSiteRule();
     if (rule === "never") return false;
     if (rule === "always") return true;
@@ -333,11 +334,12 @@
     try {
       const texts = nodes.map(node => node.nodeValue.trim());
       const response = await chrome.runtime.sendMessage({
-        type: "FT_TRANSLATE",
+        type: "FT_TRANSLATE_DETAILED",
         texts,
         options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
       });
       if (!response?.ok) throw new Error(response?.error || "Shadow DOM 翻译失败");
+      if (state.pagePaused) return;
 
       nodes.forEach((node, index) => {
         if (!node.isConnected) return;
@@ -445,7 +447,7 @@
       markAdapterElements(document);
       window.dispatchEvent(new CustomEvent("ft-route-change", { detail: { url: location.href } }));
       discoverShadowRoots(document);
-      for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      if (!state.pagePaused) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
     }, 120);
   }
 
@@ -484,6 +486,37 @@
 
   window.addEventListener("resize", positionPreview, { passive: true });
   window.addEventListener("scroll", positionPreview, { passive: true, capture: true });
+
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type === "FT_SET_PAUSED") {
+      state.pagePaused = Boolean(message.paused);
+      if (!state.pagePaused && translationEnabled()) {
+        for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      }
+      return false;
+    }
+    if (message?.type === "FT_TRANSLATE_NOW") {
+      state.pagePaused = false;
+      restoreShadowTranslations();
+      if (translationEnabled()) setTimeout(() => {
+        for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      }, 80);
+      return false;
+    }
+    if (message?.type === "FT_RESCAN_PAGE") {
+      if (!state.pagePaused && translationEnabled()) {
+        for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      }
+      return false;
+    }
+    if (message?.type === "FT_RESTORE_PAGE") {
+      state.pagePaused = false;
+      restoreShadowTranslations();
+      return false;
+    }
+    return false;
+  });
+
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
