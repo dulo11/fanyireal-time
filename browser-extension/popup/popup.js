@@ -150,9 +150,15 @@ async function init() {
   });
 
   $("translateNow").addEventListener("click", async () => {
-    $("pageState").textContent = "正在重新扫描整页…";
+    $("pageState").textContent = "正在恢复并重新翻译整页…";
     await sendToPage({ type: "FT_TRANSLATE_NOW" });
     setTimeout(refreshPageState, 300);
+  });
+
+  $("rescanPage").addEventListener("click", async () => {
+    $("pageState").textContent = "正在补扫遗漏内容…";
+    await sendToPage({ type: "FT_RESCAN_PAGE" });
+    setTimeout(refreshPageState, 250);
   });
 
   $("restorePage").addEventListener("click", async () => {
