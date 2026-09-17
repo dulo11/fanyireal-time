@@ -8,18 +8,18 @@ const SYNC_DEFAULTS = {
 };
 
 const LOCAL_DEFAULTS = {
-  translationProvider: "google-web",
+  translationProvider: "azure",
   fallbackGoogle: true,
   azureEndpoint: "https://api.cognitive.microsofttranslator.com",
   azureRegion: "",
-  azureKey: "",
-  ociProxyEndpoint: "",
-  ociProxyToken: ""
+  azureKey: ""
 };
 
 const DB_NAME = "floating-translator-cache";
 const DB_VERSION = 1;
 const STORE = "translations";
+const AZURE_BATCH_MAX_ITEMS = 50;
+const AZURE_BATCH_MAX_CHARS = 20000;
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -66,7 +66,11 @@ async function getConfig() {
     chrome.storage.sync.get(SYNC_DEFAULTS),
     chrome.storage.local.get(LOCAL_DEFAULTS)
   ]);
-  return { ...SYNC_DEFAULTS, ...LOCAL_DEFAULTS, ...sync, ...local };
+
+  const merged = { ...SYNC_DEFAULTS, ...LOCAL_DEFAULTS, ...sync, ...local };
+  // 从曾经的 OCI 测试版升级时，自动迁回 Azure，不让旧设置把翻译卡死。
+  if (merged.translationProvider === "oci-proxy") merged.translationProvider = "azure";
+  return merged;
 }
 
 function normalizeGoogleLang(lang) {
@@ -82,16 +86,6 @@ function normalizeAzureLang(lang) {
   const value = lang.toLowerCase();
   if (value === "zh-cn" || value === "zh-hans") return "zh-Hans";
   if (value === "zh-tw" || value === "zh-hant") return "zh-Hant";
-  return lang;
-}
-
-function normalizeOciLang(lang) {
-  if (!lang || lang === "auto") return "auto";
-  const value = lang.toLowerCase();
-  if (value === "zh-hans") return "zh-CN";
-  if (value === "zh-hant") return "zh-TW";
-  if (value === "pt-br") return "pt-BR";
-  if (value === "fr-ca") return "fr-CA";
   return lang;
 }
 
@@ -141,117 +135,125 @@ async function googleWebTranslate(text, sourceLang, targetLang) {
   return translated.join("");
 }
 
-async function azureTranslate(text, sourceLang, targetLang, config) {
+function azureHeaders(config) {
   if (!config.azureKey) throw new Error("尚未设置 Microsoft/Azure Translator Key");
+  const headers = {
+    "Content-Type": "application/json",
+    "Ocp-Apim-Subscription-Key": config.azureKey
+  };
+  if (config.azureRegion) headers["Ocp-Apim-Subscription-Region"] = config.azureRegion;
+  return headers;
+}
 
+function azureUrl(sourceLang, targetLang, config) {
   const endpoint = String(config.azureEndpoint || LOCAL_DEFAULTS.azureEndpoint).replace(/\/$/, "");
   const params = new URLSearchParams({
     "api-version": "3.0",
     to: normalizeAzureLang(targetLang)
   });
   if (sourceLang && sourceLang !== "auto") params.set("from", normalizeAzureLang(sourceLang));
+  return `${endpoint}/translate?${params.toString()}`;
+}
 
-  const headers = {
-    "Content-Type": "application/json",
-    "Ocp-Apim-Subscription-Key": config.azureKey
-  };
-  if (config.azureRegion) headers["Ocp-Apim-Subscription-Region"] = config.azureRegion;
-
-  const response = await fetch(`${endpoint}/translate?${params.toString()}`, {
+async function azureTranslateMany(texts, sourceLang, targetLang, config) {
+  const response = await fetch(azureUrl(sourceLang, targetLang, config), {
     method: "POST",
-    headers,
-    body: JSON.stringify([{ text }])
+    headers: azureHeaders(config),
+    body: JSON.stringify(texts.map(text => ({ text })))
   });
+
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     throw new Error(`Microsoft/Azure 翻译失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 180)}` : ""}`);
   }
 
   const data = await response.json();
-  return data?.[0]?.translations?.[0]?.text || text;
-}
-
-async function ociProxyTranslate(text, sourceLang, targetLang, config) {
-  if (!config.ociProxyEndpoint) {
-    throw new Error("尚未设置 Oracle OCI 翻译代理地址");
+  if (!Array.isArray(data) || data.length !== texts.length) {
+    throw new Error("Microsoft/Azure 返回条数与请求不一致");
   }
+  return data.map((item, index) => item?.translations?.[0]?.text ?? texts[index]);
+}
 
-  const headers = { "Content-Type": "application/json" };
-  if (config.ociProxyToken) headers.Authorization = `Bearer ${config.ociProxyToken}`;
+function makeAzureBatches(items) {
+  const batches = [];
+  let current = [];
+  let chars = 0;
 
-  const response = await fetch(config.ociProxyEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      text,
-      sourceLang: normalizeOciLang(sourceLang),
-      targetLang: normalizeOciLang(targetLang)
-    })
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Oracle OCI 翻译失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 180)}` : ""}`);
+  for (const item of items) {
+    const size = item.text.length;
+    if (current.length && (current.length >= AZURE_BATCH_MAX_ITEMS || chars + size > AZURE_BATCH_MAX_CHARS)) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(item);
+    chars += size;
   }
-
-  const data = await response.json();
-  const translated = data?.translatedText ?? data?.translation ?? data?.translations?.[0];
-  if (typeof translated !== "string") throw new Error("Oracle OCI 代理返回格式不正确");
-  return translated;
+  if (current.length) batches.push(current);
+  return batches;
 }
 
-async function runProvider(provider, text, sourceLang, targetLang, config) {
-  if (provider === "azure") return azureTranslate(text, sourceLang, targetLang, config);
-  if (provider === "oci-proxy") return ociProxyTranslate(text, sourceLang, targetLang, config);
-  return googleWebTranslate(text, sourceLang, targetLang);
+function cacheKey(provider, sourceLang, targetLang, text) {
+  return `${provider}\u0000${sourceLang}\u0000${targetLang}\u0000${text}`;
 }
 
-async function translateOne(text, options, config) {
-  if (!text || !text.trim()) return text;
-  const provider = options.provider || config.translationProvider || "google-web";
-  const sourceLang = options.sourceLang || config.sourceLang || "auto";
-  const targetLang = options.targetLang || config.targetLang || "zh-CN";
-  const key = `${provider}\u0000${sourceLang}\u0000${targetLang}\u0000${text}`;
-  const cached = await cacheGet(key);
-  if (typeof cached === "string") return cached;
+async function translateAzureBatch(texts, sourceLang, targetLang, config) {
+  const results = new Array(texts.length);
+  const misses = [];
 
-  let result;
-  try {
-    result = await runProvider(provider, text, sourceLang, targetLang, config);
-  } catch (error) {
-    if (provider !== "google-web" && config.fallbackGoogle) {
-      console.warn(`[FloatingTranslator] ${provider} 失败，回退 Google Web`, error);
-      result = await googleWebTranslate(text, sourceLang, targetLang);
-    } else {
-      throw error;
+  await Promise.all(texts.map(async (text, index) => {
+    if (!text.trim()) {
+      results[index] = text;
+      return;
+    }
+    const key = cacheKey("azure", sourceLang, targetLang, text);
+    const cached = await cacheGet(key);
+    if (typeof cached === "string") results[index] = cached;
+    else misses.push({ index, text, key });
+  }));
+
+  for (const batch of makeAzureBatches(misses)) {
+    try {
+      const translated = await azureTranslateMany(batch.map(item => item.text), sourceLang, targetLang, config);
+      await Promise.all(batch.map(async (item, i) => {
+        results[item.index] = translated[i];
+        await cacheSet(item.key, translated[i]);
+      }));
+    } catch (error) {
+      if (!config.fallbackGoogle) throw error;
+      console.warn("[FloatingTranslator] Azure 批量翻译失败，回退 Google Web", error);
+      await Promise.all(batch.map(async item => {
+        const translated = await googleWebTranslate(item.text, sourceLang, targetLang);
+        results[item.index] = translated;
+        await cacheSet(item.key, translated);
+      }));
     }
   }
 
-  await cacheSet(key, result);
-  return result;
-}
-
-async function mapLimit(items, limit, mapper) {
-  const results = new Array(items.length);
-  let cursor = 0;
-
-  async function worker() {
-    while (true) {
-      const index = cursor++;
-      if (index >= items.length) return;
-      results[index] = await mapper(items[index], index);
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
-  await Promise.all(workers);
   return results;
+}
+
+async function translateGoogleBatch(texts, sourceLang, targetLang) {
+  return Promise.all(texts.map(async text => {
+    if (!text.trim()) return text;
+    const key = cacheKey("google-web", sourceLang, targetLang, text);
+    const cached = await cacheGet(key);
+    if (typeof cached === "string") return cached;
+    const translated = await googleWebTranslate(text, sourceLang, targetLang);
+    await cacheSet(key, translated);
+    return translated;
+  }));
 }
 
 async function translateBatch(texts, options = {}) {
   const config = await getConfig();
   const clean = Array.isArray(texts) ? texts.map(value => String(value ?? "")) : [];
-  return mapLimit(clean, 4, text => translateOne(text, options, config));
+  const provider = options.provider || config.translationProvider || "azure";
+  const sourceLang = options.sourceLang || config.sourceLang || "auto";
+  const targetLang = options.targetLang || config.targetLang || "zh-CN";
+
+  if (provider === "google-web") return translateGoogleBatch(clean, sourceLang, targetLang);
+  return translateAzureBatch(clean, sourceLang, targetLang, config);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -262,12 +264,15 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
   if (Object.keys(missingSync).length) await chrome.storage.sync.set(missingSync);
 
-  const currentLocal = await chrome.storage.local.get(Object.keys(LOCAL_DEFAULTS));
-  const missingLocal = {};
+  const currentLocal = await chrome.storage.local.get(null);
+  const patch = {};
   for (const [key, value] of Object.entries(LOCAL_DEFAULTS)) {
-    if (currentLocal[key] === undefined) missingLocal[key] = value;
+    if (currentLocal[key] === undefined) patch[key] = value;
   }
-  if (Object.keys(missingLocal).length) await chrome.storage.local.set(missingLocal);
+  if (currentLocal.translationProvider === "oci-proxy") patch.translationProvider = "azure";
+  // 删除旧 OCI 测试配置，避免升级后继续残留敏感/无用数据。
+  await chrome.storage.local.remove(["ociProxyEndpoint", "ociProxyToken"]);
+  if (Object.keys(patch).length) await chrome.storage.local.set(patch);
 
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
@@ -304,8 +309,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ok: true,
         config: {
           ...config,
-          azureKey: config.azureKey ? "__SET__" : "",
-          ociProxyToken: config.ociProxyToken ? "__SET__" : ""
+          azureKey: config.azureKey ? "__SET__" : ""
         }
       }))
       .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
