@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "1.1.0",
-  "description": "跨浏览器主线：Azure 主引擎、Google Web 备用、长网页持续翻译、聊天输入、术语表、诊断与设置备份。",
+  "version": "1.2.0",
+  "description": "多引擎版：Azure 多 Key 池、百度/阿里云、智能冷却、Google Web 兜底、长网页持续翻译。",
   "permissions": [
     "storage",
     "activeTab",
