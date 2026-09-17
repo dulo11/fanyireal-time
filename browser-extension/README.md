@@ -1,6 +1,6 @@
-# FloatingTranslator Browser v0.3
+# FloatingTranslator Browser v0.5
 
-浏览器持续网页翻译版。目标是像 Chrome / Edge 自带网页翻译一样：页面加载多少内容，就持续翻译多少内容；动态加载的新帖子、评论和聊天消息也会自动加入翻译队列。
+浏览器持续网页翻译版。v0.5 起收敛翻译引擎路线：**Microsoft / Azure Translator 作为主引擎，Google Web 作为可选故障回退**，不再继续维护 Oracle OCI 翻译链路。
 
 ## 当前功能
 
@@ -15,60 +15,65 @@
 - 输入框 `Alt + Enter` 翻译
 - 网页聊天输入实时预翻译
 - Open Shadow DOM 扫描与动态监听
-- Google Web 实验性引擎
-- Microsoft / Azure Translator 官方接口
-- Oracle OCI Language（通过安全代理）
-- 主引擎失败时可自动回退 Google Web
-- API Key / Token 只保存到浏览器本地扩展存储，不写入仓库
-- GitHub Actions 自动校验 JavaScript 并打包 ZIP
+- Microsoft / Azure Translator 主引擎
+- Google Web 实验性备用引擎
+- Azure 失败时可选自动回退 Google Web
+- API Key 只保存在当前浏览器本地扩展存储，不写入仓库
+- GitHub Actions 自动校验并打包浏览器插件 ZIP
 
-## Oracle OCI Language
+## v0.5 Azure 优化
 
-OCI Language 提供正式的机器翻译 API。OCI REST 请求需要 RSA API Signing Key 签名，因此不建议把 OCI 私钥直接存进浏览器插件。
+相比 v0.4，v0.5 已移除 OCI 设置、OCI Worker 构建和相关代理代码，并对 Azure 调用做了专项优化。
 
-v0.3 使用更安全的结构：
+### Azure 批量翻译
 
-`浏览器插件 -> 你自己的 Worker/服务器代理 -> OCI Language`
+网页扫描出来的多个文本节点不再全部逐条请求 Azure。后台会先检查本地缓存，再把未命中的文本按保守阈值合成批量请求：
 
-扩展设置里只保存代理地址和可选的代理 Token。OCI 的 Tenancy OCID、User OCID、Fingerprint 和 RSA 私钥应该保存在代理服务器的 Secret 中，不能提交到公开 GitHub 仓库。
-
-扩展发送给代理的请求格式：
-
-```json
-{
-  "text": "Hello world",
-  "sourceLang": "auto",
-  "targetLang": "zh-CN"
-}
+```text
+网页文本节点
+   ↓
+IndexedDB 缓存命中检查
+   ↓
+未命中内容合批
+   ↓
+Azure Translator
+   ↓
+按原顺序写回网页
 ```
 
-代理返回以下任意一种格式即可：
+这样可以减少大量短句造成的网络请求次数，同时保留每段文本独立缓存。
 
-```json
-{"translatedText":"你好，世界"}
-```
+### 升级迁移
 
-或：
+如果浏览器之前安装过带 OCI 测试配置的版本，v0.5 会：
 
-```json
-{"translation":"你好，世界"}
-```
+- 将旧的 `oci-proxy` 主引擎自动迁回 `azure`
+- 删除本机旧 `ociProxyEndpoint`
+- 删除本机旧 `ociProxyToken`
 
-## 翻译引擎回退
+不会把旧 OCI 配置继续带到后续版本。
 
-在高级设置中可开启“主引擎失败时自动回退到 Google Web”。例如 OCI 免费额度用完、Azure Key 临时失效或接口网络失败时，页面翻译不会立刻全部停止。
+## Azure 设置
 
-如果不希望调用实验性 Google Web 接口，可以关闭该选项。
+打开“翻译引擎与高级设置”，填写：
 
-## 自动生成安装 ZIP
+- Endpoint
+- Region（按你的 Azure Translator 资源要求填写）
+- Key
+
+Key 使用 `chrome.storage.local` 仅保存在当前浏览器扩展本地数据中，不会提交到 GitHub。
+
+如果开启“Azure 失败时自动回退到 Google Web”，遇到 Azure Key、网络或接口异常时，当前批次会尝试继续翻译；如果不想使用非正式 Google Web 接口，可以关闭该选项。
+
+## 自动生成安装包
 
 `.github/workflows/build-browser-extension.yml` 会自动：
 
 1. 校验 `manifest.json`。
-2. 检查核心文件。
-3. 对所有 JavaScript 执行 `node --check`。
-4. 从 manifest 自动读取版本号。
-5. 打包 `FloatingTranslator-Browser-v版本号.zip`。
+2. 检查浏览器插件核心文件。
+3. 对全部浏览器 JavaScript 执行 `node --check`。
+4. 自动读取版本号。
+5. 生成 `FloatingTranslator-Browser-v0.5.0.zip`。
 6. 上传到 GitHub Actions Artifacts。
 
 ## 安装
@@ -82,14 +87,14 @@ v0.3 使用更安全的结构：
 
 ### Quetta Android
 
-使用 Actions 自动生成的 ZIP 测试。手机弹窗已按窄屏布局处理；具体导入入口以当前 Quetta 扩展管理页为准。
+使用 Actions 自动生成的浏览器插件 ZIP 测试。手机弹窗已按窄屏布局处理；具体扩展导入入口以当前 Quetta 版本为准。
 
-## 后续
+## 下一步
 
-- OCI / Cloudflare Worker 签名代理模板
-- 长页面批处理进一步优化
+- 长页面调度、取消和并发优化
 - 混合语言页面逐段识别
-- Telegram Web / WhatsApp Web / Discord 等专项规则
+- Telegram Web / WhatsApp Web / Discord 专项适配
+- Azure 请求失败重试与节流
 - PDF 翻译
 - YouTube / 网页视频双语字幕
 - 图片 OCR

@@ -6,6 +6,8 @@ on:
       - feature/browser-translator-v0.1
       - feature/browser-translator-v0.2
       - feature/browser-translator-v0.3
+      - feature/browser-translator-v0.4
+      - feature/browser-translator-v0.5-azure
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
