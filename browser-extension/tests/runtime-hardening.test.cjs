@@ -118,13 +118,15 @@ assert.match(options, /glossaryEntries/);
 assert.match(options, /FT_USAGE_STATS/);
 
 const poolUi = read('options/provider-pool-ui.js');
-assert.match(poolUi, /saveProviderPool/);
-assert.match(poolUi, /addAzureCredential/);
-assert.match(poolUi, /addBaiduCredential/);
-assert.match(poolUi, /addAliyunCredential/);
+assert.match(poolUi, /savePool/);
+assert.match(poolUi, /bindAdd/);
 assert.match(poolUi, /FT_PROVIDER_POOL_STATUS/);
+assert.match(poolUi, /providerCooldownMs/);
 const optionHtml = read('options/options.html');
 assert.match(optionHtml, /\.\.\/compat\/browser-api\.js/);
 assert.match(optionHtml, /provider-pool-ui\.js/);
+for (const id of ['addAzureCredential', 'addBaiduCredential', 'addAliyunCredential', 'saveProviderPool', 'providerPoolStatus']) {
+  assert.match(optionHtml, new RegExp(`id=["']${id}["']`));
+}
 
 console.log('runtime hardening tests passed');
