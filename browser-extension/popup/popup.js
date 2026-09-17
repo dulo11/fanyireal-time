@@ -4,7 +4,11 @@ const DEFAULTS = {
   sourceLang: "auto",
   targetLang: "zh-CN",
   displayMode: "translated",
-  siteRules: {}
+  siteRules: {},
+  chatMode: true,
+  inputPreview: true,
+  inputSourceLang: "auto",
+  inputTargetLang: "en"
 };
 
 const LANGUAGES = [
@@ -35,22 +39,21 @@ let activeTab = null;
 let currentHost = "";
 let settings = { ...DEFAULTS };
 
-function populateLanguages() {
-  const source = $("sourceLang");
-  const target = $("targetLang");
+function appendLanguageOptions(select, includeAuto) {
   for (const [value, label] of LANGUAGES) {
-    const sourceOption = document.createElement("option");
-    sourceOption.value = value;
-    sourceOption.textContent = label;
-    source.appendChild(sourceOption);
-
-    if (value !== "auto") {
-      const targetOption = document.createElement("option");
-      targetOption.value = value;
-      targetOption.textContent = label;
-      target.appendChild(targetOption);
-    }
+    if (!includeAuto && value === "auto") continue;
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
   }
+}
+
+function populateLanguages() {
+  appendLanguageOptions($("sourceLang"), true);
+  appendLanguageOptions($("targetLang"), false);
+  appendLanguageOptions($("inputSourceLang"), true);
+  appendLanguageOptions($("inputTargetLang"), false);
 }
 
 async function getActiveTab() {
@@ -82,6 +85,10 @@ function render() {
   $("sourceLang").value = settings.sourceLang || "auto";
   $("targetLang").value = settings.targetLang || "zh-CN";
   $("displayMode").value = settings.displayMode || "translated";
+  $("chatMode").checked = Boolean(settings.chatMode);
+  $("inputPreview").checked = Boolean(settings.inputPreview);
+  $("inputSourceLang").value = settings.inputSourceLang || "auto";
+  $("inputTargetLang").value = settings.inputTargetLang || "en";
   $("siteRule").value = currentHost ? (settings.siteRules?.[currentHost] || "default") : "default";
   $("siteRule").disabled = !currentHost;
   $("host").textContent = currentHost || "此页面不支持扩展脚本";
@@ -103,7 +110,8 @@ async function refreshPageState() {
   }
   const lang = response.pageLang ? ` · ${response.pageLang}` : "";
   const queue = response.queued ? ` · 待翻译 ${response.queued}` : "";
-  $("pageState").textContent = `${response.active ? "持续翻译中" : "未翻译"}${lang}${queue}`;
+  const chat = settings.chatMode && settings.inputPreview ? " · 聊天输入预览开" : "";
+  $("pageState").textContent = `${response.active ? "持续翻译中" : "未翻译"}${lang}${queue}${chat}`;
 }
 
 async function init() {
@@ -122,6 +130,10 @@ async function init() {
   $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
   $("targetLang").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
   $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
+  $("chatMode").addEventListener("change", event => saveSync({ chatMode: event.target.checked }));
+  $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
+  $("inputSourceLang").addEventListener("change", event => saveSync({ inputSourceLang: event.target.value }));
+  $("inputTargetLang").addEventListener("change", event => saveSync({ inputTargetLang: event.target.value }));
 
   $("siteRule").addEventListener("change", async event => {
     if (!currentHost) return;

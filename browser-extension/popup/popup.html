@@ -27,11 +27,11 @@
 
       <div class="grid">
         <label>
-          <span>源语言</span>
+          <span>网页源语言</span>
           <select id="sourceLang"></select>
         </label>
         <label>
-          <span>翻译为</span>
+          <span>网页翻译为</span>
           <select id="targetLang"></select>
         </label>
       </div>
@@ -43,6 +43,28 @@
           <option value="bilingual">原文 + 译文</option>
         </select>
       </label>
+    </section>
+
+    <section class="card">
+      <label class="check-row">
+        <input id="chatMode" type="checkbox">
+        <span>网页聊天连续翻译</span>
+      </label>
+      <label class="check-row">
+        <input id="inputPreview" type="checkbox">
+        <span>输入时实时预览译文</span>
+      </label>
+      <div class="grid">
+        <label>
+          <span>我输入的语言</span>
+          <select id="inputSourceLang"></select>
+        </label>
+        <label>
+          <span>我发送为</span>
+          <select id="inputTargetLang"></select>
+        </label>
+      </div>
+      <div class="host">输入停止约半秒后显示译文，可一键替换输入框。网页正文仍可单独翻译为中文。</div>
     </section>
 
     <section class="card">
@@ -62,7 +84,7 @@
       <button id="restorePage">恢复原文</button>
     </div>
 
-    <div class="tip">输入框中按 <b>Alt + Enter</b>，可把当前输入内容翻译成目标语言。</div>
+    <div class="tip">快捷方式仍保留：输入框中按 <b>Alt + Enter</b> 可立即替换成网页目标语言。</div>
 
     <button id="openOptions" class="link-button">翻译引擎与高级设置 ›</button>
   </main>
