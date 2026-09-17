@@ -13,10 +13,30 @@ assert.equal(FT.detect('Привет мир').lang, 'ru');
 assert.equal(FT.detect('你好世界').lang, 'han');
 assert.equal(FT.detect('你好世界').ambiguous, true);
 
+assert.equal(FT.isLatinScriptLanguage('en'), true);
+assert.equal(FT.isLatinScriptLanguage('fr-FR'), true);
+assert.equal(FT.isLatinScriptLanguage('ja'), false);
+assert.equal(FT.isLatinScriptLanguage('zh-CN'), false);
+
 assert.equal(
   FT.shouldTranslateText('Hello world', { sourceLang: 'auto', targetLang: 'ja', pageLang: 'en' }),
   true,
   'English must never be skipped as Japanese'
+);
+assert.equal(
+  FT.shouldTranslateText('Hello world', { sourceLang: 'auto', targetLang: 'ja', pageLang: 'ja' }),
+  true,
+  'English on a Japanese page must still translate to Japanese'
+);
+assert.equal(
+  FT.shouldTranslateText('Hello world', { sourceLang: 'auto', targetLang: 'zh-CN', pageLang: 'zh-CN' }),
+  true,
+  'English on a Chinese page must still translate to Chinese'
+);
+assert.equal(
+  FT.shouldTranslateText('Hello world', { sourceLang: 'auto', targetLang: 'en', pageLang: 'en' }),
+  false,
+  'Latin text may be skipped when both page and target are a Latin-script language'
 );
 assert.equal(
   FT.shouldTranslateText('これは日本語です', { sourceLang: 'auto', targetLang: 'ja', pageLang: 'ja' }),
