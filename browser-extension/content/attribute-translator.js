@@ -23,9 +23,12 @@
   let observer = null;
   let flushTimer = null;
   let processing = false;
+  let nextElementId = 1;
   const queue = new Map();
   const records = new WeakMap();
   const retries = new WeakMap();
+  const elementIds = new WeakMap();
+  const trackedElements = new Set();
 
   const helper = () => globalThis.FTLanguage;
 
@@ -54,6 +57,7 @@
     if (!map) {
       map = new Map();
       records.set(element, map);
+      trackedElements.add(element);
     }
     return map;
   }
@@ -65,6 +69,15 @@
       retries.set(element, map);
     }
     return map;
+  }
+
+  function elementId(element) {
+    let id = elementIds.get(element);
+    if (!id) {
+      id = nextElementId++;
+      elementIds.set(element, id);
+    }
+    return id;
   }
 
   function isEligible(element, attr) {
@@ -85,8 +98,7 @@
   }
 
   function queueKey(element, attr) {
-    if (!element.dataset.ftAttrId) element.dataset.ftAttrId = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-    return `${element.dataset.ftAttrId}:${attr}`;
+    return `${elementId(element)}:${attr}`;
   }
 
   function enqueue(element, attr) {
@@ -159,15 +171,16 @@
   }
 
   function restoreAll() {
-    for (const element of document.querySelectorAll(`[data-ft-attr-id]`)) {
+    for (const element of [...trackedElements]) {
       const map = records.get(element);
-      if (!map) continue;
-      for (const [attr, record] of map) {
-        if ((element.getAttribute(attr) || "") === record.rendered) element.setAttribute(attr, record.original);
+      if (map && element.isConnected) {
+        for (const [attr, record] of map) {
+          if ((element.getAttribute(attr) || "") === record.rendered) element.setAttribute(attr, record.original);
+        }
       }
       records.delete(element);
       retries.delete(element);
-      delete element.dataset.ftAttrId;
+      trackedElements.delete(element);
     }
     queue.clear();
   }
