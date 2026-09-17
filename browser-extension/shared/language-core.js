@@ -1,6 +1,11 @@
 (() => {
   if (globalThis.FTLanguage) return;
 
+  const LATIN_SCRIPT_LANGS = new Set([
+    "en", "fr", "de", "es", "pt", "it", "tr", "nl", "sv", "no", "da", "fi",
+    "pl", "cs", "sk", "ro", "hu", "vi", "ms", "id", "fil", "hr", "sl", "et", "lv", "lt"
+  ]);
+
   const normalizeLang = value => {
     const lang = String(value || "").trim().toLowerCase().replace(/_/g, "-");
     if (!lang) return "";
@@ -10,6 +15,8 @@
     if (lang === "fil" || lang === "tl") return "fil";
     return lang.split("-")[0];
   };
+
+  const isLatinScriptLanguage = value => LATIN_SCRIPT_LANGS.has(normalizeLang(value));
 
   function detect(text) {
     const value = String(text || "").trim();
@@ -54,7 +61,9 @@
     }
 
     if (result.lang === "latin") {
-      return Boolean(page && page === target && result.confidence >= 0.65);
+      // 只有目标语言本身使用拉丁字母时，才允许借助页面 lang 跳过拉丁文本。
+      // 这样日语/中文页面里的英文不会因为 pageLang 与 target 相同而被误判为目标语言。
+      return isLatinScriptLanguage(target) && Boolean(page && page === target && result.confidence >= 0.65);
     }
 
     return !result.ambiguous && normalizeLang(result.lang) === target && result.confidence >= 0.75;
@@ -67,5 +76,11 @@
     return !isConfidentSameLanguage(trimmed, targetLang, pageLang);
   }
 
-  globalThis.FTLanguage = Object.freeze({ normalizeLang, detect, isConfidentSameLanguage, shouldTranslateText });
+  globalThis.FTLanguage = Object.freeze({
+    normalizeLang,
+    isLatinScriptLanguage,
+    detect,
+    isConfidentSameLanguage,
+    shouldTranslateText
+  });
 })();
