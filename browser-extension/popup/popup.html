@@ -24,6 +24,10 @@
         <input id="autoTranslate" type="checkbox">
         <span>自动持续翻译网页</span>
       </label>
+      <label class="check-row">
+        <input id="skipTargetLanguage" type="checkbox">
+        <span>自动跳过已经是目标语言的文本</span>
+      </label>
 
       <div class="grid">
         <label>
@@ -43,6 +47,7 @@
           <option value="bilingual">原文 + 译文</option>
         </select>
       </label>
+      <div class="host">自动检测现在按每段文字判断；纯汉字段不再直接当成中文，避免日文汉字和英文混合页面误判。</div>
     </section>
 
     <section class="card">
@@ -64,7 +69,7 @@
           <select id="inputTargetLang"></select>
         </label>
       </div>
-      <div class="host">输入停止约半秒后显示译文，可一键替换输入框。网页正文仍可单独翻译为中文。</div>
+      <div class="host">不用轮流一句一句。你可以连续输入，停止输入后自动更新预览；只在你点“替换输入框”时改写，不自动发送。</div>
     </section>
 
     <section class="card">
@@ -80,12 +85,11 @@
     </section>
 
     <div class="actions">
-      <button id="translateNow" class="primary">翻译当前页面</button>
+      <button id="translateNow" class="primary">重新翻译当前页面</button>
       <button id="restorePage">恢复原文</button>
     </div>
 
-    <div class="tip">快捷方式仍保留：输入框中按 <b>Alt + Enter</b> 可立即替换成网页目标语言。</div>
-
+    <div class="tip">输入框中按 <b>Alt + Enter</b> 可立即按“我输入的语言 → 我发送为”执行翻译。</div>
     <button id="openOptions" class="link-button">翻译引擎与高级设置 ›</button>
   </main>
   <script src="popup.js"></script>
