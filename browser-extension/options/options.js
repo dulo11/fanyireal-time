@@ -6,7 +6,9 @@ const LOCAL_DEFAULTS = {
   azureRegion: "",
   azureKey: "",
   requestTimeoutMs: 15000,
-  maxRetries: 3
+  maxRetries: 3,
+  cacheMaxEntries: 30000,
+  cacheTtlDays: 30
 };
 
 const $ = id => document.getElementById(id);
@@ -27,10 +29,12 @@ async function load() {
   $("azureKey").placeholder = local.azureKey ? "已保存（留空表示不修改）" : "请输入 Azure Translator Key";
   $("requestTimeoutMs").value = String(local.requestTimeoutMs || 15000);
   $("maxRetries").value = String(local.maxRetries ?? 3);
+  $("cacheMaxEntries").value = String(local.cacheMaxEntries || 30000);
+  $("cacheTtlDays").value = String(local.cacheTtlDays ?? 30);
   $("enabled").checked = Boolean(sync.enabled);
   $("autoTranslate").checked = Boolean(sync.autoTranslate);
   toggleProviderSections();
-  await Promise.all([refreshCacheStats(), refreshDiagnostics()]);
+  await Promise.all([refreshCacheStats(), refreshDiagnostics(), refreshUsage()]);
 }
 
 function toggleProviderSections() {
@@ -40,7 +44,7 @@ function toggleProviderSections() {
 function setStatus(message) {
   $("status").textContent = message;
   clearTimeout(setStatus.timer);
-  setStatus.timer = setTimeout(() => $("status").textContent = "", 3200);
+  setStatus.timer = setTimeout(() => $("status").textContent = "", 3600);
 }
 
 async function save({ showStatus = true, reload = true } = {}) {
@@ -55,7 +59,9 @@ async function save({ showStatus = true, reload = true } = {}) {
     azureEndpoint: $("azureEndpoint").value.trim() || LOCAL_DEFAULTS.azureEndpoint,
     azureRegion: $("azureRegion").value.trim(),
     requestTimeoutMs: Math.max(3000, Math.min(45000, Number($("requestTimeoutMs").value) || 15000)),
-    maxRetries: Math.max(0, Math.min(5, Number($("maxRetries").value) || 0))
+    maxRetries: Math.max(0, Math.min(5, Number($("maxRetries").value) || 0)),
+    cacheMaxEntries: Math.max(1000, Math.min(200000, Number($("cacheMaxEntries").value) || 30000)),
+    cacheTtlDays: Math.max(0, Math.min(3650, Number($("cacheTtlDays").value) || 0))
   };
 
   if ($("clearAzureKey").checked) local.azureKey = "";
@@ -84,7 +90,7 @@ async function testEngine() {
   });
   if (!response?.ok) throw new Error(response?.error || "测试失败");
   setStatus(`测试成功：${response.translations?.[0] || "已返回译文"}`);
-  await Promise.all([refreshCacheStats(), refreshDiagnostics()]);
+  await Promise.all([refreshCacheStats(), refreshDiagnostics(), refreshUsage()]);
 }
 
 async function refreshDiagnostics() {
@@ -106,7 +112,35 @@ async function refreshCacheStats() {
     $("cacheStats").textContent = `缓存统计：读取失败${response?.error ? `（${response.error}）` : ""}`;
     return;
   }
-  $("cacheStats").textContent = `缓存统计：${response.entries || 0} 条译文缓存`;
+  $("cacheStats").textContent = `缓存统计：${Number(response.entries || 0).toLocaleString()} 条译文缓存`;
+}
+
+function formatUsageBucket(bucket = {}) {
+  const azure = bucket.azure || {};
+  const google = bucket.googleWeb || {};
+  return `Azure ${Number(azure.chars || 0).toLocaleString()} 字符 / ${Number(azure.requests || 0).toLocaleString()} 请求 · ` +
+    `Google ${Number(google.chars || 0).toLocaleString()} 字符 / ${Number(google.requests || 0).toLocaleString()} 请求 · ` +
+    `缓存命中 ${Number(bucket.cacheHits || 0).toLocaleString()} 条`;
+}
+
+async function refreshUsage() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_USAGE_STATS" });
+  if (!response?.ok) {
+    $("usageToday").textContent = `今日用量：读取失败${response?.error ? `（${response.error}）` : ""}`;
+    $("usageMonth").textContent = "本月用量：读取失败";
+    return;
+  }
+  const usage = response.usage || {};
+  $("usageToday").textContent = `今日用量（${usage.dayKey || "-"}）：${formatUsageBucket(usage.day)}`;
+  $("usageMonth").textContent = `本月用量（${usage.monthKey || "-"}）：${formatUsageBucket(usage.month)}`;
+}
+
+async function pruneCache() {
+  await save({ showStatus: false, reload: false });
+  const response = await chrome.runtime.sendMessage({ type: "FT_PRUNE_CACHE" });
+  if (!response?.ok) throw new Error(response?.error || "整理失败");
+  await refreshCacheStats();
+  setStatus(`缓存整理完成：删除 ${response.deleted || 0} 条，剩余 ${response.remaining || 0} 条`);
 }
 
 async function clearCache() {
@@ -116,10 +150,20 @@ async function clearCache() {
   setStatus("翻译缓存已清空");
 }
 
+async function resetUsage() {
+  const response = await chrome.runtime.sendMessage({ type: "FT_RESET_USAGE_STATS" });
+  if (!response?.ok) throw new Error(response?.error || "重置失败");
+  await refreshUsage();
+  setStatus("本地用量统计已重置");
+}
+
 $("provider").addEventListener("change", toggleProviderSections);
 $("save").addEventListener("click", () => save().catch(error => setStatus(`保存失败：${error?.message || error}`)));
 $("testEngine").addEventListener("click", () => testEngine().catch(error => setStatus(`测试失败：${error?.message || error}`)));
+$("refreshUsage").addEventListener("click", () => refreshUsage().catch(error => setStatus(`用量读取失败：${error?.message || error}`)));
+$("resetUsage").addEventListener("click", () => resetUsage().catch(error => setStatus(`重置失败：${error?.message || error}`)));
 $("refreshCacheStats").addEventListener("click", () => refreshCacheStats().catch(error => setStatus(`统计失败：${error?.message || error}`)));
+$("pruneCache").addEventListener("click", () => pruneCache().catch(error => setStatus(`整理失败：${error?.message || error}`)));
 $("clearCache").addEventListener("click", () => clearCache().catch(error => setStatus(`清理失败：${error?.message || error}`)));
 
 load().catch(error => setStatus(`加载失败：${error?.message || error}`));
