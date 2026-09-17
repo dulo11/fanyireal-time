@@ -6,7 +6,7 @@ const root = path.resolve(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 
-assert.equal(manifest.version, '1.1.0');
+assert.equal(manifest.version, '1.2.0');
 assert.equal(manifest.background.service_worker, 'background/main.js');
 
 const scripts = manifest.content_scripts?.[0]?.js || [];
@@ -28,15 +28,31 @@ assert.match(compat, /globalThis,\s*["']chrome["']/);
 assert.match(compat, /__FT_BROWSER_FAMILY__/);
 
 const backgroundMain = read('background/main.js');
+assert.match(backgroundMain, /crypto-lite\.js/);
 assert.match(backgroundMain, /glossary-core\.js/);
 assert.match(backgroundMain, /service-worker\.js/);
+assert.match(backgroundMain, /provider-pool\.js/);
 assert.match(backgroundMain, /glossary-runtime\.js/);
 assert.match(backgroundMain, /runtime-telemetry\.js/);
 assert.match(backgroundMain, /cache-stats\.js/);
 assert.match(backgroundMain, /runtime-extras\.js/);
 
+const providerPool = read('background/provider-pool.js');
+assert.match(providerPool, /providerPoolEnabled/);
+assert.match(providerPool, /azureCredentials/);
+assert.match(providerPool, /baiduCredentials/);
+assert.match(providerPool, /aliyunCredentials/);
+assert.match(providerPool, /providerCooldownMs/);
+assert.match(providerPool, /FT_PROVIDER_POOL_STATUS/);
+assert.match(providerPool, /api\.cognitive\.microsofttranslator\.com/);
+assert.match(providerPool, /fanyi-api\.baidu\.com/);
+assert.match(providerPool, /mt\.cn-hangzhou\.aliyuncs\.com/);
+assert.match(providerPool, /HMAC-SHA1/);
+assert.match(providerPool, /md5Hex/);
+
 const telemetry = read('background/runtime-telemetry.js');
 assert.match(telemetry, /translationRuntimeStateV1/);
+assert.match(telemetry, /providerPoolLastRouteV1/);
 assert.match(telemetry, /actualRoute/);
 assert.match(telemetry, /google-fallback/);
 assert.match(telemetry, /globalThis\.translateBatch/);
@@ -100,6 +116,17 @@ assert.match(options, /includeAzureKey/);
 assert.match(options, /siteInputLanguagesV1/);
 assert.match(options, /glossaryEntries/);
 assert.match(options, /FT_USAGE_STATS/);
-assert.match(read('options/options.html'), /\.\.\/compat\/browser-api\.js/);
+
+const poolUi = read('options/provider-pool-ui.js');
+assert.match(poolUi, /savePool/);
+assert.match(poolUi, /bindAdd/);
+assert.match(poolUi, /FT_PROVIDER_POOL_STATUS/);
+assert.match(poolUi, /providerCooldownMs/);
+const optionHtml = read('options/options.html');
+assert.match(optionHtml, /\.\.\/compat\/browser-api\.js/);
+assert.match(optionHtml, /provider-pool-ui\.js/);
+for (const id of ['addAzureCredential', 'addBaiduCredential', 'addAliyunCredential', 'saveProviderPool', 'providerPoolStatus']) {
+  assert.match(optionHtml, new RegExp(`id=["']${id}["']`));
+}
 
 console.log('runtime hardening tests passed');

@@ -18,6 +18,8 @@ main {
 }
 
 h1 { margin: 0; font-size: 26px; }
+h2 { margin: 0 0 14px; font-size: 16px; }
+h3 { margin: 22px 0 10px; font-size: 14px; }
 .sub { margin: 6px 0 22px; color: #747883; }
 
 section {
@@ -28,7 +30,6 @@ section {
   background: #fff;
 }
 
-h2 { margin: 0 0 14px; font-size: 16px; }
 label { display: block; margin: 12px 0; }
 label > span { display: block; margin-bottom: 6px; color: #5e626d; font-size: 13px; }
 
@@ -58,6 +59,7 @@ textarea {
 
 .check-row { display: flex; align-items: center; gap: 9px; }
 .check-row span { margin: 0; color: inherit; }
+.compact-check { margin: 0; }
 .note { margin: 10px 0 0; color: #7c808a; font-size: 12px; line-height: 1.6; }
 
 .actions {
@@ -83,7 +85,42 @@ textarea {
 
 .actions button:active { transform: translateY(1px); }
 .actions button.primary { border-color: #6d4aff; background: #6d4aff; color: #fff; }
-#status { font-size: 13px; color: #4f8d3f; }
+#status, #providerPoolSaveStatus { font-size: 13px; color: #4f8d3f; }
+
+.provider-order-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.credential-card {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid #e3e5eb;
+  border-radius: 12px;
+  background: #fafbfe;
+}
+
+.credential-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.credential-actions { margin-top: 8px; }
+.credential-actions button { min-height: 36px; min-width: 105px; font-size: 13px; }
+
+.pool-status {
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px solid #e3e5eb;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f7f8fb;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 
 @media (prefers-color-scheme: dark) {
   body { background: #17181c; color: #f2f3f7; }
@@ -96,6 +133,7 @@ textarea {
   .actions button { background: #272a31; border-color: #414550; }
   .actions button.primary { background: #7b61ff; border-color: #7b61ff; }
   label > span, .sub, .note { color: #a8acb6; }
+  .credential-card, .pool-status { background: #1d1f24; border-color: #343741; }
 }
 
 @media (max-width: 560px) {
@@ -103,4 +141,6 @@ textarea {
   section { padding: 14px; border-radius: 13px; }
   .actions { align-items: stretch; }
   .actions button { flex: 1 1 180px; }
+  .provider-order-grid { grid-template-columns: 1fr; }
+  .credential-head { align-items: flex-start; flex-direction: column; }
 }

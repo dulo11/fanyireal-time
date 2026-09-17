@@ -9,33 +9,71 @@
 <body>
   <main>
     <h1>FloatingTranslator Browser</h1>
-    <p class="sub">v1.1 Cross-Browser · Chromium / Firefox 兼容主线</p>
+    <p class="sub">v1.2 Multi-Provider · Chromium / Firefox 多引擎主线</p>
 
     <section>
-      <h2>翻译引擎</h2>
-      <label><span>主引擎</span><select id="provider"><option value="azure">Microsoft / Azure Translator（推荐）</option><option value="google-web">Google Web（实验性，无 Key）</option></select></label>
-      <label class="check-row"><input id="fallbackGoogle" type="checkbox"><span>Azure 失败时自动回退到 Google Web</span></label>
+      <h2>基础翻译引擎</h2>
+      <label><span>旧版单引擎模式</span><select id="provider"><option value="azure">Microsoft / Azure Translator</option><option value="google-web">Google Web（实验性，无 Key）</option></select></label>
+      <label class="check-row"><input id="fallbackGoogle" type="checkbox"><span>正式引擎失败时允许 Google Web 最后兜底</span></label>
       <p id="engineStatus" class="note">引擎状态：正在读取…</p>
       <p id="runtimeStatus" class="note">最近实际翻译路径：正在读取…</p>
-      <p class="note">“最近实际翻译路径”会区分 Azure、Google 回退、直接 Google 和缓存命中，方便定位到底走了哪个引擎。</p>
+      <p class="note">开启下面“多引擎 / 多 Key 池”后，真正的翻译顺序由凭据池控制；这里保留旧版设置用于兼容和迁移。</p>
+    </section>
+
+    <section id="providerPoolSection">
+      <h2>多引擎 / 多 Key 池</h2>
+      <label class="check-row"><input id="providerPoolEnabled" type="checkbox"><span>启用多引擎自动切换</span></label>
+      <label><span>临时故障冷却时间（秒）</span><input id="providerCooldownSeconds" type="number" min="5" max="3600" step="5" value="60"></label>
+      <p class="note">429、5xx、超时等临时故障会立即换下一个凭据/引擎；冷却结束后自动允许再次尝试。401/403、签名错误等认证问题不会每分钟重复撞接口，修改凭据后才恢复。</p>
+
+      <h3>翻译优先顺序</h3>
+      <div class="provider-order-grid">
+        <label><span>优先级 1</span><select id="providerOrder1"></select></label>
+        <label><span>优先级 2</span><select id="providerOrder2"></select></label>
+        <label><span>优先级 3</span><select id="providerOrder3"></select></label>
+        <label><span>优先级 4</span><select id="providerOrder4"></select></label>
+      </div>
+
+      <h3>Azure Key 池</h3>
+      <div id="azureCredentials"></div>
+      <div class="actions"><button id="addAzureCredential" type="button">+ 添加 Azure Key</button></div>
+
+      <h3>百度翻译凭据池</h3>
+      <div id="baiduCredentials"></div>
+      <div class="actions"><button id="addBaiduCredential" type="button">+ 添加百度凭据</button></div>
+      <p class="note">百度当前官方推荐 APPID + API Key（Bearer）；也兼容 APPID + 传统密钥的 MD5 sign 鉴权。本插件默认请求机器翻译 nmt，避免无意切到大模型翻译。</p>
+
+      <h3>阿里云翻译凭据池</h3>
+      <div id="aliyunCredentials"></div>
+      <div class="actions"><button id="addAliyunCredential" type="button">+ 添加阿里云凭据</button></div>
+      <p class="note">阿里云使用 AccessKey ID + Secret，扩展在本机按官方 ROA HMAC-SHA1 规则生成签名。Secret 仅保存在浏览器本地设置中，不会提交到 GitHub。</p>
+
+      <div class="actions">
+        <button id="saveProviderPool" class="primary" type="button">保存多引擎配置</button>
+        <button id="refreshProviderPoolStatus" type="button">刷新状态</button>
+        <button id="resetProviderPoolHealth" type="button">立即解除冷却</button>
+        <span id="providerPoolSaveStatus"></span>
+      </div>
+      <pre id="providerPoolStatus" class="pool-status">凭据池状态：正在读取…</pre>
+      <p class="note">建议只填写你自己拥有并有权使用的凭据。多 Key 池用于容灾、分环境和故障切换，不应拿来规避服务商限额或计费规则。</p>
     </section>
 
     <section id="azureSection">
-      <h2>Microsoft / Azure Translator</h2>
+      <h2>旧版 Azure 单 Key（兼容）</h2>
       <label><span>Endpoint</span><input id="azureEndpoint" type="url" placeholder="https://api.cognitive.microsofttranslator.com"></label>
       <label><span>Region</span><input id="azureRegion" type="text" placeholder="例如 eastasia；按你的 Azure 资源填写"></label>
       <label><span>Key</span><input id="azureKey" type="password" autocomplete="off" placeholder="留空表示不修改已保存 Key"></label>
-      <label class="check-row"><input id="clearAzureKey" type="checkbox"><span>清除本机已保存的 Key</span></label>
+      <label class="check-row"><input id="clearAzureKey" type="checkbox"><span>清除本机已保存的旧版 Key</span></label>
       <label><span>单次请求超时（毫秒）</span><input id="requestTimeoutMs" type="number" min="3000" max="45000" step="1000" value="15000"></label>
       <label><span>失败自动重试次数</span><input id="maxRetries" type="number" min="0" max="5" step="1" value="3"></label>
-      <p class="note">网页文本会自动去重、合批；429/5xx/超时会指数退避。可隔离的坏文本只重试失败项。</p>
+      <p class="note">如果多 Key 池里还没有 Azure 凭据，v1.2 会自动把这里已有的 Key 当作“Azure 原有 Key”继续使用。</p>
     </section>
 
     <section>
       <h2>行为</h2>
       <label class="check-row"><input id="enabled" type="checkbox"><span>启用扩展</span></label>
       <label class="check-row"><input id="autoTranslate" type="checkbox"><span>打开网页后自动持续翻译</span></label>
-      <p class="note">v1.1 保留长网页、动态内容、属性文字、Shadow DOM、术语表、排除区域、防覆盖恢复、暂停续跑和精确失败重试。</p>
+      <p class="note">保留长网页、动态内容、属性文字、Shadow DOM、术语表、排除区域、防覆盖恢复、暂停续跑和精确失败重试。</p>
     </section>
 
     <section>
@@ -44,7 +82,7 @@
       <label class="check-row"><input id="glossaryCaseSensitive" type="checkbox"><span>区分英文大小写</span></label>
       <label><span>每行一个规则：原文 =&gt; 固定译文</span><textarea id="glossaryText" rows="10" spellcheck="false" placeholder="OpenAI => OpenAI&#10;ChatGPT => ChatGPT&#10;Cloudflare Workers => Cloudflare Workers"></textarea></label>
       <p id="glossaryStatus" class="note">术语表：正在读取…</p>
-      <p class="note">最多 300 条。匹配术语按你指定的译文固定输出，其他部分继续走翻译引擎。</p>
+      <p class="note">最多 300 条。匹配术语按你指定的译文固定输出，其他部分继续走当前翻译路由。</p>
     </section>
 
     <section>
@@ -52,7 +90,7 @@
       <p id="usageToday" class="note">今日用量：正在读取…</p>
       <p id="usageMonth" class="note">本月用量：正在读取…</p>
       <div class="actions"><button id="refreshUsage">刷新用量</button><button id="resetUsage">重置本地用量统计</button></div>
-      <p class="note">这里只统计扩展实际发出的字符和请求，用于估算和排查，不替代官方账单。</p>
+      <p class="note">旧统计主要记录 Azure / Google Web。百度、阿里云的实际使用路径会在“最近翻译路径”和凭据池状态中显示，后续再统一扩展到完整多引擎账本。</p>
     </section>
 
     <section>
@@ -65,25 +103,26 @@
 
     <section>
       <h2>诊断与设置备份</h2>
-      <label class="check-row"><input id="includeAzureKey" type="checkbox"><span>导出备份时包含 Azure Key（默认不包含）</span></label>
+      <label class="check-row"><input id="includeAzureKey" type="checkbox"><span>导出旧版设置时包含 Azure Key（默认不包含）</span></label>
       <div class="actions">
         <button id="copyDiagnostics">复制诊断信息</button>
         <button id="exportSettings">导出设置 JSON</button>
         <button id="importSettings">导入设置 JSON</button>
       </div>
       <input id="importFile" type="file" accept="application/json,.json" hidden>
-      <p class="note">诊断信息不会包含 Azure Key。设置备份默认也不包含 Key；只有你主动勾选上面开关时才会写入导出文件。</p>
+      <p class="note">现有设置备份默认不导出多引擎 Secret。需要迁移多 Key 池时，暂时建议在目标浏览器重新填写密钥，避免把所有 Secret 打进一个明文 JSON。</p>
     </section>
 
     <section>
       <h2>维护</h2>
-      <div class="actions"><button id="testEngine">保存并测试翻译引擎</button></div>
-      <p class="note">测试会先保存当前 Endpoint / Region / Key 和术语表，再执行一条短文本翻译。</p>
+      <div class="actions"><button id="testEngine">保存并测试当前翻译路由</button></div>
+      <p class="note">测试会先保存旧版兼容设置和术语表；多引擎凭据请先点上面的“保存多引擎配置”。</p>
     </section>
 
-    <div class="actions"><button id="save" class="primary">保存设置</button><span id="status"></span></div>
+    <div class="actions"><button id="save" class="primary">保存基础设置</button><span id="status"></span></div>
   </main>
   <script src="../compat/browser-api.js"></script>
   <script src="options.js"></script>
+  <script src="provider-pool-ui.js"></script>
 </body>
 </html>
