@@ -67,4 +67,19 @@ public class RegressionTest {
         assertTrue(OfflineFirstTranslationRouter.sameLanguage("in-ID", "id"));
         assertTrue(OfflineFirstTranslationRouter.sameLanguage("zh-CN", "zh"));
     }
+
+    @Test public void asrControlTokensNeverReachConversation() {
+        assertEquals("", AsrTranscriptGuard.clean("<|endoftext|>"));
+        assertEquals("hello world", AsrTranscriptGuard.clean("hello <|endoftext|> world"));
+        assertEquals("你好", AsrTranscriptGuard.clean("<|startoftranscript|> 你好 <|endoftext|>"));
+    }
+
+    @Test public void shortLatinHeavyCodeSwitchIsNotMisclassifiedAsChineseSpeaker() {
+        assertEquals("en", AsrTranscriptGuard.stabilizeLanguage("OK OK，好啊，有。", "zh", "zh"));
+    }
+
+    @Test public void distinctiveJapaneseAndKoreanScriptsOverrideNoisyLanguageTag() {
+        assertEquals("ja", AsrTranscriptGuard.stabilizeLanguage("hello こんにちは", "en", "zh"));
+        assertEquals("ko", AsrTranscriptGuard.stabilizeLanguage("안녕하세요", "en", "zh"));
+    }
 }
