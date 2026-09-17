@@ -1,1 +1,1 @@
-importScripts("service-worker.js", "cache-stats.js");
+importScripts("service-worker.js", "cache-stats.js", "runtime-extras.js");
