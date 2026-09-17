@@ -1,84 +1,63 @@
-# FloatingTranslator Browser v0.9 Complete
+# FloatingTranslator Browser v1.0 RC
 
-v0.9 继续只做 Chromium 主版本，不展开 X浏览器 / UserScript / Firefox / Safari 兼容层。目标是先把主版本的日常使用能力做完整，再统一进行 Quetta / Chrome / Edge 实测。
+v1.0 RC 是 Chromium 主版本的正式测试候选版。此阶段继续不展开 X浏览器 / UserScript / Firefox / Safari 兼容层，先集中验证 Quetta / Chrome / Edge 等 Chromium 环境。
 
-## v0.9 新增
+## v1.0 RC 新增
 
-### 1. 术语表 / 固定翻译
+### 实际翻译路径诊断
 
-高级设置新增术语表，每行使用：
+高级设置和 Popup 现在会记录最近一次翻译实际走的路径：
 
-```text
-原文 => 固定译文
-```
+- Azure
+- Google Web 直接翻译
+- Azure 失败后的 Google 回退
+- 纯缓存命中
 
-例如：
+同时记录耗时、时间、源/目标语言、文本数量和最近错误。诊断信息可一键复制，且不会包含 Azure Key。
 
-```text
-OpenAI => OpenAI
-ChatGPT => ChatGPT
-Cloudflare Workers => Cloudflare Workers
-```
+### 设置备份 / 恢复
 
-支持：
+高级设置支持导出和导入 JSON：
 
-- 最多 300 条
-- 可选择是否区分英文大小写
-- 人名、品牌、产品名固定不翻
-- 专业术语固定成指定译文
-- 术语之外的文字继续交给 Azure / Google
-- 正文、属性文字、聊天输入、Shadow DOM、右键翻译共用同一套术语表
+- 全局翻译设置
+- Azure Endpoint / Region（默认不导出 Key）
+- 缓存设置
+- 术语表
+- 网站规则
+- 页面区域排除
+- 按网站保存的输入语言组合
 
-术语固定片段不会单独发给翻译服务；高级设置会检查格式错误行。
+Azure Key 默认不会进入备份文件。只有用户主动勾选“包含 Azure Key”时才会导出。
 
-### 2. 页面区域排除
+### 按网站记住输入翻译语言
 
-Popup 新增“选择不翻译区域”。点击后回到网页，直接点想排除的区域即可。
+聊天输入语言会按 hostname 保存。例如：
 
-适合：
+- `web.telegram.org`：中文 → 英语
+- `web.whatsapp.com`：中文 → 日语
+- 另一个网站：自动检测 → 中文
 
-- 代码区
-- 在线编辑器
-- 用户名 / ID
-- 金额、订单信息附近的特殊控件
-- 某些翻译后会破坏功能的网页组件
+重新进入网站后会自动恢复该网站最近一次输入语言组合。
 
-排除规则按网站保存，并支持一键清除此网站全部排除。页面原本带有 `translate="no"`、`.notranslate`、`data-no-translate` 等标记时也会自动尊重。
+## v0.9 Complete 能力继续保留
 
-### 3. 输入翻译增强
+- 术语表 / 固定翻译，最多 300 条
+- 正文、属性、聊天输入、Shadow DOM、右键翻译共用术语表
+- 页面区域点选排除
+- `translate="no"` / `.notranslate` / `data-no-translate` 等原生排除标记
+- 输入预览：仅复制译文、交换语言、本次输入框暂停预览
+- 正文译文防覆盖
+- 双语译文节点自动补回
+- Open Shadow DOM 防覆盖
+- `placeholder / title / aria-label / alt / button value` 属性防覆盖
 
-聊天输入预览新增：
+## v0.8 Complete 能力继续保留
 
-- 仅复制译文，不修改输入框
-- 交换输入语言 / 发送语言
-- 当前输入框临时暂停实时预览
-- 多输入框仍保持独立防抖和请求序号
-- 不自动点击发送
-
-当源语言为“自动检测”时，交换语言按钮会要求先指定具体源语言，避免把 `auto` 当成目标语言。
-
-### 4. 译文防覆盖
-
-某些 React / Vue / 聊天网页会周期性重绘 DOM，把扩展写入的译文重新覆盖成原文。v0.9 会记住已经完成的翻译：
-
-- 网页把正文恢复成原文时，直接恢复已有译文
-- 不重新调用 Azure / Google
-- 双语模式的译文节点被移除时会重新补上
-- Open Shadow DOM 同样保护
-- `placeholder / title / aria-label / alt / 按钮 value` 等属性被恢复成原文时也会直接恢复译文
-- Popup 会显示正文“防覆盖恢复”次数，便于判断网站是否频繁重绘
-
-如果网页把文字真正改成了新的内容，则不会强行覆盖新内容，而是按新文本重新进入翻译流程。
-
-## v0.8 能力继续保留
-
-- `placeholder / title / aria-label / alt / 按钮 value` 属性翻译
 - 暂停 / 继续，保留已有译文和剩余队列
 - 精确失败重试，只重试失败文本
-- Azure / Google Web 今日与本月字符、请求统计
-- 本地缓存命中统计
-- IndexedDB 默认 30,000 条 / 30 天自动清理
-- 手动整理 / 清空缓存
+- Azure / Google 今日与本月字符和请求统计
+- IndexedDB 缓存统计、自动整理、手动整理与清空
+- 默认最多 30,000 条、30 天缓存
 
 ## 主版本完整能力
 
@@ -105,28 +84,28 @@ Popup 新增“选择不翻译区域”。点击后回到网页，直接点想�
 - 多输入框独立实时预览
 - 一键替换 / 复制译文
 - Alt + Enter 立即翻译输入框
-- “补扫遗漏内容”不恢复已经翻好的正文
+- 补扫遗漏内容
 - 引擎诊断、用量统计、缓存统计
 
 ## 自动构建与回归测试
 
 GitHub Actions 会：
 
-1. 校验 Manifest 和所有声明的脚本路径。
-2. 校验术语表核心、术语运行时、区域排除、正文、聊天、属性翻译等模块。
+1. 校验 Manifest 与所有脚本路径。
+2. 校验术语表、运行时遥测、网站输入语言、区域排除、正文、聊天和属性模块。
 3. 对全部 JS / CJS 执行 `node --check`。
-4. 运行语言识别、术语表和完整运行时回归测试。
+4. 运行语言识别、术语表与完整运行时回归测试。
 5. 自动读取 Manifest 版本。
-6. 生成 `FloatingTranslator-Browser-v0.9.0.zip`。
+6. 生成 `FloatingTranslator-Browser-v1.0.0.zip`。
 7. 上传 Actions Artifact。
 
-## 当前测试范围
+## 测试范围
 
-主版本稳定前只测试 Chromium：
+优先集中测试：
 
 - Quetta Android
 - Chrome Desktop
 - Edge Desktop
 - Brave / Vivaldi / Opera 等 Chromium 桌面浏览器
 
-X浏览器 UserScript、Firefox、Safari 等兼容版本继续暂缓，等 Chromium 完全版集中测试稳定后再做。
+兼容版本等 v1.0 主线实际测试稳定后再做。
