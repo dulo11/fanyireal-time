@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "0.1.0",
-  "description": "持续翻译整个网页，并自动翻译动态加载的新内容。",
+  "version": "0.2.0",
+  "description": "持续翻译整个网页、动态内容和聊天输入，并增强 Shadow DOM 页面兼容。",
   "permissions": [
     "storage",
     "activeTab",
@@ -21,7 +21,10 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
+      "js": [
+        "content/content.js",
+        "content/v02-enhancements.js"
+      ],
       "css": ["styles/injected.css"],
       "run_at": "document_idle",
       "all_frames": true,
