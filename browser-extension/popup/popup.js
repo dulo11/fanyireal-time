@@ -112,10 +112,11 @@ async function refreshPageState() {
   if (response.processing) pieces.push("处理中");
   if (response.queued) pieces.push(`待翻译 ${response.queued}`);
   if (response.processed) pieces.push(`已翻译 ${response.processed}`);
-  if (response.failed) pieces.push(`失败 ${response.failed}`);
+  if (response.retried) pieces.push(`自动续跑 ${response.retried}`);
+  if (response.failed) pieces.push(`失败批次 ${response.failed}`);
   if (settings.chatMode && settings.inputPreview) pieces.push("聊天输入预览开");
   $("pageState").textContent = pieces.join(" · ");
-  if (response.lastError) $("pageState").title = response.lastError;
+  $("pageState").title = response.lastError || "";
 }
 
 async function init() {
