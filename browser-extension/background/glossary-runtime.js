@@ -26,16 +26,16 @@
 
   async function wrappedTranslateBatch(texts, options = {}) {
     const clean = Array.isArray(texts) ? texts.map(value => String(value ?? "")) : [];
+    if (!clean.length) return [];
+
     const config = await getGlossaryConfig();
-    if (!config.enabled || !config.entries.length || !clean.length) {
-      return baseTranslateBatch(clean, options);
-    }
+    if (!config.enabled || !config.entries.length) return baseTranslateBatch(clean, options);
 
     const plans = clean.map(text => FTGlossary.planText(text, config.entries, config.caseSensitive));
     if (!plans.some(FTGlossary.hasFixedTerms)) return baseTranslateBatch(clean, options);
 
     const work = [];
-    const refs = [];
+    const workIndex = new Map();
     plans.forEach((plan, textIndex) => {
       plan.forEach((segment, segmentIndex) => {
         if (segment.type !== "translate") return;
@@ -43,24 +43,24 @@
           segment.type = "literal";
           return;
         }
-        refs.push({ textIndex, segmentIndex });
+        workIndex.set(`${textIndex}:${segmentIndex}`, work.length);
         work.push(segment.text);
       });
     });
 
     const translated = work.length ? await baseTranslateBatch(work, options) : [];
-    const output = clean.map((_, textIndex) => {
-      const plan = plans[textIndex];
+    return plans.map((plan, textIndex) => {
       const translatedSegments = [];
-      for (const segment of plan) {
-        if (segment.type !== "translate") continue;
-        const refIndex = refs.findIndex(ref => ref.textIndex === textIndex && ref.segmentIndex === plan.indexOf(segment));
-        translatedSegments.push(refIndex >= 0 ? translated[refIndex] : segment.text);
-      }
+      plan.forEach((segment, segmentIndex) => {
+        if (segment.type !== "translate") return;
+        const index = workIndex.get(`${textIndex}:${segmentIndex}`);
+        translatedSegments.push(index == null ? segment.text : (translated[index] ?? segment.text));
+      });
       return FTGlossary.renderPlan(plan, translatedSegments);
     });
-    return output;
   }
 
+  // service-worker.js 通过经典 worker 脚本加载，顶层函数绑定与 globalThis 属性相连。
+  // 在这里替换后，正文、输入框、属性、Shadow DOM 和右键翻译都会统一走术语表。
   globalThis.translateBatch = wrappedTranslateBatch;
 })();
