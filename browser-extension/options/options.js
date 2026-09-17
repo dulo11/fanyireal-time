@@ -14,54 +14,77 @@ const LOCAL_DEFAULTS = {
   glossaryEntries: []
 };
 
+const SYNC_BACKUP_KEYS = [
+  "enabled", "autoTranslate", "sourceLang", "targetLang", "displayMode", "siteRules",
+  "skipTargetLanguage", "chatMode", "inputPreview", "inputSourceLang", "inputTargetLang", "inputPreviewDelay"
+];
+const LOCAL_BACKUP_KEYS = [
+  "translationProvider", "fallbackGoogle", "azureEndpoint", "azureRegion", "requestTimeoutMs", "maxRetries",
+  "cacheMaxEntries", "cacheTtlDays", "glossaryEnabled", "glossaryCaseSensitive", "glossaryEntries",
+  "siteExclusionsV1", "siteInputLanguagesV1"
+];
+const BACKUP_SCHEMA = "floating-translator-settings";
+const BACKUP_VERSION = 1;
 const $ = id => document.getElementById(id);
+
+function pick(source, keys) {
+  const out = {};
+  for (const key of keys) if (source?.[key] !== undefined) out[key] = source[key];
+  return out;
+}
 
 function parseGlossaryText(value) {
   const entries = [];
   const invalid = [];
   const seen = new Set();
-  const lines = String(value || "").split(/\r?\n/);
-
-  lines.forEach((raw, index) => {
+  String(value || "").split(/\r?\n/).forEach((raw, index) => {
     const line = raw.trim();
     if (!line || line.startsWith("#")) return;
     const match = line.match(/^(.*?)\s*(?:=>|→|->)\s*(.+)$/);
-    if (!match) {
-      invalid.push(index + 1);
-      return;
-    }
+    if (!match) return invalid.push(index + 1);
     const source = match[1].trim();
     const target = match[2].trim();
-    if (!source || !target) {
-      invalid.push(index + 1);
-      return;
-    }
+    if (!source || !target) return invalid.push(index + 1);
     if (seen.has(source)) return;
     seen.add(source);
     entries.push({ source, target });
   });
-
   return { entries: entries.slice(0, 300), invalid, truncated: entries.length > 300 };
 }
 
 function serializeGlossary(entries) {
-  return (Array.isArray(entries) ? entries : [])
-    .map(item => {
-      const source = String(item?.source ?? item?.from ?? "").trim();
-      const target = String(item?.target ?? item?.to ?? "").trim();
-      return source && target ? `${source} => ${target}` : "";
-    })
-    .filter(Boolean)
-    .join("\n");
+  return (Array.isArray(entries) ? entries : []).map(item => {
+    const source = String(item?.source ?? item?.from ?? "").trim();
+    const target = String(item?.target ?? item?.to ?? "").trim();
+    return source && target ? `${source} => ${target}` : "";
+  }).filter(Boolean).join("\n");
 }
 
 function refreshGlossaryStatus() {
   const parsed = parseGlossaryText($("glossaryText").value);
   const notes = [`有效规则 ${parsed.entries.length} 条`];
   if (parsed.invalid.length) notes.push(`格式错误行：${parsed.invalid.slice(0, 8).join("、")}${parsed.invalid.length > 8 ? "…" : ""}`);
-  if (parsed.truncated) notes.push("超过 300 条，保存时只保留前 300 条");
+  if (parsed.truncated) notes.push("超过 300 条，只保存前 300 条");
   $("glossaryStatus").textContent = `术语表：${notes.join(" · ")}`;
   return parsed;
+}
+
+function setStatus(message) {
+  $("status").textContent = message;
+  clearTimeout(setStatus.timer);
+  setStatus.timer = setTimeout(() => $("status").textContent = "", 4600);
+}
+
+function toggleProviderSections() {
+  $("azureSection").hidden = $("provider").value !== "azure";
+}
+
+function routeLabel(route) {
+  if (route === "azure") return "Azure";
+  if (route === "google-web") return "Google Web";
+  if (route === "google-fallback") return "Google 回退";
+  if (route === "cache") return "缓存";
+  return route || "暂无记录";
 }
 
 async function load() {
@@ -69,7 +92,6 @@ async function load() {
     chrome.storage.sync.get(SYNC_DEFAULTS),
     chrome.storage.local.get(null)
   ]);
-
   const local = { ...LOCAL_DEFAULTS, ...localRaw };
   if (local.translationProvider === "oci-proxy") local.translationProvider = "azure";
 
@@ -87,28 +109,15 @@ async function load() {
   $("glossaryText").value = serializeGlossary(local.glossaryEntries);
   $("enabled").checked = Boolean(sync.enabled);
   $("autoTranslate").checked = Boolean(sync.autoTranslate);
+  $("includeAzureKey").checked = false;
   toggleProviderSections();
   refreshGlossaryStatus();
   await Promise.all([refreshCacheStats(), refreshDiagnostics(), refreshUsage()]);
 }
 
-function toggleProviderSections() {
-  $("azureSection").hidden = $("provider").value !== "azure";
-}
-
-function setStatus(message) {
-  $("status").textContent = message;
-  clearTimeout(setStatus.timer);
-  setStatus.timer = setTimeout(() => $("status").textContent = "", 4200);
-}
-
 async function save({ showStatus = true, reload = true } = {}) {
   const parsedGlossary = refreshGlossaryStatus();
-  const sync = {
-    enabled: $("enabled").checked,
-    autoTranslate: $("autoTranslate").checked
-  };
-
+  const sync = { enabled: $("enabled").checked, autoTranslate: $("autoTranslate").checked };
   const local = {
     translationProvider: $("provider").value,
     fallbackGoogle: $("fallbackGoogle").checked,
@@ -122,22 +131,15 @@ async function save({ showStatus = true, reload = true } = {}) {
     glossaryCaseSensitive: $("glossaryCaseSensitive").checked,
     glossaryEntries: parsedGlossary.entries
   };
-
   if ($("clearAzureKey").checked) local.azureKey = "";
   else if ($("azureKey").value.trim()) local.azureKey = $("azureKey").value.trim();
 
   await Promise.all([
-    chrome.storage.sync.set(sync),
-    chrome.storage.local.set(local),
-    chrome.storage.local.remove(["ociProxyEndpoint", "ociProxyToken"])
+    chrome.storage.sync.set(sync), chrome.storage.local.set(local), chrome.storage.local.remove(["ociProxyEndpoint", "ociProxyToken"])
   ]);
-
   $("azureKey").value = "";
   $("clearAzureKey").checked = false;
-  if (showStatus) {
-    const suffix = parsedGlossary.invalid.length ? `；${parsedGlossary.invalid.length} 行格式错误未保存` : "";
-    setStatus(`已保存${suffix}`);
-  }
+  if (showStatus) setStatus(`已保存${parsedGlossary.invalid.length ? `；${parsedGlossary.invalid.length} 行格式错误未保存` : ""}`);
   if (reload) await load();
 }
 
@@ -146,9 +148,7 @@ async function testEngine() {
   await save({ showStatus: false, reload: false });
   setStatus("正在测试…");
   const response = await chrome.runtime.sendMessage({
-    type: "FT_TRANSLATE",
-    texts: ["Hello, this is a translation test."],
-    options: { sourceLang: "en", targetLang: "zh-CN" }
+    type: "FT_TRANSLATE", texts: ["Hello, this is a translation test."], options: { sourceLang: "en", targetLang: "zh-CN" }
   });
   if (!response?.ok) throw new Error(response?.error || "测试失败");
   setStatus(`测试成功：${response.translations?.[0] || "已返回译文"}`);
@@ -159,6 +159,7 @@ async function refreshDiagnostics() {
   const response = await chrome.runtime.sendMessage({ type: "FT_DIAGNOSTICS" });
   if (!response?.ok) {
     $("engineStatus").textContent = `引擎状态：读取失败${response?.error ? `（${response.error}）` : ""}`;
+    $("runtimeStatus").textContent = "最近实际翻译路径：读取失败";
     return;
   }
   const d = response.diagnostics || {};
@@ -166,6 +167,12 @@ async function refreshDiagnostics() {
   const key = d.provider === "google-web" ? "无需 Key" : (d.azureKeySet ? "Key 已设置" : "Key 未设置");
   const fallback = d.fallbackGoogle ? "Google 回退开启" : "Google 回退关闭";
   $("engineStatus").textContent = `引擎状态：${provider} · ${key} · ${fallback}`;
+  const r = d.lastRuntime;
+  if (!r) $("runtimeStatus").textContent = "最近实际翻译路径：暂无记录";
+  else {
+    const at = r.at ? new Date(r.at).toLocaleString() : "-";
+    $("runtimeStatus").textContent = `最近实际翻译路径：${routeLabel(r.actualRoute)} · ${r.ok === false ? "失败" : "成功"} · ${r.durationMs || 0}ms · ${at}`;
+  }
 }
 
 async function refreshCacheStats() {
@@ -181,8 +188,7 @@ function formatUsageBucket(bucket = {}) {
   const azure = bucket.azure || {};
   const google = bucket.googleWeb || {};
   return `Azure ${Number(azure.chars || 0).toLocaleString()} 字符 / ${Number(azure.requests || 0).toLocaleString()} 请求 · ` +
-    `Google ${Number(google.chars || 0).toLocaleString()} 字符 / ${Number(google.requests || 0).toLocaleString()} 请求 · ` +
-    `缓存命中 ${Number(bucket.cacheHits || 0).toLocaleString()} 条`;
+    `Google ${Number(google.chars || 0).toLocaleString()} 字符 / ${Number(google.requests || 0).toLocaleString()} 请求 · 缓存命中 ${Number(bucket.cacheHits || 0).toLocaleString()} 条`;
 }
 
 async function refreshUsage() {
@@ -219,6 +225,63 @@ async function resetUsage() {
   setStatus("本地用量统计已重置");
 }
 
+async function diagnosticObject() {
+  const [diagnostics, usage, cache] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "FT_DIAGNOSTICS" }),
+    chrome.runtime.sendMessage({ type: "FT_USAGE_STATS" }),
+    chrome.runtime.sendMessage({ type: "FT_CACHE_STATS" })
+  ]);
+  return {
+    product: "FloatingTranslator Browser",
+    version: chrome.runtime.getManifest().version,
+    generatedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    diagnostics: diagnostics?.diagnostics || null,
+    usage: usage?.usage || null,
+    cacheEntries: cache?.entries ?? null
+  };
+}
+
+async function copyDiagnostics() {
+  const data = await diagnosticObject();
+  if (data.diagnostics) delete data.diagnostics.azureKey;
+  await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+  setStatus("诊断信息已复制，不包含 Azure Key");
+}
+
+async function exportSettings() {
+  const [syncRaw, localRaw] = await Promise.all([chrome.storage.sync.get(null), chrome.storage.local.get(null)]);
+  const localKeys = $("includeAzureKey").checked ? [...LOCAL_BACKUP_KEYS, "azureKey"] : LOCAL_BACKUP_KEYS;
+  const payload = {
+    schema: BACKUP_SCHEMA,
+    schemaVersion: BACKUP_VERSION,
+    extensionVersion: chrome.runtime.getManifest().version,
+    exportedAt: new Date().toISOString(),
+    sync: pick(syncRaw, SYNC_BACKUP_KEYS),
+    local: pick(localRaw, localKeys)
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `FloatingTranslator-settings-v${chrome.runtime.getManifest().version}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setStatus($("includeAzureKey").checked ? "设置已导出（包含 Azure Key，请妥善保管）" : "设置已导出（未包含 Azure Key）");
+}
+
+async function importSettingsFile(file) {
+  const text = await file.text();
+  const parsed = JSON.parse(text);
+  if (parsed?.schema !== BACKUP_SCHEMA || Number(parsed?.schemaVersion) !== BACKUP_VERSION) throw new Error("不是支持的 FloatingTranslator 设置备份");
+  const sync = pick(parsed.sync || {}, SYNC_BACKUP_KEYS);
+  const local = pick(parsed.local || {}, [...LOCAL_BACKUP_KEYS, "azureKey"]);
+  if (local.translationProvider === "oci-proxy") local.translationProvider = "azure";
+  await Promise.all([chrome.storage.sync.set(sync), chrome.storage.local.set(local)]);
+  setStatus(`设置恢复成功${local.azureKey !== undefined ? "（备份中包含 Key）" : "（保留当前 Key）"}`);
+  await load();
+}
+
 $("provider").addEventListener("change", toggleProviderSections);
 $("glossaryText").addEventListener("input", refreshGlossaryStatus);
 $("save").addEventListener("click", () => save().catch(error => setStatus(`保存失败：${error?.message || error}`)));
@@ -228,5 +291,13 @@ $("resetUsage").addEventListener("click", () => resetUsage().catch(error => setS
 $("refreshCacheStats").addEventListener("click", () => refreshCacheStats().catch(error => setStatus(`统计失败：${error?.message || error}`)));
 $("pruneCache").addEventListener("click", () => pruneCache().catch(error => setStatus(`整理失败：${error?.message || error}`)));
 $("clearCache").addEventListener("click", () => clearCache().catch(error => setStatus(`清理失败：${error?.message || error}`)));
+$("copyDiagnostics").addEventListener("click", () => copyDiagnostics().catch(error => setStatus(`复制失败：${error?.message || error}`)));
+$("exportSettings").addEventListener("click", () => exportSettings().catch(error => setStatus(`导出失败：${error?.message || error}`)));
+$("importSettings").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", event => {
+  const file = event.target.files?.[0];
+  if (file) importSettingsFile(file).catch(error => setStatus(`导入失败：${error?.message || error}`));
+  event.target.value = "";
+});
 
 load().catch(error => setStatus(`加载失败：${error?.message || error}`));
