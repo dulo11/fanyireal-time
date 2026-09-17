@@ -39,7 +39,9 @@
         "content/content.js",
         "content/v02-enhancements.js",
         "content/mixed-page-guard.js",
-        "content/attribute-translator.js"
+        "content/attribute-translator.js",
+        "content/floating-panel-bridge.js",
+        "content/floating-panel.js"
       ],
       "css": ["styles/injected.css"],
       "run_at": "document_idle",
