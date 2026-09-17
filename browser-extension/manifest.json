@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "0.5.0",
-  "description": "持续翻译网页、动态内容和聊天输入，以 Microsoft/Azure Translator 为主引擎并支持 Google Web 故障回退。",
+  "version": "0.6.0",
+  "description": "持续翻译网页、动态内容和聊天输入，以 Microsoft/Azure Translator 为主引擎；v0.6 同步提供 X浏览器/Tampermonkey UserScript 版。",
   "permissions": [
     "storage",
     "activeTab",
