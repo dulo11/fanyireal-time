@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "浮译",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "浮译浏览器版：多引擎、多 Key 池、智能冷却、Google Web 兜底、长网页持续翻译与网页悬浮控制。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqzoZE8AVXK7Z3+4vKQxnPuOjbLLkFzvnEe4C44M+Hk+Qbv2jz/xt/KjvoI3rXkFo9MvkUuuwzx7qoBTwBzBmhDVu9Me/6ifowPaep24tPLphjZCGN+zXfidsTMZwC2tP5rxE6BCsNdajDe9aR6Z59lNZPCOAnx5w2HTQh8EDrA41zgszTJcvMI8nfkpdqQ37mGg/jEbbIpouUHeHJ6B1sAfwWwlKIdbf6guSn6Ld4n8X9vys8Hz48ckqZfSfDQXedXgx9MMa5PT/759PSM5Jg1DQ+9E8dc268KDLw3i66KgPSLl6qdarVk0ZctLlqYRuIc902Ptl0Z+u1CylsuD2PQIDAQAB",
   "update_url": "https://raw.githubusercontent.com/dulo11/fanyireal-time/extension-update-channel/updates.xml",
