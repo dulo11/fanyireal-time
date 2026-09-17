@@ -8,7 +8,7 @@ const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const chromium = JSON.parse(read('manifest.json'));
 const firefox = JSON.parse(read('compat/firefox/manifest.json'));
 
-assert.equal(chromium.version, '1.1.0');
+assert.equal(chromium.version, '1.2.0');
 assert.equal(firefox.version, chromium.version);
 assert.equal(chromium.background.service_worker, 'background/main.js');
 assert.ok(Array.isArray(firefox.background.scripts));
@@ -18,8 +18,10 @@ assert.equal(firefox.browser_specific_settings.gecko.strict_min_version, '121.0'
 
 const expectedFirefoxBackground = [
   'compat/browser-api.js',
+  'shared/crypto-lite.js',
   'shared/glossary-core.js',
   'background/service-worker.js',
+  'background/provider-pool.js',
   'background/glossary-runtime.js',
   'background/runtime-telemetry.js',
   'background/cache-stats.js',
@@ -39,5 +41,6 @@ assert.equal(firefox.content_scripts[0].js[0], 'compat/browser-api.js');
 assert.match(read('compat/browser-api.js'), /moz-extension/);
 assert.match(read('popup/popup.html'), /compat\/browser-api\.js/);
 assert.match(read('options/options.html'), /compat\/browser-api\.js/);
+assert.match(read('options/options.html'), /provider-pool-ui\.js/);
 
 console.log('cross-browser manifest tests passed');
