@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FloatingTranslator Browser",
-  "version": "1.1.0",
-  "description": "Firefox 兼容版：Azure 主引擎、Google Web 备用、长网页持续翻译、聊天输入、术语表与诊断。",
+  "version": "1.2.0",
+  "description": "Firefox 多引擎版：Azure 多 Key 池、百度/阿里云、智能冷却、Google Web 兜底与持续网页翻译。",
   "permissions": [
     "storage",
     "activeTab",
@@ -14,8 +14,10 @@
   "background": {
     "scripts": [
       "compat/browser-api.js",
+      "shared/crypto-lite.js",
       "shared/glossary-core.js",
       "background/service-worker.js",
+      "background/provider-pool.js",
       "background/glossary-runtime.js",
       "background/runtime-telemetry.js",
       "background/cache-stats.js",
