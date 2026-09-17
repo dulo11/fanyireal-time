@@ -24,6 +24,12 @@
         <input id="autoTranslate" type="checkbox">
         <span>自动持续翻译网页</span>
       </label>
+      <div class="host">关闭后不会再随网页自动翻译，只在你点“重新翻译整页”或“补扫遗漏内容”时运行。</div>
+      <label class="check-row">
+        <input id="fallbackGoogleQuick" type="checkbox">
+        <span>Azure 失败时自动使用 Google Web 备用</span>
+      </label>
+      <div class="host">Google Web 在本扩展里无需 API Key、不会走付费账号；它属于非正式 Web 接口，可能被限流或失效。关闭后 Azure 失败就直接报错，不再自动调用 Google。</div>
       <label class="check-row">
         <input id="skipTargetLanguage" type="checkbox">
         <span>自动跳过已经是目标语言的文本</span>
@@ -47,7 +53,7 @@
           <option value="bilingual">原文 + 译文</option>
         </select>
       </label>
-      <div class="host">v0.9 会保护已经翻好的文字；网页脚本把译文覆盖回原文时会直接恢复，不重复调用翻译接口。</div>
+      <div class="host">v1.0 RC 会保护已经翻好的文字；网页脚本把译文覆盖回原文时直接恢复，不重复请求。</div>
     </section>
 
     <section class="card">
@@ -72,7 +78,7 @@
       <div class="actions">
         <button id="swapInputLang">交换输入语言</button>
       </div>
-      <div class="host">输入预览里新增“仅复制译文 / 交换语言 / 本次输入暂停预览”。自动检测作为源语言时不能直接交换，先指定源语言即可。</div>
+      <div class="host">v1.0 会按网站记住最后一次“输入语言 → 发送语言”。输入预览仍支持仅复制、交换和本次输入暂停预览。</div>
     </section>
 
     <section class="card">
@@ -86,6 +92,7 @@
       </label>
       <div id="host" class="host"></div>
       <div id="exclusionCount" class="host">排除区域：正在读取…</div>
+      <div id="runtimeRoute" class="host">最近翻译路径：正在读取…</div>
       <div class="actions">
         <button id="pickExclusion">选择不翻译区域</button>
         <button id="clearExclusions">清除此网站排除</button>
@@ -100,8 +107,8 @@
       <button id="restorePage">恢复原文</button>
     </div>
 
-    <div class="tip">暂停后会保留当前译文和剩余队列；继续时从剩余内容接着跑。术语表在高级设置中维护。</div>
-    <button id="openOptions" class="link-button">翻译引擎、术语表、用量与缓存设置 ›</button>
+    <div class="tip">暂停后保留当前译文和剩余队列；继续后接着跑。高级设置里可以导出/恢复配置和复制诊断信息。</div>
+    <button id="openOptions" class="link-button">翻译引擎、术语表、诊断与备份 ›</button>
   </main>
   <script src="popup.js"></script>
 </body>

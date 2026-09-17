@@ -1,5 +1,6 @@
 const FT_RUNTIME_DB = "floating-translator-cache";
 const FT_RUNTIME_STORE = "translations";
+const FT_RUNTIME_STATE_KEY = "translationRuntimeStateV1";
 
 function openRuntimeDb() {
   return new Promise((resolve, reject) => {
@@ -35,7 +36,8 @@ async function diagnosticsSnapshot() {
       fallbackGoogle: true,
       azureEndpoint: "https://api.cognitive.microsofttranslator.com",
       azureRegion: "",
-      azureKey: ""
+      azureKey: "",
+      [FT_RUNTIME_STATE_KEY]: null
     }),
     runtimeCacheCount().catch(() => 0)
   ]);
@@ -53,7 +55,8 @@ async function diagnosticsSnapshot() {
     targetLang: sync.targetLang,
     skipTargetLanguage: sync.skipTargetLanguage !== false,
     chatMode: Boolean(sync.chatMode),
-    inputPreview: Boolean(sync.inputPreview)
+    inputPreview: Boolean(sync.inputPreview),
+    lastRuntime: local[FT_RUNTIME_STATE_KEY] || null
   };
 }
 

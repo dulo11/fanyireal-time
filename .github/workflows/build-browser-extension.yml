@@ -11,6 +11,7 @@ on:
       - feature/browser-translator-v0.7-complete
       - feature/browser-translator-v0.8-complete
       - feature/browser-translator-v0.9-complete
+      - feature/browser-translator-v1.0-rc
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -40,9 +41,11 @@ jobs:
           test -f browser-extension/background/main.js
           test -f browser-extension/background/service-worker.js
           test -f browser-extension/background/glossary-runtime.js
+          test -f browser-extension/background/runtime-telemetry.js
           test -f browser-extension/background/cache-stats.js
           test -f browser-extension/background/runtime-extras.js
           test -f browser-extension/content/site-exclusions.js
+          test -f browser-extension/content/site-input-profile.js
           test -f browser-extension/content/content.js
           test -f browser-extension/content/v02-enhancements.js
           test -f browser-extension/content/mixed-page-guard.js
@@ -66,7 +69,7 @@ jobs:
               for rel in block.get('css', []):
                   assert (root / rel).is_file(), rel
           main = (root / 'background/main.js').read_text(encoding='utf-8')
-          for rel in ['../shared/glossary-core.js', 'service-worker.js', 'glossary-runtime.js', 'cache-stats.js', 'runtime-extras.js']:
+          for rel in ['../shared/glossary-core.js', 'service-worker.js', 'glossary-runtime.js', 'runtime-telemetry.js', 'cache-stats.js', 'runtime-extras.js']:
               assert rel in main, rel
           PY
 
