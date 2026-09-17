@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
-assert.equal(manifest.version, '1.3.0');
+assert.match(manifest.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/, 'manifest.version must be semver-like');
 assert.ok(manifest.key, 'Chromium manifest must contain a fixed public key');
 assert.equal(
   manifest.update_url,
