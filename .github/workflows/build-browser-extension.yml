@@ -8,12 +8,15 @@ on:
       - feature/browser-translator-v0.3
       - feature/browser-translator-v0.4
       - feature/browser-translator-v0.5-azure
+      - feature/browser-translator-v0.6-userscript
     paths:
       - 'browser-extension/**'
+      - 'userscript/**'
       - '.github/workflows/build-browser-extension.yml'
   pull_request:
     paths:
       - 'browser-extension/**'
+      - 'userscript/**'
       - '.github/workflows/build-browser-extension.yml'
   workflow_dispatch:
 
@@ -37,6 +40,8 @@ jobs:
           test -f browser-extension/content/v02-enhancements.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
+          test -f userscript/FloatingTranslator.user.js
+          test -f userscript/README.md
 
       - name: Validate JavaScript syntax
         shell: bash
@@ -46,6 +51,16 @@ jobs:
             echo "Checking $file"
             node --check "$file"
           done < <(find browser-extension -type f -name '*.js' -print0)
+          node --check userscript/FloatingTranslator.user.js
+
+      - name: Validate UserScript metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^// ==UserScript==$' userscript/FloatingTranslator.user.js
+          grep -q '^// @version      0.6.0$' userscript/FloatingTranslator.user.js
+          grep -q '^// @grant        GM_xmlhttpRequest$' userscript/FloatingTranslator.user.js
+          grep -q '^// @connect      api.cognitive.microsofttranslator.com$' userscript/FloatingTranslator.user.js
 
       - name: Read extension version
         id: version
@@ -71,10 +86,32 @@ jobs:
           cd ..
           unzip -l "dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip"
 
+      - name: Package UserScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/userscript
+          cp userscript/FloatingTranslator.user.js "dist/userscript/FloatingTranslator-v${{ steps.version.outputs.version }}.user.js"
+          cp userscript/README.md dist/userscript/README.md
+          cd dist/userscript
+          zip -r "../FloatingTranslator-UserScript-v${{ steps.version.outputs.version }}.zip" .
+          cd ../..
+          unzip -l "dist/FloatingTranslator-UserScript-v${{ steps.version.outputs.version }}.zip"
+
       - name: Upload extension ZIP
         uses: actions/upload-artifact@v4
         with:
           name: FloatingTranslator-Browser-v${{ steps.version.outputs.version }}
           path: dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload UserScript ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: FloatingTranslator-UserScript-v${{ steps.version.outputs.version }}
+          path: |
+            dist/FloatingTranslator-UserScript-v${{ steps.version.outputs.version }}.zip
+            dist/userscript/FloatingTranslator-v${{ steps.version.outputs.version }}.user.js
           if-no-files-found: error
           retention-days: 30
