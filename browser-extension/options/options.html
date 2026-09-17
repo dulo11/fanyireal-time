@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>FloatingTranslator Browser</h1>
-    <p class="sub">翻译引擎与高级设置</p>
+    <p class="sub">完整翻译引擎与高级设置</p>
 
     <section>
       <h2>翻译引擎</h2>
@@ -24,7 +24,7 @@
         <input id="fallbackGoogle" type="checkbox">
         <span>Azure 失败时自动回退到 Google Web</span>
       </label>
-      <p class="note">v0.5 起移除 Oracle OCI。默认优先 Azure；Google Web 只用于零配置测试或故障回退。</p>
+      <p class="note">v0.7 以 Azure 为正式主引擎。连续失败会短暂熔断 Azure，避免长网页反复卡死；恢复后自动重试。</p>
     </section>
 
     <section id="azureSection">
@@ -45,7 +45,15 @@
         <input id="clearAzureKey" type="checkbox">
         <span>清除本机已保存的 Key</span>
       </label>
-      <p class="note">Key 只保存在当前浏览器的本地扩展存储，不写入 GitHub。v0.5 已把网页节点合并成批量 Azure 请求，减少大量小请求。</p>
+      <label>
+        <span>单次请求超时（毫秒）</span>
+        <input id="requestTimeoutMs" type="number" min="3000" max="45000" step="1000" value="15000">
+      </label>
+      <label>
+        <span>失败自动重试次数</span>
+        <input id="maxRetries" type="number" min="0" max="5" step="1" value="3">
+      </label>
+      <p class="note">网页文本会自动去重、合批；429/5xx/超时会指数退避重试。超长文本会拆段后再合并。</p>
     </section>
 
     <section>
@@ -58,7 +66,16 @@
         <input id="autoTranslate" type="checkbox">
         <span>打开网页后自动持续翻译</span>
       </label>
-      <p class="note">动态加载的新帖子、评论和聊天消息会自动加入翻译队列；相同文本优先读取本地缓存。</p>
+      <p class="note">长页面采用增量扫描，不再只翻译最前面几段；动态帖子、评论、聊天消息和 Open Shadow DOM 会继续跟进。</p>
+    </section>
+
+    <section>
+      <h2>维护</h2>
+      <div class="actions">
+        <button id="testEngine">测试翻译引擎</button>
+        <button id="clearCache">清空翻译缓存</button>
+      </div>
+      <p class="note">测试只翻译一条很短的测试文本。清缓存不会删除 Azure Key 或其他设置。</p>
     </section>
 
     <div class="actions">
