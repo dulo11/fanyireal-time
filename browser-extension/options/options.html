@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>FloatingTranslator Browser</h1>
-    <p class="sub">v1.0 RC · 正式测试候选版</p>
+    <p class="sub">v1.1 Cross-Browser · Chromium / Firefox 兼容主线</p>
 
     <section>
       <h2>翻译引擎</h2>
@@ -35,7 +35,7 @@
       <h2>行为</h2>
       <label class="check-row"><input id="enabled" type="checkbox"><span>启用扩展</span></label>
       <label class="check-row"><input id="autoTranslate" type="checkbox"><span>打开网页后自动持续翻译</span></label>
-      <p class="note">v1.0 保留长网页、动态内容、属性文字、Shadow DOM、术语表、排除区域、防覆盖恢复、暂停续跑和精确失败重试。</p>
+      <p class="note">v1.1 保留长网页、动态内容、属性文字、Shadow DOM、术语表、排除区域、防覆盖恢复、暂停续跑和精确失败重试。</p>
     </section>
 
     <section>
@@ -83,6 +83,7 @@
 
     <div class="actions"><button id="save" class="primary">保存设置</button><span id="status"></span></div>
   </main>
+  <script src="../compat/browser-api.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
