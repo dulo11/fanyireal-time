@@ -31,6 +31,12 @@
   const trackedElements = new Set();
 
   const helper = () => globalThis.FTLanguage;
+  const exclusions = () => globalThis.FTSiteExclusions;
+
+  function isExcluded(element) {
+    try { return Boolean(exclusions()?.isExcluded?.(element)); }
+    catch { return false; }
+  }
 
   function siteRule() {
     try { return settings.siteRules?.[location.hostname] || "default"; }
@@ -81,7 +87,7 @@
   }
 
   function isEligible(element, attr) {
-    if (!enabled() || !element?.isConnected || element.dataset?.ftOwned === "1") return false;
+    if (!enabled() || !element?.isConnected || element.dataset?.ftOwned === "1" || isExcluded(element)) return false;
     const value = String(element.getAttribute(attr) || "").trim();
     if (value.length < 2 || !/[\p{L}\p{M}]/u.test(value)) return false;
     if (/^(https?:\/\/|www\.)\S+$/i.test(value)) return false;
@@ -109,8 +115,9 @@
 
   function scan(root = document) {
     if (!enabled() || !root) return;
+    if (root instanceof Element && isExcluded(root)) return;
     const inspect = element => {
-      if (!(element instanceof Element)) return;
+      if (!(element instanceof Element) || isExcluded(element)) return;
       for (const attr of attributeNames(element)) enqueue(element, attr);
     };
     if (root instanceof Element && root.matches?.(SELECTOR)) inspect(root);
@@ -124,7 +131,7 @@
   }
 
   function requeueFailed(item) {
-    if (!item.element?.isConnected) return;
+    if (!item.element?.isConnected || isExcluded(item.element)) return;
     const map = retryMapFor(item.element);
     const count = (map.get(item.attr) || 0) + 1;
     map.set(item.attr, count);
@@ -151,7 +158,7 @@
       }
 
       items.forEach((item, index) => {
-        if (!item.element?.isConnected) return;
+        if (!item.element?.isConnected || isExcluded(item.element)) return;
         const current = item.element.getAttribute(item.attr) || "";
         if (current !== item.original) return;
         const translated = response.translations?.[index];
@@ -193,9 +200,14 @@
         if (mutation.type === "attributes") {
           const element = mutation.target;
           const attr = mutation.attributeName;
+          if (isExcluded(element)) continue;
           const record = records.get(element)?.get(attr);
           const current = element.getAttribute(attr) || "";
           if (record && current === record.rendered) continue;
+          if (record && current === record.original) {
+            element.setAttribute(attr, record.rendered);
+            continue;
+          }
           if (record && current !== record.original) records.get(element)?.delete(attr);
           enqueue(element, attr);
           continue;
@@ -217,6 +229,11 @@
     const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage"]
       .some(key => previous[key] !== settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(settings.siteRules);
     if (changed) restoreAll();
+    if (enabled()) scan(document);
+  }
+
+  function handleExclusionsChanged() {
+    restoreAll();
     if (enabled()) scan(document);
   }
 
@@ -251,8 +268,10 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
+  window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
 
   async function init() {
+    try { await exclusions()?.ready; } catch {}
     await loadSettings();
     startObserver();
     scan(document);
