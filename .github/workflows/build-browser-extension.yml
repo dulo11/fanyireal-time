@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/browser-translator-v0.1
+      - feature/browser-translator-v0.2
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -23,15 +24,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate manifest
+      - name: Validate manifest and required files
         shell: bash
         run: |
           set -euo pipefail
           python -m json.tool browser-extension/manifest.json >/dev/null
           test -f browser-extension/background/service-worker.js
           test -f browser-extension/content/content.js
+          test -f browser-extension/content/v02-enhancements.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
+
+      - name: Validate JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            echo "Checking $file"
+            node --check "$file"
+          done < <(find browser-extension -type f -name '*.js' -print0)
 
       - name: Read extension version
         id: version
