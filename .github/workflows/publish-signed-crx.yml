@@ -5,12 +5,15 @@ on:
   push:
     tags:
       - 'browser-v*'
+    branches:
+      - feature/browser-translator-v1.3-signed-update
 
 permissions:
   contents: write
 
 jobs:
   publish-signed-crx:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/browser-v') || contains(github.event.head_commit.message, '[publish-crx]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
