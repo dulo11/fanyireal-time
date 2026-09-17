@@ -9,6 +9,7 @@ on:
       - feature/browser-translator-v0.4
       - feature/browser-translator-v0.5-azure
       - feature/browser-translator-v0.7-complete
+      - feature/browser-translator-v0.8-complete
     paths:
       - 'browser-extension/**'
       - '.github/workflows/build-browser-extension.yml'
@@ -41,6 +42,7 @@ jobs:
           test -f browser-extension/content/content.js
           test -f browser-extension/content/v02-enhancements.js
           test -f browser-extension/content/mixed-page-guard.js
+          test -f browser-extension/content/attribute-translator.js
           test -f browser-extension/popup/popup.html
           test -f browser-extension/options/options.html
           test -f browser-extension/tests/language-core.test.cjs
