@@ -74,12 +74,12 @@ public class RegressionTest {
         assertEquals("你好", AsrTranscriptGuard.clean("<|startoftranscript|> 你好 <|endoftext|>"));
     }
 
-    @Test public void shortLatinHeavyCodeSwitchIsNotMisclassifiedAsChineseSpeaker() {
-        assertEquals("en", AsrTranscriptGuard.stabilizeLanguage("OK OK，好啊，有。", "zh", "zh"));
+    @Test public void mixedLatinWordsDoNotInventEnglish() {
+        assertEquals("zh", AsrTranscriptGuard.stabilizeLanguage("OK OK，好啊，有。", "zh", "zh"));
     }
 
-    @Test public void distinctiveJapaneseAndKoreanScriptsOverrideNoisyLanguageTag() {
-        assertEquals("ja", AsrTranscriptGuard.stabilizeLanguage("hello こんにちは", "en", "zh"));
-        assertEquals("ko", AsrTranscriptGuard.stabilizeLanguage("안녕하세요", "en", "zh"));
+    @Test public void incompatibleScriptDiscardsNoisyTagWithoutInventingLanguage() {
+        assertEquals("en", AsrTranscriptGuard.stabilizeLanguage("hello こんにちは", "en", "zh"));
+        assertEquals("", AsrTranscriptGuard.stabilizeLanguage("안녕하세요", "en", "zh"));
     }
 }

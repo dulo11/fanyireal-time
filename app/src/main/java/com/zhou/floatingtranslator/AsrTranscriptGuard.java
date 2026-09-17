@@ -1,7 +1,6 @@
 package com.zhou.floatingtranslator;
 
 import java.util.Locale;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Small, dependency-free cleanup layer between ASR output and translation routing. */
@@ -13,7 +12,6 @@ final class AsrTranscriptGuard {
     private static final Pattern BRACKET_CONTROL = Pattern.compile(
         "(?i)\\[(?:blank_audio|silence|noise|music|no_speech|endoftext)\\]"
     );
-    private static final Pattern LATIN_WORD = Pattern.compile("[A-Za-z]{2,}");
 
     private AsrTranscriptGuard() {}
 
@@ -40,51 +38,30 @@ final class AsrTranscriptGuard {
         return meaningful ? value : "";
     }
 
-    /**
-     * ASR language IDs on very short code-switch utterances can flip to the user's language.
-     * Do not let a short, clearly Latin-heavy mixed sentence be treated as the local speaker only
-     * because a few Han characters were hallucinated phonetically (for example an English phrase
-     * decoded partly as Chinese characters). The transcript itself is left untouched; this only
-     * protects speaker/direction routing. Qwen3 is preferred in Auto mode to reduce the bad decode
-     * at the source.
-     */
+    /** Preserve provider evidence; do not invent English from Latin words or force the user's language. */
     static String stabilizeLanguage(String text, String detected, String myLanguage) {
-        String value = clean(text);
         String lang = normalizeTag(detected);
-        String mine = normalizeTag(myLanguage);
-        if (value.isEmpty()) return lang;
-
-        int kana = 0;
-        int hangul = 0;
-        int han = 0;
-        int latinLetters = 0;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c >= '\u3040' && c <= '\u30ff') kana++;
-            else if (c >= '\uac00' && c <= '\ud7af') hangul++;
-            else if ((c >= '\u3400' && c <= '\u9fff') || (c >= '\uf900' && c <= '\ufaff')) han++;
-            else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) latinLetters++;
-        }
-
-        // Distinctive scripts are stronger evidence than a noisy model language tag.
-        if (kana > 0) return "ja";
-        if (hangul > 0) return "ko";
-
-        int latinWords = 0;
-        Matcher matcher = LATIN_WORD.matcher(value);
-        while (matcher.find()) latinWords++;
-
-        boolean detectedAsMe = !mine.isEmpty() && sameLanguage(lang, mine);
-        boolean cjkMyLanguage = "zh".equals(mine) || "ja".equals(mine) || "ko".equals(mine);
-        boolean shortMixed = latinWords >= 2 && latinLetters >= 4 && han <= 5;
-        if (detectedAsMe && cjkMyLanguage && shortMixed) return "en";
-
-        return lang;
+        return ConversationLanguagePolicy.scriptCompatible(clean(text), lang) ? lang : "";
     }
 
     static String normalizeTag(String raw) {
         if (raw == null) return "";
         String value = raw.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+        value = value.replace("<|", "").replace("|>", "");
+        switch (value) {
+            case "english": return "en";
+            case "chinese": case "mandarin": return "zh";
+            case "japanese": return "ja";
+            case "korean": return "ko";
+            case "vietnamese": return "vi";
+            case "malay": return "ms";
+            case "tagalog": case "filipino": return "tl";
+            case "indonesian": return "id";
+            case "thai": return "th";
+            case "cantonese": return "yue";
+            case "auto": case "und": case "unknown": return "";
+            default: break;
+        }
         int dash = value.indexOf('-');
         if (dash > 0) value = value.substring(0, dash);
         if ("fil".equals(value)) return "tl";

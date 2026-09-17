@@ -301,7 +301,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 Decoded chosen = first;
                 String chosenVisible = firstVisible;
 
-                boolean shouldReview = PROFILE_ACCURACY.equals(conversationProfile)
+                boolean shouldReview = LANG_SINGLE.equals(languageMode)
+                    && PROFILE_ACCURACY.equals(conversationProfile)
                     && reviewSamples != null
                     && reviewSamples.length > primarySamples.length
                     && (forceReview || lowQuality(firstVisible, rawDurationMs));
@@ -655,6 +656,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             case "ja": return "ja";
             case "ko": return "ko";
             case "en": return "en";
+            case "yue": return "yue";
             default: return "auto";
         }
     }
@@ -671,7 +673,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             case "th": return "th";
             case "id": return "id";
             case "en": return "en";
-            default: return "";
+            default: return AsrTranscriptGuard.normalizeTag(sourceLanguage);
         }
     }
 

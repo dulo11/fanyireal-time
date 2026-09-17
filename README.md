@@ -12,3 +12,7 @@
 - API Key 继续按现有本地方式保存；不做 APK 瘦身。
 
 推荐：中英日混说优先 Qwen3-ASR 0.6B INT8；综合多语言可用 Whisper Medium INT8；性能与准确率平衡可用 Whisper Small INT8。
+
+## 0.7.2.3 连续对话语言修复
+
+新增自动双向、限定双方语言双向、固定输入三种模式。英语短句易误识别时可固定输入为英语、我的语言为中文。详细支持范围和测试限制见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。

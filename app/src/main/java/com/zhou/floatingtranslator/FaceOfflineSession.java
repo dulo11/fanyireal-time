@@ -36,7 +36,7 @@ final class FaceOfflineSession implements AutoCloseable {
             LanguageOption.ALL.length - 1));
         myLanguage = LanguageOption.ALL[targetIndex].mlKitTag;
 
-        String resolvedEngine = resolveAutoConversationEngine(context, engine, auto, prefs);
+        String resolvedEngine = engine; // The UI selects and validates the actual engine once.
         if ("vosk".equals(resolvedEngine)) {
             vosk = new OfflineSpeechEngine(context, language, new OfflineSpeechEngine.Callback() {
                 public void onStatus(String text) { if (!closed) callback.status(text); }
@@ -66,34 +66,7 @@ final class FaceOfflineSession implements AutoCloseable {
             callback.status("持续监听 · 已忽略 ASR 控制标记/空结果");
             return;
         }
-        String stableLanguage = AsrTranscriptGuard.stabilizeLanguage(cleaned, language, myLanguage);
-        callback.result(cleaned, stableLanguage);
-    }
-
-    /**
-     * Face-to-face Auto mode is optimized for language switching rather than the normal realtime
-     * battery/latency balance. Prefer Qwen3 when installed, then Whisper Medium/Small. Explicit
-     * user model selections are never replaced here.
-     */
-    private static String resolveAutoConversationEngine(Context context, String requested,
-                                                        boolean autoLanguage, SharedPreferences prefs) {
-        if (!autoLanguage || !"auto".equals(prefs.getString("face_asr", "auto"))) return requested;
-        OfflineModelStore store = new OfflineModelStore(context);
-        try {
-            String[] preference = {
-                TranslationService.ASR_QWEN3,
-                TranslationService.ASR_WHISPER_MEDIUM,
-                TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_OMNILINGUAL,
-                TranslationService.ASR_SENSEVOICE
-            };
-            for (String id : preference) {
-                if (store.isInstalled(id)) return id;
-            }
-            return requested;
-        } finally {
-            store.close();
-        }
+        callback.result(cleaned, AsrTranscriptGuard.normalizeTag(language));
     }
 
     private void startCapture(String name) {

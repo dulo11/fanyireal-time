@@ -50,6 +50,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     private volatile boolean closed;
     private volatile String partnerLanguage;
     private volatile String lastDetectedLanguage = "";
+    private String lastTargetLanguage = "";
     private final Set<TranslationRouter> activeRouters = Collections.synchronizedSet(new HashSet<>());
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -63,7 +64,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         this.target = normalizeTag(target);
         this.partnerLanguage = this.source;
         this.autoLanguage = prefs.getBoolean(PREF_AUTO_LANGUAGE, true);
-        this.languageIdentifier = autoLanguage ? LanguageIdentification.getClient() : null;
+        this.languageIdentifier = (autoLanguage || conversationMode) ? LanguageIdentification.getClient() : null;
         this.speechRouter = new TranslationRouter(this.context, this.source, this.target, this.selectedEngine);
     }
 
@@ -180,6 +181,53 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         translatePair(text, source, target,
             " · 面对面识别不确定，使用备用 " + source + "→" + target, callback);
     }
+
+    /** Continuous conversation uses explicit mode + independently checked language evidence. */
+    public void translateConversation(String text, String asrLanguage, String mode, String fixedInput, Callback callback) {
+        if (closed) return;
+        String cleaned = AsrTranscriptGuard.clean(text);
+        if (cleaned.isEmpty()) { callback.onError("没有可翻译文字"); return; }
+        String asr = normalizeTag(asrLanguage);
+        if (!isSupportedTranslationLanguage(asr)) asr = "";
+        final String hint = asr;
+        if (ConversationLanguagePolicy.FIXED.equals(mode) || languageIdentifier == null) {
+            finishConversationRoute(cleaned, hint, "", 0f, mode, fixedInput, callback);
+            return;
+        }
+        languageIdentifier.identifyPossibleLanguages(cleaned).addOnSuccessListener(candidates -> {
+            if (closed) return;
+            String detected = "";
+            float best = 0f, runnerUp = 0f;
+            for (com.google.mlkit.nl.languageid.IdentifiedLanguage candidate : candidates) {
+                String language = normalizeTag(candidate.getLanguageTag());
+                if (!isSupportedTranslationLanguage(language)) continue;
+                float confidence = candidate.getConfidence();
+                if (confidence > best) { runnerUp = best; best = confidence; detected = language; }
+                else runnerUp = Math.max(runnerUp, confidence);
+            }
+            if (best - runnerUp < 0.20f) best = 0f;
+            finishConversationRoute(cleaned, hint, detected, best, mode, fixedInput, callback);
+        }).addOnFailureListener(e -> {
+            if (!closed) finishConversationRoute(cleaned, hint, "", 0f, mode, fixedInput, callback);
+        });
+    }
+
+    private void finishConversationRoute(String text, String asr, String detected, float confidence,
+                                          String mode, String fixedInput, Callback callback) {
+        ConversationLanguagePolicy.Route route = ConversationLanguagePolicy.decide(mode, target, source,
+            partnerLanguage, fixedInput, text, asr, detected, confidence);
+        if (!route.valid()) {
+            lastDetectedLanguage = ""; lastTargetLanguage = "";
+            callback.onError(route.error); return;
+        }
+        lastDetectedLanguage = route.source;
+        lastTargetLanguage = route.target;
+        partnerLanguage = route.partner;
+        translatePair(text, route.source, route.target,
+            " · " + route.source + "→" + route.target + " · " + route.reason, callback);
+    }
+
+    public String lastTargetLanguage() { return lastTargetLanguage; }
 
     public String partnerLanguage() { return partnerLanguage; }
     public String lastDetectedLanguage() { return lastDetectedLanguage; }
@@ -324,16 +372,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         return false;
     }
 
-    private static String normalizeTag(String value) {
-        if (value == null) return "";
-        String normalized = value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
-        int dash = normalized.indexOf('-');
-        if (dash > 0) normalized = normalized.substring(0, dash);
-        if ("fil".equals(normalized)) return "tl";
-        if ("iw".equals(normalized)) return "he";
-        if ("in".equals(normalized)) return "id";
-        return normalized;
-    }
+    private static String normalizeTag(String value) { return AsrTranscriptGuard.normalizeTag(value); }
 
     static boolean shouldPreferConfiguredSourceForShortText(String text) {
         if (text == null) return true;
