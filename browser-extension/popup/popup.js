@@ -12,6 +12,10 @@ const DEFAULTS = {
   inputTargetLang: "en"
 };
 
+const LOCAL_DEFAULTS = {
+  fallbackGoogle: true
+};
+
 const SITE_INPUT_KEY = "siteInputLanguagesV1";
 const LANGUAGES = [
   ["auto", "自动检测"],
@@ -25,6 +29,7 @@ const $ = id => document.getElementById(id);
 let activeTab = null;
 let currentHost = "";
 let settings = { ...DEFAULTS };
+let localSettings = { ...LOCAL_DEFAULTS };
 let pagePaused = false;
 
 function appendLanguageOptions(select, includeAuto) {
@@ -108,6 +113,7 @@ async function refreshRuntimeRoute() {
 function render() {
   $("enabled").checked = Boolean(settings.enabled);
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
+  $("fallbackGoogleQuick").checked = localSettings.fallbackGoogle !== false;
   $("skipTargetLanguage").checked = settings.skipTargetLanguage !== false;
   $("sourceLang").value = settings.sourceLang || "auto";
   $("targetLang").value = settings.targetLang || "zh-CN";
@@ -132,6 +138,12 @@ async function saveSync(patch) {
   render();
   await sendToPage({ type: "FT_REFRESH_SETTINGS" });
   await refreshPageState();
+}
+
+async function saveLocal(patch) {
+  localSettings = { ...localSettings, ...patch };
+  await chrome.storage.local.set(patch);
+  render();
 }
 
 async function saveInputLanguages(patch) {
@@ -177,11 +189,13 @@ async function refreshExclusions() {
 
 async function init() {
   populateLanguages();
-  [settings, activeTab] = await Promise.all([
+  [settings, localSettings, activeTab] = await Promise.all([
     chrome.storage.sync.get(DEFAULTS),
+    chrome.storage.local.get(LOCAL_DEFAULTS),
     getActiveTab()
   ]);
   settings = { ...DEFAULTS, ...settings };
+  localSettings = { ...LOCAL_DEFAULTS, ...localSettings };
   currentHost = hostFromTab(activeTab);
 
   const profile = await loadSiteInputProfile();
@@ -196,6 +210,7 @@ async function init() {
 
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
+  $("fallbackGoogleQuick").addEventListener("change", event => saveLocal({ fallbackGoogle: event.target.checked }));
   $("skipTargetLanguage").addEventListener("change", event => saveSync({ skipTargetLanguage: event.target.checked }));
   $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
   $("targetLang").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
