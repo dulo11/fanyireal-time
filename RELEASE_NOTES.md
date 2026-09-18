@@ -1,15 +1,21 @@
-# 浮译 0.7.3-dev2｜Android 内置优先 + 免费在线备用
+# 浮译 0.7.3-dev3｜Android 系统识别直接吃内部 PCM
 
-按当前使用偏好重新调整 ASR 自动优先级：
+这一版开始实装前面讨论的 Android 13+ `RecognizerIntent.EXTRA_AUDIO_SOURCE` 路线，不再把“系统 SpeechRecognizer 只能用麦克风”当成固定限制。
 
-- 麦克风来源：Android 系统 SpeechRecognizer 第一优先。
-- 自动模式下 Android SpeechRecognizer 不再强制离线，允许系统联网识别以优先质量；手动选择系统识别器时仍可勾选“强制请求离线”。
-- Android 内置发生非临时错误后，再尝试 Groq Free / Cloudflare Workers AI Free。
-- 免费在线不可用或达到免费限额后，再回退本地 Whisper / Qwen3 / SenseVoice / Vosk。
-- 有道等付费/旧兼容语音识别只作为最后兜底，而且默认关闭，只有用户显式打开开关才会自动调用。
-- 系统内部声音和 ROOT/Shizuku PCM 无法直接喂给 Android SpeechRecognizer，因此这两种声音来源会自动跳过 Android 内置，从免费在线开始，再到本地，最后才是显式开启的付费兜底。
-- 修复免费在线失败后与本地模型之间可能重复回跳的问题；服务停止时同时关闭在线 ASR 请求队列。
+- 新增 `AndroidPcmSpeechEngine`：
+  - 接收浮译已经抓到的 16 kHz 单声道 PCM。
+  - 通过 `ParcelFileDescriptor` pipe + `EXTRA_AUDIO_SOURCE` 直接交给系统安装的 RecognitionService。
+  - 同时声明采样率 16000、1 声道、PCM16。
+  - 自动按停顿切句，连续讲话最长约 4.8 秒切段；上一段识别时继续缓存后续声音。
+- 普通“系统内部声音｜直播/视频”自动 ASR 顺序改为：
+  Android 系统外部 PCM → Groq Free / Cloudflare Free → 本地 Whisper/Qwen/SenseVoice/Vosk → 显式开启的付费兜底。
+- ROOT / Shizuku 通话 PCM 也使用同一条优先级：
+  tinycap/ALSA 读到 PCM → Android 系统外部 PCM → 免费在线 → 本地 → 付费最后。
+- 手动选择“Android 系统 SpeechRecognizer”时，系统内部声音以及 ROOT/Shizuku PCM 不再直接拦截；会实际尝试外部 PCM 注入。
+- 厂商 RecognitionService 如果不支持外部音频源，连续失败后自动退出这条路，不会反复死循环。
+- Shizuku 通话兼容页增加说明：微信/Telegram/WhatsApp 是否能读到内部 PCM 仍由 ROM、shell 权限、SELinux 和音频 HAL 决定；只要 Shizuku 测试读到明显 PCM，就可继续尝试系统内置识别。
+- 麦克风场景继续直接使用 Android SpeechRecognizer 自己的麦克风链路，不绕 PCM 注入。
 
-保留 dev1 的 Groq Free Whisper Large V3、Groq Free Whisper Large V3 Turbo、Cloudflare Workers AI Free Whisper Large V3 Turbo 支持。
+注意：Android 官方文档说明，如果识别器实现不支持 `EXTRA_AUDIO_SOURCE`，它可能忽略该参数并自行打开麦克风。因此这版仍属于真机兼容测试版，需要在一加 Ace 6 / ColorOS 上确认系统 RecognitionService 的实际行为。
 
-这是开发测试版，不替代 0.7.2.4 稳定版。
+稳定版仍保持 0.7.2.4；本版为开发测试版。

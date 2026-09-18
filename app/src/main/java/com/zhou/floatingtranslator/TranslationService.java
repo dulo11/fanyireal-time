@@ -112,6 +112,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private MicAudioEffects micEffects;
     private OfflineSpeechEngine offlineSpeech;
     private SherpaSpeechEngine sherpaSpeech;
+    private AndroidPcmSpeechEngine pcmSystemSpeech;
     private FreeOnlineSpeechEngine onlineSpeech;
     private SpeechRecognizer systemRecognizer;
     private OfflineFirstTranslationRouter translator;
@@ -334,7 +335,10 @@ public class TranslationService extends Service implements RecognitionListener {
         if (!running) return;
         switch (asrMode) {
             case ASR_VOSK: startVosk(false); break;
-            case ASR_SYSTEM: startSystemFixed(); break;
+            case ASR_SYSTEM:
+                if (INPUT_MICROPHONE.equals(inputMode)) startSystemFixed();
+                else startSystemPcm(false);
+                break;
             case ASR_YOUDAO: startYoudaoFixed(); break;
             case ASR_FREE_ONLINE:
             case ASR_GROQ_LARGE:
@@ -354,12 +358,17 @@ public class TranslationService extends Service implements RecognitionListener {
 
         // User preference: Android's built-in recognizer is first when the source is a microphone.
         // Android SpeechRecognizer cannot consume MediaProjection/ROOT PCM, so internal-audio modes skip it.
-        if (INPUT_MICROPHONE.equals(inputMode) && !failedAutoSystem
-            && SpeechRecognizer.isRecognitionAvailable(this)) {
+        if (!failedAutoSystem && SpeechRecognizer.isRecognitionAvailable(this)) {
             activeAsrMode = ASR_SYSTEM;
-            setDiagSpeech("ASR：自动优先 Android 系统 SpeechRecognizer");
-            showStatus("自动 ASR：优先使用 Android 系统识别；失败后再试免费在线和本地模型");
-            startSystemRecognizer();
+            if (INPUT_MICROPHONE.equals(inputMode)) {
+                setDiagSpeech("ASR：自动优先 Android 系统 SpeechRecognizer");
+                showStatus("自动 ASR：优先使用 Android 系统识别；失败后再试免费在线和本地模型");
+                startSystemRecognizer();
+            } else {
+                setDiagSpeech("ASR：自动优先 Android 系统外部 PCM");
+                showStatus("自动 ASR：先把系统内部声音直接送给 Android 系统识别器");
+                startSystemPcm(true);
+            }
             return;
         }
         prepareAutoAfterSystem();
@@ -459,6 +468,45 @@ public class TranslationService extends Service implements RecognitionListener {
                 }
             });
         sherpaSpeech.prepare();
+    }
+
+    private void startSystemPcm(boolean allowAutoFallback) {
+        stopRawRecognitionEngines(false);
+        setDiagSpeech("ASR：正在准备 Android 系统外部 PCM");
+        pcmSystemSpeech = new AndroidPcmSpeechEngine(this, languageMode, speechLanguage,
+            new AndroidPcmSpeechEngine.Callback() {
+                @Override public void onStatus(String message) {
+                    setDiagSpeech("ASR：" + message);
+                    updateNotification(message);
+                }
+                @Override public void onReady(String engineName) {
+                    if (!running) return;
+                    activeAsrMode = ASR_SYSTEM;
+                    setDiagSpeech("ASR：" + engineName + " · " + languageModeLabel());
+                    showStatus(engineName + " 已就绪；失败会自动切免费在线/本地");
+                    startRawAudioCapture();
+                }
+                @Override public void onText(String text, String detectedLanguage) {
+                    if (!running || paused || text == null || text.trim().isEmpty()) return;
+                    String cleaned = text.trim();
+                    setDiagSpeech("ASR：Android 系统外部 PCM · " + preview(cleaned));
+                    if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+                    queueSpeechTranslation(cleaned, true, detectedLanguage);
+                }
+                @Override public void onError(String message, boolean fatal) {
+                    if (!running) return;
+                    setDiagSpeech("ASR：Android 系统外部 PCM · " + message);
+                    if (fatal && allowAutoFallback && ASR_AUTO.equals(asrMode)) {
+                        failedAutoSystem = true;
+                        closePcmSystemSpeech();
+                        showStatus("Android 系统不适合当前外部 PCM，自动切免费在线/本地");
+                        prepareAutoAfterSystem();
+                    } else if (fatal) {
+                        showStatus("Android 系统外部 PCM 失败：" + message);
+                    }
+                }
+            });
+        pcmSystemSpeech.prepare();
     }
 
     private void startFreeOnline(String mode, boolean allowAutoFallback) {
@@ -686,10 +734,13 @@ public class TranslationService extends Service implements RecognitionListener {
             long now = SystemClock.elapsedRealtime();
             updateAudioLevel(peak, now);
 
+            AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
             FreeOnlineSpeechEngine online = onlineSpeech;
             OfflineSpeechEngine vosk = offlineSpeech;
             SherpaSpeechEngine sherpa = sherpaSpeech;
-            if (online != null && online.isReady()) {
+            if (pcmSystem != null && pcmSystem.isReady()) {
+                pcmSystem.acceptPcm(bytes, count * 2, peak);
+            } else if (online != null && online.isReady()) {
                 online.acceptPcm(bytes, count * 2, peak);
             } else if (vosk != null && vosk.isReady()) {
                 vosk.acceptPcm(bytes, count * 2);
@@ -1074,6 +1125,8 @@ public class TranslationService extends Service implements RecognitionListener {
         if (pauseControl != null) pauseControl.setText(paused ? "继续" : "暂停");
         if (ocrCapture != null) ocrCapture.setPaused(paused || uiVisible);
         if (paused) {
+            AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
+            if (pcmSystem != null) pcmSystem.flush();
             FreeOnlineSpeechEngine online = onlineSpeech;
             if (online != null) online.flush();
             SherpaSpeechEngine s = sherpaSpeech;
@@ -1112,10 +1165,17 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void stopRawRecognitionEngines(boolean stopAudio) {
         if (stopAudio) stopAudioCapture();
+        closePcmSystemSpeech();
         closeOnlineSpeech();
         closeVosk();
         closeSherpa();
         cloudSpeechMode = false;
+    }
+
+    private void closePcmSystemSpeech() {
+        AndroidPcmSpeechEngine s = pcmSystemSpeech;
+        pcmSystemSpeech = null;
+        if (s != null) try { s.close(); } catch (Exception ignored) {}
     }
 
     private void closeOnlineSpeech() {
@@ -1167,6 +1227,7 @@ public class TranslationService extends Service implements RecognitionListener {
         running = false;
         stopAudioCapture();
         destroySystemRecognizer();
+        closePcmSystemSpeech();
         closeOnlineSpeech();
         closeVosk();
         closeSherpa();

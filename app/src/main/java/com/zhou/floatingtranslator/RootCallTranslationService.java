@@ -13,6 +13,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.speech.SpeechRecognizer;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -46,6 +47,7 @@ public final class RootCallTranslationService extends Service {
     private RootPcmSource rootSource;
     private OfflineSpeechEngine vosk;
     private SherpaSpeechEngine sherpa;
+    private AndroidPcmSpeechEngine pcmSystemSpeech;
     private FreeOnlineSpeechEngine onlineSpeech;
     private OfflineFirstTranslationRouter translator;
 
@@ -58,6 +60,7 @@ public final class RootCallTranslationService extends Service {
     private String activeAsrMode = TranslationService.ASR_AUTO;
     private String languageMode = SherpaSpeechEngine.LANG_SINGLE;
     private String sourceMlTag = "en";
+    private String speechLanguage = "en-US";
     private String targetMlTag = "zh";
     private String engineId = TranslationRouter.AUTO;
     private boolean showOriginal = true;
@@ -115,6 +118,7 @@ public final class RootCallTranslationService extends Service {
         activeAsrMode = asrMode;
         languageMode = normalizeLanguageMode(intent.getStringExtra(TranslationService.EXTRA_LANGUAGE_MODE));
         sourceMlTag = value(intent.getStringExtra(TranslationService.EXTRA_SOURCE_MLKIT), "en");
+        speechLanguage = value(intent.getStringExtra(TranslationService.EXTRA_SOURCE_SPEECH), "en-US");
         targetMlTag = value(intent.getStringExtra(TranslationService.EXTRA_TARGET_MLKIT), "zh");
         engineId = value(intent.getStringExtra(TranslationService.EXTRA_ENGINE_ID), TranslationRouter.AUTO);
         showOriginal = intent.getBooleanExtra(TranslationService.EXTRA_SHOW_ORIGINAL, true);
@@ -148,9 +152,7 @@ public final class RootCallTranslationService extends Service {
     private void prepareAsr(RootCallProfileStore.Profile profile) {
         if (!running) return;
         if (TranslationService.ASR_SYSTEM.equals(asrMode)) {
-            diagAsr = "ASR：系统 SpeechRecognizer 不能直接接内部 PCM";
-            renderDiag();
-            showStatus("ROOT/Shizuku 内部 PCM 不能使用系统 SpeechRecognizer，请选 Vosk / sherpa / 有道 ASR。");
+            startSystemPcm(profile, false);
             return;
         }
         if (TranslationService.ASR_FREE_ONLINE.equals(asrMode)
@@ -172,11 +174,11 @@ public final class RootCallTranslationService extends Service {
             return;
         }
         if (TranslationService.ASR_AUTO.equals(asrMode)) {
-            if (FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
-                startFreeOnline(TranslationService.ASR_FREE_ONLINE, profile, true);
+            if (SpeechRecognizer.isRecognitionAvailable(this)) {
+                startSystemPcm(profile, true);
                 return;
             }
-            prepareAutoLocal(profile);
+            prepareAutoAfterSystem(profile);
             return;
         }
         if (TranslationService.ASR_VOSK.equals(asrMode)) {
@@ -190,6 +192,59 @@ public final class RootCallTranslationService extends Service {
         startVosk(profile, false);
     }
 
+    private void prepareAutoAfterSystem(RootCallProfileStore.Profile profile) {
+        if (FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
+            startFreeOnline(TranslationService.ASR_FREE_ONLINE, profile, true);
+            return;
+        }
+        prepareAutoLocal(profile);
+    }
+
+    private void startSystemPcm(RootCallProfileStore.Profile profile, boolean autoFallback) {
+        closeSystemPcm();
+        closeSystemPcm();
+        closeOnline();
+        closeVosk();
+        closeSherpa();
+        diagAsr = "ASR：正在准备 Android 系统外部 PCM";
+        renderDiag();
+        pcmSystemSpeech = new AndroidPcmSpeechEngine(this, languageMode, speechLanguage,
+            new AndroidPcmSpeechEngine.Callback() {
+                @Override public void onStatus(String message) {
+                    diagAsr = "ASR：" + message;
+                    renderDiag();
+                    updateNotification(message);
+                }
+                @Override public void onReady(String engineName) {
+                    if (!running) return;
+                    activeAsrMode = TranslationService.ASR_SYSTEM;
+                    diagAsr = "ASR：" + engineName + " · " + profile.sourceLabel() + " PCM";
+                    renderDiag();
+                    startRootSource(profile);
+                }
+                @Override public void onText(String text, String detectedLanguage) {
+                    if (!running || paused || text == null || text.trim().isEmpty()) return;
+                    String cleaned = text.trim();
+                    diagAsr = "ASR：Android 系统外部 PCM · " + preview(cleaned);
+                    renderDiag();
+                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    queueTranslate(cleaned, true, detectedLanguage);
+                }
+                @Override public void onError(String message, boolean fatal) {
+                    diagAsr = "ASR：Android 系统外部 PCM · " + message;
+                    renderDiag();
+                    if (fatal && autoFallback && TranslationService.ASR_AUTO.equals(asrMode)) {
+                        closeSystemPcm();
+                        showStatus("Android 系统不支持/不适合当前内部 PCM，自动切免费在线/本地");
+                        prepareAutoAfterSystem(profile);
+                    } else if (fatal) {
+                        showStatus("Android 系统外部 PCM 失败：" + message);
+                    }
+                }
+            });
+        pcmSystemSpeech.prepare();
+    }
+
     private void prepareAutoLocal(RootCallProfileStore.Profile profile) {
         String selected = bestInstalledSherpa();
         if (selected != null) startSherpa(selected, profile, true);
@@ -197,6 +252,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void startFreeOnline(String mode, RootCallProfileStore.Profile profile, boolean autoFallback) {
+        closeSystemPcm();
         closeOnline();
         closeOnline();
         closeVosk();
@@ -367,10 +423,12 @@ public final class RootCallTranslationService extends Service {
     private void consumePcm(byte[] pcm, int length, int peak) {
         long now = SystemClock.elapsedRealtime();
         updateLevel(peak, now);
+        AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
         FreeOnlineSpeechEngine online = onlineSpeech;
         OfflineSpeechEngine currentVosk = vosk;
         SherpaSpeechEngine currentSherpa = sherpa;
-        if (online != null && online.isReady()) online.acceptPcm(pcm, length, peak);
+        if (pcmSystem != null && pcmSystem.isReady()) pcmSystem.acceptPcm(pcm, length, peak);
+        else if (online != null && online.isReady()) online.acceptPcm(pcm, length, peak);
         else if (currentVosk != null && currentVosk.isReady()) currentVosk.acceptPcm(pcm, length);
         else if (currentSherpa != null && currentSherpa.isReady()) currentSherpa.acceptPcm(pcm, length, peak);
         else if (cloudSpeechMode) appendCloudAudio(pcm, length, peak, now);
@@ -576,6 +634,8 @@ public final class RootCallTranslationService extends Service {
         paused = !paused;
         if (pauseControl != null) pauseControl.setText(paused ? "继续" : "暂停");
         if (paused) {
+            AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
+            if (pcmSystem != null) pcmSystem.flush();
             FreeOnlineSpeechEngine online = onlineSpeech;
             if (online != null) online.flush();
             SherpaSpeechEngine s = sherpa;
@@ -643,6 +703,12 @@ public final class RootCallTranslationService extends Service {
         if (TranslationService.ASR_CLOUDFLARE.equals(value)) return "Cloudflare Workers AI Free";
         OfflineAsrModelCatalog.Model m = OfflineAsrModelCatalog.find(value);
         return m == null ? "自动推荐 ASR" : m.name;
+    }
+
+    private void closeSystemPcm() {
+        AndroidPcmSpeechEngine s = pcmSystemSpeech;
+        pcmSystemSpeech = null;
+        if (s != null) try { s.close(); } catch (Exception ignored) {}
     }
 
     private void closeOnline() {

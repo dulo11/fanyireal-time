@@ -117,7 +117,7 @@ public final class MainActivity extends Activity {
         micProcessingSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(micProcessingSpinner, params());
         TextView micTip = text(
-            "自动模式下，麦克风来源优先 Android 系统 SpeechRecognizer，并允许系统联网获得更好识别；系统内部声音/ROOT PCM 无法直接交给 Android SpeechRecognizer，会自动跳到免费在线，再到本地。付费 ASR 只在你显式开启后最后兜底。",
+            "自动模式下，麦克风直接用 Android SpeechRecognizer；系统内部声音和 ROOT/Shizuku PCM 会先尝试 Android 13+ 的 EXTRA_AUDIO_SOURCE 外部 PCM 注入。厂商识别服务若不支持，再自动切免费在线和本地；付费 ASR 只在你显式开启后最后兜底。",
             12, Color.rgb(184, 174, 207));
         audioCard.addView(micTip);
 
@@ -125,7 +125,7 @@ public final class MainActivity extends Activity {
         asrModeSpinner = new Spinner(this);
         asrModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "自动推荐｜安卓内置优先 → 免费在线 → 本地 → 付费最后",
+                "自动推荐｜安卓内置（含内部PCM）→ 免费在线 → 本地 → 付费最后",
                 "免费在线自动｜Groq Free → Cloudflare Free → 本地",
                 "Groq Free｜Whisper Large V3｜在线高精度",
                 "Groq Free｜Whisper Large V3 Turbo｜在线低延迟",
@@ -138,7 +138,7 @@ public final class MainActivity extends Activity {
                 "Whisper Medium INT8｜高精度/高占用",
                 "Qwen3-ASR 0.6B INT8｜日英混合优先",
                 "Omnilingual ASR 300M INT8｜小语种",
-                "Android 系统 SpeechRecognizer｜首选｜仅麦克风",
+                "Android 系统 SpeechRecognizer｜首选｜麦克风 / 内部PCM",
                 "有道云 ASR｜付费/旧兼容｜只做最后兜底"
             }));
         asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
@@ -162,7 +162,7 @@ public final class MainActivity extends Activity {
 
         TextView rootTip = text(
             "内部通话模式：在兼容中心明确选择固定 ROOT 或固定 Shizuku，再扫描/测试 PCM 并按 App 保存。" +
-            "Shizuku 是免 ROOT 实验方案，受 shell/SELinux 限制；失败不会自动切到 ROOT 或麦克风。",
+            "一旦读到 PCM，自动 ASR 会先尝试把 16k PCM 注入 Android 系统 SpeechRecognizer；不支持时再走免费在线/本地。Shizuku 仍受 shell/SELinux 限制。",
             12, Color.rgb(184, 174, 207));
         rootTip.setPadding(0, dp(6), 0, 0);
         audioCard.addView(rootTip);
@@ -289,11 +289,6 @@ public final class MainActivity extends Activity {
             startActivity(new Intent(this, RootCallActivity.class));
             return;
         }
-        if (TranslationService.ASR_SYSTEM.equals(asr) && !mic) {
-            toast("系统 SpeechRecognizer 只能使用麦克风；系统内部声音/ROOT/Shizuku 请选本地 ASR 或有道 ASR");
-            return;
-        }
-
         if ((TranslationService.ASR_FREE_ONLINE.equals(asr)
             || TranslationService.ASR_GROQ_LARGE.equals(asr)
             || TranslationService.ASR_GROQ_TURBO.equals(asr)

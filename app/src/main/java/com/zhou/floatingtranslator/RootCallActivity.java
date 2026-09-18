@@ -112,7 +112,7 @@ public final class RootCallActivity extends Activity {
         TextView intro = text(
             "这里提供两个固定内部声音后端：ROOT（uid=0，兼容性最高）和 Shizuku（ADB shell，免 ROOT 实验）。" +
             "两者都按 App 保存 ALSA card/device/采样率/声道，不会失败后偷偷切换权限来源或 PCM。\n\n" +
-            "Shizuku 是否能读通话 PCM 取决于 ROM、shell 权限和 SELinux；失败时请手动改用 ROOT 或外放+麦克风。",
+            "Shizuku 是否能读微信/Telegram/WhatsApp 通话 PCM 取决于 ROM、shell 权限和 SELinux。只要测试能读到明显 PCM，自动 ASR 会先尝试把它直接送给 Android 系统 SpeechRecognizer；系统不支持外部 PCM 时再回退免费在线/本地。",
             14, Color.rgb(210, 200, 225));
         intro.setPadding(0, dp(7), 0, dp(13));
         root.addView(intro);
@@ -224,7 +224,7 @@ public final class RootCallActivity extends Activity {
         launchCard.addView(copy, params());
 
         TextView warning = text(
-            "测试时要让目标 App 正在通话并持续有人说话。ROOT 成功率通常高于 Shizuku；Shizuku 只有在 shell/SELinux 允许读取目标 PCM 时才会接近 ROOT。" +
+            "测试时要让目标 App 正在通话并持续有人说话。ROOT 成功率通常高于 Shizuku；Shizuku 只有在 shell/SELinux 允许读取目标 PCM 时才会接近 ROOT。保存成功后建议 ASR 选“自动推荐”，会先测试 Android 系统外部 PCM。" +
             "两种内部模式都可能被厂商 HAL/硬件路由限制。录音或翻译通话请遵守所在地法律并尊重通话参与者隐私。",
             12, Color.rgb(180, 170, 205));
         warning.setPadding(dp(2), dp(8), dp(2), 0);

@@ -12,8 +12,8 @@ android {
         applicationId = "com.zhou.floatingtranslator"
         minSdk = 33
         targetSdk = 35
-        versionCode = 44
-        versionName = "0.7.3-dev2"
+        versionCode = 45
+        versionName = "0.7.3-dev3"
     }
 
     buildFeatures { buildConfig = true }
