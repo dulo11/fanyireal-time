@@ -100,7 +100,7 @@ public class ApiSettingsActivity extends Activity {
         root.addView(engineSpinner, matchWrap());
 
         youdaoSpeechFallback = new CheckBox(this);
-        youdaoSpeechFallback.setText("旧兼容：允许有道云语音手动使用（不参与免费自动 ASR）");
+        youdaoSpeechFallback.setText("允许付费/旧兼容有道云 ASR 在 Android 内置、免费在线、本地模型都失败后最后兜底（默认关闭）");
         youdaoSpeechFallback.setTextColor(Color.WHITE);
         youdaoSpeechFallback.setChecked(prefs.getBoolean("youdao_speech_fallback", false));
         root.addView(youdaoSpeechFallback);
@@ -112,9 +112,9 @@ public class ApiSettingsActivity extends Activity {
         showSecrets.setOnCheckedChangeListener((button, checked) -> applySecretVisibility(checked));
         root.addView(showSecrets);
 
-        root.addView(section("免费在线语音识别 ASR｜优先推荐"));
+        root.addView(section("免费在线语音识别 ASR｜Android 内置失败后使用"));
         TextView freeAsrTip = text(
-            "自动 ASR 会优先使用这里配置的免费在线服务，再回退本地模型，不会自动调用付费语音 API。\n" +
+            "自动 ASR 顺序：Android 系统内置（仅麦克风）→ 这里的免费在线 → 本地模型 → 你显式开启的付费旧兼容兜底。\n" +
             "Groq Free：推荐，Whisper Large V3 高精度；达到免费限额/429 后可自动切 Cloudflare 或本地。\n" +
             "Cloudflare Workers AI Free：使用 Whisper Large V3 Turbo；需要 Account ID 和 Workers AI API Token。",
             12, Color.rgb(174, 164, 198));

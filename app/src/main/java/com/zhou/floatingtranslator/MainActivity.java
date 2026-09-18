@@ -117,7 +117,7 @@ public final class MainActivity extends Activity {
         micProcessingSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(micProcessingSpinner, params());
         TextView micTip = text(
-            "翻译对方外放声音时不要开 AEC：AEC 的用途正是消除扬声器回声，可能把对方声音一起削掉。系统 SpeechRecognizer 自己占用麦克风，不受这里的 AEC/NS/AGC 开关控制。",
+            "自动模式下，麦克风来源优先 Android 系统 SpeechRecognizer，并允许系统联网获得更好识别；系统内部声音/ROOT PCM 无法直接交给 Android SpeechRecognizer，会自动跳到免费在线，再到本地。付费 ASR 只在你显式开启后最后兜底。",
             12, Color.rgb(184, 174, 207));
         audioCard.addView(micTip);
 
@@ -125,7 +125,7 @@ public final class MainActivity extends Activity {
         asrModeSpinner = new Spinner(this);
         asrModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "自动推荐｜免费在线优先 → 本地离线",
+                "自动推荐｜安卓内置优先 → 免费在线 → 本地 → 付费最后",
                 "免费在线自动｜Groq Free → Cloudflare Free → 本地",
                 "Groq Free｜Whisper Large V3｜在线高精度",
                 "Groq Free｜Whisper Large V3 Turbo｜在线低延迟",
@@ -138,8 +138,8 @@ public final class MainActivity extends Activity {
                 "Whisper Medium INT8｜高精度/高占用",
                 "Qwen3-ASR 0.6B INT8｜日英混合优先",
                 "Omnilingual ASR 300M INT8｜小语种",
-                "Android 系统 SpeechRecognizer｜免费｜仅麦克风",
-                "有道云 ASR｜旧兼容（不参与免费自动）"
+                "Android 系统 SpeechRecognizer｜首选｜仅麦克风",
+                "有道云 ASR｜付费/旧兼容｜只做最后兜底"
             }));
         asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
         asrModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
@@ -193,8 +193,8 @@ public final class MainActivity extends Activity {
             preferences.getBoolean("show_diagnostics", true));
         enableOcr = check("屏幕 OCR（ROOT 通话模式会忽略）",
             preferences.getBoolean("enable_ocr", false));
-        preferOffline = check("系统 SpeechRecognizer 请求离线",
-            preferences.getBoolean("prefer_offline", true));
+        preferOffline = check("手动选择系统 SpeechRecognizer 时强制请求离线（自动模式忽略此项，优先在线质量）",
+            preferences.getBoolean("prefer_offline", false));
         displayCard.addView(showOriginal);
         displayCard.addView(showDiagnostics);
         displayCard.addView(enableOcr);
@@ -363,7 +363,7 @@ public final class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_ENGINE_ID,
                 preferences.getString("engine_id", TranslationRouter.AUTO))
             .putExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK,
-                preferences.getBoolean("youdao_speech_fallback", true))
+                preferences.getBoolean("youdao_speech_fallback", false))
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_SHOW_DIAGNOSTICS, showDiagnostics.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())

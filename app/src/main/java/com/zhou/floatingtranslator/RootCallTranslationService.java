@@ -119,7 +119,7 @@ public final class RootCallTranslationService extends Service {
         engineId = value(intent.getStringExtra(TranslationService.EXTRA_ENGINE_ID), TranslationRouter.AUTO);
         showOriginal = intent.getBooleanExtra(TranslationService.EXTRA_SHOW_ORIGINAL, true);
         showDiagnostics = intent.getBooleanExtra(TranslationService.EXTRA_SHOW_DIAGNOSTICS, true);
-        allowYoudaoSpeech = intent.getBooleanExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, true);
+        allowYoudaoSpeech = intent.getBooleanExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, false);
         int fontSize = intent.getIntExtra(TranslationService.EXTRA_FONT_SIZE, 24);
 
         startForeground(NOTIFICATION_ID, notification("准备 " + profile.sourceLabel() + " 通话翻译"),

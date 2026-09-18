@@ -140,6 +140,8 @@ public class TranslationService extends Service implements RecognitionListener {
     private boolean preferOffline;
     private String micProcessing = MicAudioEffects.MODE_REMOTE;
     private boolean failedAutoVosk;
+    private boolean failedAutoSystem;
+    private boolean failedAutoOnline;
 
     private long lastLevelUiAt;
     private long cloudChunkStartedAt;
@@ -207,7 +209,7 @@ public class TranslationService extends Service implements RecognitionListener {
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
         showDiagnostics = intent.getBooleanExtra(EXTRA_SHOW_DIAGNOSTICS, true);
         enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, false);
-        allowYoudaoSpeech = intent.getBooleanExtra(EXTRA_YOUDAO_SPEECH_FALLBACK, true);
+        allowYoudaoSpeech = intent.getBooleanExtra(EXTRA_YOUDAO_SPEECH_FALLBACK, false);
         preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, true);
         micProcessing = MicAudioEffects.normalize(intent.getStringExtra(EXTRA_MIC_PROCESSING));
         int fontSize = intent.getIntExtra(EXTRA_FONT_SIZE, 24);
@@ -233,6 +235,8 @@ public class TranslationService extends Service implements RecognitionListener {
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoVosk = false;
+        failedAutoSystem = false;
+        failedAutoOnline = false;
         failedAutoModels.clear();
         lastStreamTranslated = "";
         lastOcrText = "";
@@ -347,7 +351,23 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void prepareAutoAsr() {
         if (!running || !ASR_AUTO.equals(asrMode)) return;
-        if (FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
+
+        // User preference: Android's built-in recognizer is first when the source is a microphone.
+        // Android SpeechRecognizer cannot consume MediaProjection/ROOT PCM, so internal-audio modes skip it.
+        if (INPUT_MICROPHONE.equals(inputMode) && !failedAutoSystem
+            && SpeechRecognizer.isRecognitionAvailable(this)) {
+            activeAsrMode = ASR_SYSTEM;
+            setDiagSpeech("ASR：自动优先 Android 系统 SpeechRecognizer");
+            showStatus("自动 ASR：优先使用 Android 系统识别；失败后再试免费在线和本地模型");
+            startSystemRecognizer();
+            return;
+        }
+        prepareAutoAfterSystem();
+    }
+
+    private void prepareAutoAfterSystem() {
+        if (!running || !ASR_AUTO.equals(asrMode)) return;
+        if (!failedAutoOnline && FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
             startFreeOnline(ASR_FREE_ONLINE, true);
             return;
         }
@@ -468,6 +488,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     if (!running) return;
                     setDiagSpeech("ASR：免费在线失败 · " + message);
                     if (fatal && allowAutoFallback && ASR_AUTO.equals(asrMode)) {
+                        failedAutoOnline = true;
                         closeOnlineSpeech();
                         showStatus("免费在线 ASR 暂不可用，自动切回本地识别");
                         prepareAutoLocalAsr();
@@ -547,23 +568,18 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void fallbackAutoSystemOrCloud(String reason) {
         if (!running || !ASR_AUTO.equals(asrMode)) return;
-        if (INPUT_MICROPHONE.equals(inputMode) && SpeechRecognizer.isRecognitionAvailable(this)) {
-            activeAsrMode = ASR_SYSTEM;
-            setDiagSpeech("ASR：高精度离线不可用 → 系统 SpeechRecognizer");
-            showStatus(reason + "\n声音来源保持麦克风，使用系统 SpeechRecognizer");
-            startSystemRecognizer();
-            return;
-        }
+
+        // Paid/legacy speech is deliberately the last fallback and is opt-in only.
         if (canUseYoudaoSpeech()) {
             activeAsrMode = ASR_YOUDAO;
             cloudSpeechMode = true;
-            setDiagSpeech("ASR：离线不可用 → 有道云语音");
-            showStatus(reason + "\n声音来源保持不变，使用有道云 ASR");
+            setDiagSpeech("ASR：免费/本地均不可用 → 最后兜底有道云");
+            showStatus(reason + "\n免费方案和本地模型均不可用；按你的开关最后使用有道云 ASR");
             startRawAudioCapture();
             return;
         }
         setDiagSpeech("ASR：没有可用识别器");
-        showStatus(reason + "\n没有可用备用 ASR。可以到模型中心下载 SenseVoice / ReazonSpeech / Whisper / Qwen3。");
+        showStatus(reason + "\n已依次尝试 Android 内置（麦克风可用时）、免费在线和本地 ASR；付费兜底未开启。");
     }
 
     private void startSystemFixed() {
@@ -811,12 +827,11 @@ public class TranslationService extends Service implements RecognitionListener {
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            if (ASR_AUTO.equals(asrMode) && canUseYoudaoSpeech()) {
-                activeAsrMode = ASR_YOUDAO;
-                cloudSpeechMode = true;
-                setDiagSpeech("ASR：系统不可用 → 有道云");
-                startRawAudioCapture();
-            } else setDiagSpeech("ASR：系统 SpeechRecognizer 不可用");
+            setDiagSpeech("ASR：系统 SpeechRecognizer 不可用");
+            if (ASR_AUTO.equals(asrMode)) {
+                failedAutoSystem = true;
+                prepareAutoAfterSystem();
+            }
             return;
         }
         main.post(() -> {
@@ -829,7 +844,8 @@ public class TranslationService extends Service implements RecognitionListener {
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                    .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline);
+                    .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,
+                        ASR_AUTO.equals(asrMode) ? false : preferOffline);
                 if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
                     listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
                 }
@@ -837,10 +853,10 @@ public class TranslationService extends Service implements RecognitionListener {
                 systemRecognizer.startListening(listen);
             } catch (Exception e) {
                 setDiagSpeech("ASR：系统启动失败 · " + safe(e));
-                if (ASR_AUTO.equals(asrMode) && canUseYoudaoSpeech()) {
-                    activeAsrMode = ASR_YOUDAO;
-                    cloudSpeechMode = true;
-                    startRawAudioCapture();
+                if (ASR_AUTO.equals(asrMode)) {
+                    failedAutoSystem = true;
+                    destroySystemRecognizer();
+                    prepareAutoAfterSystem();
                 }
             }
         });
@@ -1151,6 +1167,7 @@ public class TranslationService extends Service implements RecognitionListener {
         running = false;
         stopAudioCapture();
         destroySystemRecognizer();
+        closeOnlineSpeech();
         closeVosk();
         closeSherpa();
         if (ocrCapture != null) {
@@ -1252,12 +1269,11 @@ public class TranslationService extends Service implements RecognitionListener {
         boolean transientError = error == SpeechRecognizer.ERROR_NO_MATCH
             || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
-        if (!transientError && ASR_AUTO.equals(asrMode) && canUseYoudaoSpeech()) {
+        if (!transientError && ASR_AUTO.equals(asrMode)) {
+            failedAutoSystem = true;
             destroySystemRecognizer();
-            activeAsrMode = ASR_YOUDAO;
-            cloudSpeechMode = true;
-            setDiagSpeech("ASR：系统失败 → 有道云");
-            startRawAudioCapture();
+            setDiagSpeech("ASR：Android 系统失败 → 免费在线 / 本地");
+            prepareAutoAfterSystem();
         } else main.postDelayed(this::startSystemRecognizer, transientError ? 450 : 900);
     }
 

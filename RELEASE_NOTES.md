@@ -1,19 +1,15 @@
-# 浮译 0.7.3-dev1｜免费在线 ASR 优先测试版
+# 浮译 0.7.3-dev2｜Android 内置优先 + 免费在线备用
 
-本版针对实时视频中“本地 Qwen/Whisper 识别延迟高、英文误识别导致后续翻译全错”的问题，引入免费在线 ASR，并把自动识别策略改成在线优先。
+按当前使用偏好重新调整 ASR 自动优先级：
 
-- 新增 Groq Free Speech-to-Text：
-  - Whisper Large V3（自动模式默认，准确率优先）
-  - Whisper Large V3 Turbo（可手动选择，低延迟）
-  - 支持系统内部声音、麦克风和 ROOT/Shizuku PCM。
-- 新增 Cloudflare Workers AI Free：
-  - @cf/openai/whisper-large-v3-turbo
-  - 直接使用 Account ID + Workers AI API Token，不需要额外服务器。
-- 自动 ASR 新顺序：已配置免费在线 → 本地高精度模型 → Vosk → 系统识别（麦克风可用时）。
-- 免费在线自动模式：Groq Free 优先；遇到 429/网络失败连续两次后尝试 Cloudflare；两条免费在线线路都不可用时回退本地。
-- 自动流程不再使用有道等付费语音 API；有道仅保留旧兼容手动选项。
-- 在线 PCM 使用停顿切句 + 最长约 4.2 秒强制切句，识别请求和后续录音并行，减少本地 0.6B 模型整句解码造成的等待。
-- 在线返回语言码时直接交给自动语言路由；没有语言码时继续由本机 ML Kit Language ID 判断。
-- API 配置页新增 Groq Free Key、Cloudflare Account ID、Cloudflare Workers AI Token，仍只保存在本机。
+- 麦克风来源：Android 系统 SpeechRecognizer 第一优先。
+- 自动模式下 Android SpeechRecognizer 不再强制离线，允许系统联网识别以优先质量；手动选择系统识别器时仍可勾选“强制请求离线”。
+- Android 内置发生非临时错误后，再尝试 Groq Free / Cloudflare Workers AI Free。
+- 免费在线不可用或达到免费限额后，再回退本地 Whisper / Qwen3 / SenseVoice / Vosk。
+- 有道等付费/旧兼容语音识别只作为最后兜底，而且默认关闭，只有用户显式打开开关才会自动调用。
+- 系统内部声音和 ROOT/Shizuku PCM 无法直接喂给 Android SpeechRecognizer，因此这两种声音来源会自动跳过 Android 内置，从免费在线开始，再到本地，最后才是显式开启的付费兜底。
+- 修复免费在线失败后与本地模型之间可能重复回跳的问题；服务停止时同时关闭在线 ASR 请求队列。
 
-这是开发测试版，不替代 0.7.2.4 稳定版。重点测试：英语视频连续对白、日英混说、内部声音实时字幕，以及免费额度到限后的自动回退。
+保留 dev1 的 Groq Free Whisper Large V3、Groq Free Whisper Large V3 Turbo、Cloudflare Workers AI Free Whisper Large V3 Turbo 支持。
+
+这是开发测试版，不替代 0.7.2.4 稳定版。
