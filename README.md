@@ -1,18 +1,21 @@
-# 浮译 0.7.2 正式版
+# 浮译 0.7.3 正式版
 
-0.7.2 重点完成自动语言、连续面对面对话和全局翻译完整度修复。
+0.7.3 重点优化实时语音识别、非 AI 智能拼句、悬浮字幕和 ROOT / Shizuku 通话内部声音。
 
-- 普通实时 / ROOT / Shizuku / 全局翻译：自动识别源语言 → 固定目标语言。
-- 面对面对话：真正连续开放麦克风，同一方可以连续说多句，不要求你一句我一句。
-- 本地多语言 ASR 可逐句自动判断语言；自动模式优先 Qwen3-ASR → Whisper Medium → Whisper Small → Omnilingual → SenseVoice。
-- 修复 `How are you?` 一类短英语被错误标成中文后带偏翻译方向的问题。
-- 过滤 `<|endoftext|>`、`<|startoftranscript|>` 等 ASR 控制标记。
-- 保留 24 句连续待处理队列、TTS 不停麦与回声过滤。
-- 全局翻译支持本地 ML Kit 自动识别源语言，并保留 Telegram / 网页长消息、智能 OCR 和增量翻译优化。
+- 自动 ASR 优先尝试 Android 系统 SpeechRecognizer；麦克风直接使用系统识别，Android 13+ 的系统内部 PCM / ROOT / Shizuku PCM 会尝试通过外部音频源交给系统识别器。
+- 系统识别不可用或不兼容时，可继续使用 Groq Free / Cloudflare Workers AI Free，再回退本地 Whisper / Qwen3 / SenseVoice / Vosk；付费/旧兼容语音兜底默认关闭并放在最后。
+- 新增非 AI“智能拼句修正”：首段译文仍立即显示；明显被 ASR 提前切断的句子会保留短期上下文，后续片段到来后自动合并重译并覆盖临时字幕。
+- 智能拼句不调用 LLM，不需要 AI Token。
+- 新增“悬浮窗仅显示译文”：可隐藏原文、声音/ASR/翻译诊断、暂停/关闭按钮和独立 OCR 文本，仅保留译文本身。
+- ROOT / Shizuku 通话兼容中心继续支持按 App 保存 ALSA card/device/采样率/声道并测试内部 PCM。
+- 修复大模型下载完成后解压失败导致完整下载包被删除的问题；失败时保留完整缓存，可直接重新安装。
+- 保留自动识别源语言 → 固定目标语言、连续面对面对话、全局翻译、智能 OCR、历史/TXT/SRT 等功能。
 - API Key 继续按现有本地方式保存；不做 APK 瘦身。
 
-推荐：中英日混说优先 Qwen3-ASR 0.6B INT8；综合多语言可用 Whisper Medium INT8；性能与准确率平衡可用 Whisper Small INT8。
+## 推荐使用
 
-## 0.7.2.3 连续对话语言修复
+普通视频/直播优先使用“自动推荐”ASR；如果设备系统识别对外部 PCM 兼容良好，会优先走 Android 系统识别。  
+微信/Telegram/WhatsApp 等通话可先在“ROOT / Shizuku 通话内部声音兼容中心”测试 PCM，读到明显内部声音后再使用自动 ASR。  
+想要最干净的字幕界面，可开启“悬浮窗仅显示译文”。
 
-新增自动双向、限定双方语言双向、固定输入三种模式。英语短句易误识别时可固定输入为英语、我的语言为中文。详细支持范围和测试限制见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
+详细变更见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
