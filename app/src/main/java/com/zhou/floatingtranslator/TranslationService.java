@@ -74,6 +74,10 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String ASR_OMNILINGUAL = OfflineAsrModelCatalog.OMNILINGUAL;
     public static final String ASR_SYSTEM = "system";
     public static final String ASR_YOUDAO = "youdao";
+    public static final String ASR_FREE_ONLINE = FreeOnlineSpeechEngine.AUTO;
+    public static final String ASR_GROQ_LARGE = FreeOnlineSpeechEngine.GROQ_LARGE;
+    public static final String ASR_GROQ_TURBO = FreeOnlineSpeechEngine.GROQ_TURBO;
+    public static final String ASR_CLOUDFLARE = FreeOnlineSpeechEngine.CLOUDFLARE;
 
     public static final String EXTRA_LANGUAGE_MODE = "language_mode";
     public static final String EXTRA_SOURCE_SPEECH = "source_speech";
@@ -108,6 +112,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private MicAudioEffects micEffects;
     private OfflineSpeechEngine offlineSpeech;
     private SherpaSpeechEngine sherpaSpeech;
+    private FreeOnlineSpeechEngine onlineSpeech;
     private SpeechRecognizer systemRecognizer;
     private OfflineFirstTranslationRouter translator;
     private OcrCapture ocrCapture;
@@ -256,6 +261,8 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private String normalizeAsr(String mode) {
         if (ASR_VOSK.equals(mode) || ASR_SYSTEM.equals(mode) || ASR_YOUDAO.equals(mode)
+            || ASR_FREE_ONLINE.equals(mode) || ASR_GROQ_LARGE.equals(mode)
+            || ASR_GROQ_TURBO.equals(mode) || ASR_CLOUDFLARE.equals(mode)
             || OfflineAsrModelCatalog.find(mode) != null) return mode;
         return ASR_AUTO;
     }
@@ -272,6 +279,10 @@ public class TranslationService extends Service implements RecognitionListener {
         if (ASR_VOSK.equals(mode)) return "Vosk 离线 ASR";
         if (ASR_SYSTEM.equals(mode)) return "Android 系统 SpeechRecognizer";
         if (ASR_YOUDAO.equals(mode)) return "有道云语音 ASR";
+        if (ASR_FREE_ONLINE.equals(mode)) return "免费在线自动 ASR";
+        if (ASR_GROQ_LARGE.equals(mode)) return "Groq Free · Whisper Large V3";
+        if (ASR_GROQ_TURBO.equals(mode)) return "Groq Free · Whisper Large V3 Turbo";
+        if (ASR_CLOUDFLARE.equals(mode)) return "Cloudflare Workers AI Free";
         OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(mode);
         if (model != null) return model.name;
         return "自动推荐 ASR";
@@ -321,6 +332,11 @@ public class TranslationService extends Service implements RecognitionListener {
             case ASR_VOSK: startVosk(false); break;
             case ASR_SYSTEM: startSystemFixed(); break;
             case ASR_YOUDAO: startYoudaoFixed(); break;
+            case ASR_FREE_ONLINE:
+            case ASR_GROQ_LARGE:
+            case ASR_GROQ_TURBO:
+            case ASR_CLOUDFLARE:
+                startFreeOnline(asrMode, false); break;
             case ASR_AUTO: prepareAutoAsr(); break;
             default:
                 if (OfflineAsrModelCatalog.find(asrMode) != null) startSherpa(asrMode, false);
@@ -330,6 +346,15 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void prepareAutoAsr() {
+        if (!running || !ASR_AUTO.equals(asrMode)) return;
+        if (FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
+            startFreeOnline(ASR_FREE_ONLINE, true);
+            return;
+        }
+        prepareAutoLocalAsr();
+    }
+
+    private void prepareAutoLocalAsr() {
         if (!running || !ASR_AUTO.equals(asrMode)) return;
         String selected = bestInstalledSherpaForCurrentMode();
         if (selected != null) {
@@ -414,6 +439,44 @@ public class TranslationService extends Service implements RecognitionListener {
                 }
             });
         sherpaSpeech.prepare();
+    }
+
+    private void startFreeOnline(String mode, boolean allowAutoFallback) {
+        stopRawRecognitionEngines(false);
+        setDiagSpeech("ASR：正在连接 " + asrLabel(mode));
+        onlineSpeech = new FreeOnlineSpeechEngine(this, mode, languageMode, sourceMlTag,
+            new FreeOnlineSpeechEngine.Callback() {
+                @Override public void onStatus(String message) {
+                    setDiagSpeech("ASR：" + message);
+                    updateNotification(message);
+                }
+                @Override public void onReady(String engineName) {
+                    if (!running) return;
+                    activeAsrMode = mode;
+                    setDiagSpeech("ASR：" + engineName + " · 在线免费");
+                    showStatus(engineName + " 已就绪；免费额度到限后自动回退本地");
+                    startRawAudioCapture();
+                }
+                @Override public void onText(String text, String detectedLanguage, String engineName) {
+                    if (!running || paused || text == null || text.trim().isEmpty()) return;
+                    String cleaned = text.trim();
+                    setDiagSpeech("ASR：" + engineName + " · " + preview(cleaned));
+                    if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+                    queueSpeechTranslation(cleaned, true, detectedLanguage);
+                }
+                @Override public void onError(String message, boolean fatal) {
+                    if (!running) return;
+                    setDiagSpeech("ASR：免费在线失败 · " + message);
+                    if (fatal && allowAutoFallback && ASR_AUTO.equals(asrMode)) {
+                        closeOnlineSpeech();
+                        showStatus("免费在线 ASR 暂不可用，自动切回本地识别");
+                        prepareAutoLocalAsr();
+                    } else if (fatal) {
+                        showStatus("免费在线 ASR 失败：" + message);
+                    }
+                }
+            });
+        onlineSpeech.prepare();
     }
 
     private void startVosk(boolean allowAutoFallback) {
@@ -607,9 +670,12 @@ public class TranslationService extends Service implements RecognitionListener {
             long now = SystemClock.elapsedRealtime();
             updateAudioLevel(peak, now);
 
+            FreeOnlineSpeechEngine online = onlineSpeech;
             OfflineSpeechEngine vosk = offlineSpeech;
             SherpaSpeechEngine sherpa = sherpaSpeech;
-            if (vosk != null && vosk.isReady()) {
+            if (online != null && online.isReady()) {
+                online.acceptPcm(bytes, count * 2, peak);
+            } else if (vosk != null && vosk.isReady()) {
                 vosk.acceptPcm(bytes, count * 2);
             } else if (sherpa != null && sherpa.isReady()) {
                 sherpa.acceptPcm(bytes, count * 2, peak);
@@ -992,6 +1058,8 @@ public class TranslationService extends Service implements RecognitionListener {
         if (pauseControl != null) pauseControl.setText(paused ? "继续" : "暂停");
         if (ocrCapture != null) ocrCapture.setPaused(paused || uiVisible);
         if (paused) {
+            FreeOnlineSpeechEngine online = onlineSpeech;
+            if (online != null) online.flush();
             SherpaSpeechEngine s = sherpaSpeech;
             if (s != null) s.flush();
             setDiagSpeech("ASR：已暂停");
@@ -1028,9 +1096,16 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void stopRawRecognitionEngines(boolean stopAudio) {
         if (stopAudio) stopAudioCapture();
+        closeOnlineSpeech();
         closeVosk();
         closeSherpa();
         cloudSpeechMode = false;
+    }
+
+    private void closeOnlineSpeech() {
+        FreeOnlineSpeechEngine s = onlineSpeech;
+        onlineSpeech = null;
+        if (s != null) try { s.close(); } catch (Exception ignored) {}
     }
 
     private void closeVosk() {

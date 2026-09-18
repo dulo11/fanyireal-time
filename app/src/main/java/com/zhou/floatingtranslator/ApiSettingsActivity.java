@@ -46,6 +46,9 @@ public class ApiSettingsActivity extends Activity {
     private EditText googleKey;
     private EditText libreEndpoint;
     private EditText libreKey;
+    private EditText groqApiKey;
+    private EditText cloudflareAccountId;
+    private EditText cloudflareAiToken;
     private TextView configuredSummary;
     private TextView status;
 
@@ -97,9 +100,9 @@ public class ApiSettingsActivity extends Activity {
         root.addView(engineSpinner, matchWrap());
 
         youdaoSpeechFallback = new CheckBox(this);
-        youdaoSpeechFallback.setText("离线语音和系统识别都不可用时，允许有道云语音最后兜底");
+        youdaoSpeechFallback.setText("旧兼容：允许有道云语音手动使用（不参与免费自动 ASR）");
         youdaoSpeechFallback.setTextColor(Color.WHITE);
-        youdaoSpeechFallback.setChecked(prefs.getBoolean("youdao_speech_fallback", true));
+        youdaoSpeechFallback.setChecked(prefs.getBoolean("youdao_speech_fallback", false));
         root.addView(youdaoSpeechFallback);
 
         showSecrets = new CheckBox(this);
@@ -108,6 +111,20 @@ public class ApiSettingsActivity extends Activity {
         showSecrets.setChecked(false);
         showSecrets.setOnCheckedChangeListener((button, checked) -> applySecretVisibility(checked));
         root.addView(showSecrets);
+
+        root.addView(section("免费在线语音识别 ASR｜优先推荐"));
+        TextView freeAsrTip = text(
+            "自动 ASR 会优先使用这里配置的免费在线服务，再回退本地模型，不会自动调用付费语音 API。\n" +
+            "Groq Free：推荐，Whisper Large V3 高精度；达到免费限额/429 后可自动切 Cloudflare 或本地。\n" +
+            "Cloudflare Workers AI Free：使用 Whisper Large V3 Turbo；需要 Account ID 和 Workers AI API Token。",
+            12, Color.rgb(174, 164, 198));
+        root.addView(freeAsrTip);
+        groqApiKey = field("Groq Free API Key", true, SecureConfig.GROQ_API_KEY);
+        cloudflareAccountId = field("Cloudflare Account ID", false, SecureConfig.CLOUDFLARE_ACCOUNT_ID);
+        cloudflareAiToken = field("Cloudflare Workers AI API Token", true, SecureConfig.CLOUDFLARE_AI_TOKEN);
+        root.addView(groqApiKey, matchWrap());
+        root.addView(cloudflareAccountId, matchWrap());
+        root.addView(cloudflareAiToken, matchWrap());
 
         root.addView(section("百度翻译（主力在线备用）"));
         baiduAppId = field("百度 APPID", false, SecureConfig.BAIDU_APP_ID);
@@ -308,6 +325,8 @@ public class ApiSettingsActivity extends Activity {
         fields.add(deepLKey);
         fields.add(googleKey);
         fields.add(libreKey);
+        fields.add(groqApiKey);
+        fields.add(cloudflareAiToken);
         for (EditText field : fields) {
             if (field == null) continue;
             int pos = field.getSelectionStart();
@@ -346,6 +365,9 @@ public class ApiSettingsActivity extends Activity {
             secure.put(SecureConfig.GOOGLE_KEY, googleKey.getText().toString());
             secure.put(SecureConfig.LIBRE_ENDPOINT, libreEndpoint.getText().toString());
             secure.put(SecureConfig.LIBRE_KEY, libreKey.getText().toString());
+            secure.put(SecureConfig.GROQ_API_KEY, groqApiKey.getText().toString());
+            secure.put(SecureConfig.CLOUDFLARE_ACCOUNT_ID, cloudflareAccountId.getText().toString());
+            secure.put(SecureConfig.CLOUDFLARE_AI_TOKEN, cloudflareAiToken.getText().toString());
             refreshConfiguredSummary();
             status.setText("✅ 已保存到本机。Azure 账号池：" + secure.configuredAzureProfileCount()
                 + " 套；策略：" + (TranslationRouter.AZURE_ROUND_ROBIN.equals(azureMode)
@@ -373,6 +395,8 @@ public class ApiSettingsActivity extends Activity {
         if (secure.has(SecureConfig.DEEPL_KEY)) configured.add("DeepL(兼容)");
         if (secure.has(SecureConfig.GOOGLE_KEY)) configured.add("Google(兼容)");
         if (secure.has(SecureConfig.LIBRE_ENDPOINT)) configured.add("LibreTranslate(兼容)");
+        if (secure.has(SecureConfig.GROQ_API_KEY)) configured.add("Groq Free ASR");
+        if (secure.has(SecureConfig.CLOUDFLARE_ACCOUNT_ID) && secure.has(SecureConfig.CLOUDFLARE_AI_TOKEN)) configured.add("Cloudflare Free ASR");
         configuredSummary.setText(configured.isEmpty()
             ? "API 配置状态：当前未保存在线 API 配置"
             : "API 配置状态：已配置 " + String.join("、", configured) + "（输入框默认隐藏密钥）");
@@ -408,6 +432,9 @@ public class ApiSettingsActivity extends Activity {
         fields.add(googleKey);
         fields.add(libreEndpoint);
         fields.add(libreKey);
+        fields.add(groqApiKey);
+        fields.add(cloudflareAccountId);
+        fields.add(cloudflareAiToken);
         for (EditText field : fields) if (field != null) field.setText("");
     }
 

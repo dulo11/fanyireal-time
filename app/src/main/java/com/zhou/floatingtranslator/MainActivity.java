@@ -125,7 +125,11 @@ public final class MainActivity extends Activity {
         asrModeSpinner = new Spinner(this);
         asrModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "自动推荐｜高精度模型 → Vosk → 备用",
+                "自动推荐｜免费在线优先 → 本地离线",
+                "免费在线自动｜Groq Free → Cloudflare Free → 本地",
+                "Groq Free｜Whisper Large V3｜在线高精度",
+                "Groq Free｜Whisper Large V3 Turbo｜在线低延迟",
+                "Cloudflare Workers AI Free｜Whisper Large V3 Turbo",
                 "Vosk｜省电/小模型",
                 "SenseVoice INT8｜中英日韩粤",
                 "ReazonSpeech｜日语直播优先",
@@ -134,8 +138,8 @@ public final class MainActivity extends Activity {
                 "Whisper Medium INT8｜高精度/高占用",
                 "Qwen3-ASR 0.6B INT8｜日英混合优先",
                 "Omnilingual ASR 300M INT8｜小语种",
-                "Android 系统 SpeechRecognizer｜仅麦克风",
-                "有道云 ASR｜联网备用"
+                "Android 系统 SpeechRecognizer｜免费｜仅麦克风",
+                "有道云 ASR｜旧兼容（不参与免费自动）"
             }));
         asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
         asrModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
@@ -287,6 +291,16 @@ public final class MainActivity extends Activity {
         }
         if (TranslationService.ASR_SYSTEM.equals(asr) && !mic) {
             toast("系统 SpeechRecognizer 只能使用麦克风；系统内部声音/ROOT/Shizuku 请选本地 ASR 或有道 ASR");
+            return;
+        }
+
+        if ((TranslationService.ASR_FREE_ONLINE.equals(asr)
+            || TranslationService.ASR_GROQ_LARGE.equals(asr)
+            || TranslationService.ASR_GROQ_TURBO.equals(asr)
+            || TranslationService.ASR_CLOUDFLARE.equals(asr))
+            && !FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
+            toast("还没配置免费在线 ASR，已打开 API 设置");
+            startActivity(new Intent(this, ApiSettingsActivity.class));
             return;
         }
 
@@ -512,31 +526,39 @@ public final class MainActivity extends Activity {
     }
 
     private int asrIndex(String mode) {
-        if (TranslationService.ASR_VOSK.equals(mode)) return 1;
-        if (TranslationService.ASR_SENSEVOICE.equals(mode)) return 2;
-        if (TranslationService.ASR_REAZON.equals(mode)) return 3;
-        if (TranslationService.ASR_PARAKEET.equals(mode)) return 4;
-        if (TranslationService.ASR_WHISPER_SMALL.equals(mode)) return 5;
-        if (TranslationService.ASR_WHISPER_MEDIUM.equals(mode)) return 6;
-        if (TranslationService.ASR_QWEN3.equals(mode)) return 7;
-        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return 8;
-        if (TranslationService.ASR_SYSTEM.equals(mode)) return 9;
-        if (TranslationService.ASR_YOUDAO.equals(mode)) return 10;
+        if (TranslationService.ASR_FREE_ONLINE.equals(mode)) return 1;
+        if (TranslationService.ASR_GROQ_LARGE.equals(mode)) return 2;
+        if (TranslationService.ASR_GROQ_TURBO.equals(mode)) return 3;
+        if (TranslationService.ASR_CLOUDFLARE.equals(mode)) return 4;
+        if (TranslationService.ASR_VOSK.equals(mode)) return 5;
+        if (TranslationService.ASR_SENSEVOICE.equals(mode)) return 6;
+        if (TranslationService.ASR_REAZON.equals(mode)) return 7;
+        if (TranslationService.ASR_PARAKEET.equals(mode)) return 8;
+        if (TranslationService.ASR_WHISPER_SMALL.equals(mode)) return 9;
+        if (TranslationService.ASR_WHISPER_MEDIUM.equals(mode)) return 10;
+        if (TranslationService.ASR_QWEN3.equals(mode)) return 11;
+        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return 12;
+        if (TranslationService.ASR_SYSTEM.equals(mode)) return 13;
+        if (TranslationService.ASR_YOUDAO.equals(mode)) return 14;
         return 0;
     }
 
     private String selectedAsrMode() {
         switch (asrModeSpinner.getSelectedItemPosition()) {
-            case 1: return TranslationService.ASR_VOSK;
-            case 2: return TranslationService.ASR_SENSEVOICE;
-            case 3: return TranslationService.ASR_REAZON;
-            case 4: return TranslationService.ASR_PARAKEET;
-            case 5: return TranslationService.ASR_WHISPER_SMALL;
-            case 6: return TranslationService.ASR_WHISPER_MEDIUM;
-            case 7: return TranslationService.ASR_QWEN3;
-            case 8: return TranslationService.ASR_OMNILINGUAL;
-            case 9: return TranslationService.ASR_SYSTEM;
-            case 10: return TranslationService.ASR_YOUDAO;
+            case 1: return TranslationService.ASR_FREE_ONLINE;
+            case 2: return TranslationService.ASR_GROQ_LARGE;
+            case 3: return TranslationService.ASR_GROQ_TURBO;
+            case 4: return TranslationService.ASR_CLOUDFLARE;
+            case 5: return TranslationService.ASR_VOSK;
+            case 6: return TranslationService.ASR_SENSEVOICE;
+            case 7: return TranslationService.ASR_REAZON;
+            case 8: return TranslationService.ASR_PARAKEET;
+            case 9: return TranslationService.ASR_WHISPER_SMALL;
+            case 10: return TranslationService.ASR_WHISPER_MEDIUM;
+            case 11: return TranslationService.ASR_QWEN3;
+            case 12: return TranslationService.ASR_OMNILINGUAL;
+            case 13: return TranslationService.ASR_SYSTEM;
+            case 14: return TranslationService.ASR_YOUDAO;
             default: return TranslationService.ASR_AUTO;
         }
     }
@@ -583,6 +605,10 @@ public final class MainActivity extends Activity {
     }
 
     private String asrLabel(String mode) {
+        if (TranslationService.ASR_FREE_ONLINE.equals(mode)) return "免费在线自动";
+        if (TranslationService.ASR_GROQ_LARGE.equals(mode)) return "Groq Free · Whisper Large V3";
+        if (TranslationService.ASR_GROQ_TURBO.equals(mode)) return "Groq Free · Whisper Turbo";
+        if (TranslationService.ASR_CLOUDFLARE.equals(mode)) return "Cloudflare Workers AI Free";
         if (TranslationService.ASR_VOSK.equals(mode)) return "Vosk";
         if (TranslationService.ASR_SENSEVOICE.equals(mode)) return "SenseVoice";
         if (TranslationService.ASR_REAZON.equals(mode)) return "ReazonSpeech";

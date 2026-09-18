@@ -46,6 +46,7 @@ public final class RootCallTranslationService extends Service {
     private RootPcmSource rootSource;
     private OfflineSpeechEngine vosk;
     private SherpaSpeechEngine sherpa;
+    private FreeOnlineSpeechEngine onlineSpeech;
     private OfflineFirstTranslationRouter translator;
 
     private volatile boolean running;
@@ -152,6 +153,13 @@ public final class RootCallTranslationService extends Service {
             showStatus("ROOT/Shizuku 内部 PCM 不能使用系统 SpeechRecognizer，请选 Vosk / sherpa / 有道 ASR。");
             return;
         }
+        if (TranslationService.ASR_FREE_ONLINE.equals(asrMode)
+            || TranslationService.ASR_GROQ_LARGE.equals(asrMode)
+            || TranslationService.ASR_GROQ_TURBO.equals(asrMode)
+            || TranslationService.ASR_CLOUDFLARE.equals(asrMode)) {
+            startFreeOnline(asrMode, profile, false);
+            return;
+        }
         if (TranslationService.ASR_YOUDAO.equals(asrMode)) {
             if (!canUseYoudaoSpeech()) {
                 showStatus("有道云 ASR 未配置，请到 API 安全中心填写 AppKey/AppSecret");
@@ -164,12 +172,11 @@ public final class RootCallTranslationService extends Service {
             return;
         }
         if (TranslationService.ASR_AUTO.equals(asrMode)) {
-            String selected = bestInstalledSherpa();
-            if (selected != null) {
-                startSherpa(selected, profile, true);
+            if (FreeOnlineSpeechEngine.hasAnyConfigured(this)) {
+                startFreeOnline(TranslationService.ASR_FREE_ONLINE, profile, true);
                 return;
             }
-            startVosk(profile, true);
+            prepareAutoLocal(profile);
             return;
         }
         if (TranslationService.ASR_VOSK.equals(asrMode)) {
@@ -181,6 +188,54 @@ public final class RootCallTranslationService extends Service {
             return;
         }
         startVosk(profile, false);
+    }
+
+    private void prepareAutoLocal(RootCallProfileStore.Profile profile) {
+        String selected = bestInstalledSherpa();
+        if (selected != null) startSherpa(selected, profile, true);
+        else startVosk(profile, true);
+    }
+
+    private void startFreeOnline(String mode, RootCallProfileStore.Profile profile, boolean autoFallback) {
+        closeOnline();
+        closeOnline();
+        closeVosk();
+        closeSherpa();
+        diagAsr = "ASR：正在连接 " + asrLabel(mode);
+        renderDiag();
+        onlineSpeech = new FreeOnlineSpeechEngine(this, mode, languageMode, sourceMlTag,
+            new FreeOnlineSpeechEngine.Callback() {
+                @Override public void onStatus(String message) {
+                    diagAsr = "ASR：" + message;
+                    renderDiag();
+                    updateNotification(message);
+                }
+                @Override public void onReady(String engineName) {
+                    if (!running) return;
+                    activeAsrMode = mode;
+                    diagAsr = "ASR：" + engineName + " · 内部 PCM";
+                    renderDiag();
+                    startRootSource(profile);
+                }
+                @Override public void onText(String text, String detectedLanguage, String engineName) {
+                    if (!running || paused || text == null || text.trim().isEmpty()) return;
+                    String cleaned = text.trim();
+                    diagAsr = "ASR：" + engineName + " · " + preview(cleaned);
+                    renderDiag();
+                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    queueTranslate(cleaned, true, detectedLanguage);
+                }
+                @Override public void onError(String message, boolean fatal) {
+                    diagAsr = "ASR：免费在线失败 · " + message;
+                    renderDiag();
+                    if (fatal && autoFallback && TranslationService.ASR_AUTO.equals(asrMode)) {
+                        closeOnline();
+                        showStatus("免费在线 ASR 暂不可用，自动切回本地");
+                        prepareAutoLocal(profile);
+                    } else if (fatal) showStatus("免费在线 ASR 失败：" + message);
+                }
+            });
+        onlineSpeech.prepare();
     }
 
     private String bestInstalledSherpa() {
@@ -312,9 +367,11 @@ public final class RootCallTranslationService extends Service {
     private void consumePcm(byte[] pcm, int length, int peak) {
         long now = SystemClock.elapsedRealtime();
         updateLevel(peak, now);
+        FreeOnlineSpeechEngine online = onlineSpeech;
         OfflineSpeechEngine currentVosk = vosk;
         SherpaSpeechEngine currentSherpa = sherpa;
-        if (currentVosk != null && currentVosk.isReady()) currentVosk.acceptPcm(pcm, length);
+        if (online != null && online.isReady()) online.acceptPcm(pcm, length, peak);
+        else if (currentVosk != null && currentVosk.isReady()) currentVosk.acceptPcm(pcm, length);
         else if (currentSherpa != null && currentSherpa.isReady()) currentSherpa.acceptPcm(pcm, length, peak);
         else if (cloudSpeechMode) appendCloudAudio(pcm, length, peak, now);
     }
@@ -519,6 +576,8 @@ public final class RootCallTranslationService extends Service {
         paused = !paused;
         if (pauseControl != null) pauseControl.setText(paused ? "继续" : "暂停");
         if (paused) {
+            FreeOnlineSpeechEngine online = onlineSpeech;
+            if (online != null) online.flush();
             SherpaSpeechEngine s = sherpa;
             if (s != null) s.flush();
             showStatus("ROOT 通话翻译已暂停");
@@ -559,7 +618,12 @@ public final class RootCallTranslationService extends Service {
 
     private String normalizeAsr(String value) {
         if (TranslationService.ASR_VOSK.equals(value) || TranslationService.ASR_SYSTEM.equals(value)
-            || TranslationService.ASR_YOUDAO.equals(value) || OfflineAsrModelCatalog.find(value) != null) return value;
+            || TranslationService.ASR_YOUDAO.equals(value)
+            || TranslationService.ASR_FREE_ONLINE.equals(value)
+            || TranslationService.ASR_GROQ_LARGE.equals(value)
+            || TranslationService.ASR_GROQ_TURBO.equals(value)
+            || TranslationService.ASR_CLOUDFLARE.equals(value)
+            || OfflineAsrModelCatalog.find(value) != null) return value;
         return TranslationService.ASR_AUTO;
     }
 
@@ -573,8 +637,18 @@ public final class RootCallTranslationService extends Service {
         if (TranslationService.ASR_VOSK.equals(value)) return "Vosk";
         if (TranslationService.ASR_SYSTEM.equals(value)) return "系统 SpeechRecognizer";
         if (TranslationService.ASR_YOUDAO.equals(value)) return "有道云 ASR";
+        if (TranslationService.ASR_FREE_ONLINE.equals(value)) return "免费在线自动 ASR";
+        if (TranslationService.ASR_GROQ_LARGE.equals(value)) return "Groq Free · Whisper Large V3";
+        if (TranslationService.ASR_GROQ_TURBO.equals(value)) return "Groq Free · Whisper Turbo";
+        if (TranslationService.ASR_CLOUDFLARE.equals(value)) return "Cloudflare Workers AI Free";
         OfflineAsrModelCatalog.Model m = OfflineAsrModelCatalog.find(value);
         return m == null ? "自动推荐 ASR" : m.name;
+    }
+
+    private void closeOnline() {
+        FreeOnlineSpeechEngine s = onlineSpeech;
+        onlineSpeech = null;
+        if (s != null) try { s.close(); } catch (Exception ignored) {}
     }
 
     private void closeVosk() {

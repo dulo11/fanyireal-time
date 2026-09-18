@@ -25,6 +25,11 @@ public final class SecureConfig {
     public static final String LIBRE_ENDPOINT = "libre_endpoint";
     public static final String LIBRE_KEY = "libre_key";
 
+    // Free-tier online ASR credentials. Values stay only on this phone.
+    public static final String GROQ_API_KEY = "groq_api_key";
+    public static final String CLOUDFLARE_ACCOUNT_ID = "cloudflare_account_id";
+    public static final String CLOUDFLARE_AI_TOKEN = "cloudflare_ai_token";
+
     private static final String PREFS = "floating_translator_api_local_v1";
     private static final String LEGACY_ENCRYPTED_PREFS = "floating_translator_secure_v1";
     private static final String AZURE_KEY_PREFIX = "azure_key_";
