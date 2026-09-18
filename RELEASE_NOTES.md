@@ -1,21 +1,24 @@
-# 浮译 0.7.3-dev3｜Android 系统识别直接吃内部 PCM
+# 浮译 0.7.3-dev4｜智能拼句 + 悬浮窗仅译文
 
-这一版开始实装前面讨论的 Android 13+ `RecognizerIntent.EXTRA_AUDIO_SOURCE` 路线，不再把“系统 SpeechRecognizer 只能用麦克风”当成固定限制。
+本版不接入任何 AI/LLM，不需要 Token，继续使用现有 Azure / ML Kit / 百度等普通翻译引擎。
 
-- 新增 `AndroidPcmSpeechEngine`：
-  - 接收浮译已经抓到的 16 kHz 单声道 PCM。
-  - 通过 `ParcelFileDescriptor` pipe + `EXTRA_AUDIO_SOURCE` 直接交给系统安装的 RecognitionService。
-  - 同时声明采样率 16000、1 声道、PCM16。
-  - 自动按停顿切句，连续讲话最长约 4.8 秒切段；上一段识别时继续缓存后续声音。
-- 普通“系统内部声音｜直播/视频”自动 ASR 顺序改为：
-  Android 系统外部 PCM → Groq Free / Cloudflare Free → 本地 Whisper/Qwen/SenseVoice/Vosk → 显式开启的付费兜底。
-- ROOT / Shizuku 通话 PCM 也使用同一条优先级：
-  tinycap/ALSA 读到 PCM → Android 系统外部 PCM → 免费在线 → 本地 → 付费最后。
-- 手动选择“Android 系统 SpeechRecognizer”时，系统内部声音以及 ROOT/Shizuku PCM 不再直接拦截；会实际尝试外部 PCM 注入。
-- 厂商 RecognitionService 如果不支持外部音频源，连续失败后自动退出这条路，不会反复死循环。
-- Shizuku 通话兼容页增加说明：微信/Telegram/WhatsApp 是否能读到内部 PCM 仍由 ROM、shell 权限、SELinux 和音频 HAL 决定；只要 Shizuku 测试读到明显 PCM，就可继续尝试系统内置识别。
-- 麦克风场景继续直接使用 Android SpeechRecognizer 自己的麦克风链路，不绕 PCM 注入。
+## 智能拼句修正
+- 新增“智能拼句修正”开关，默认开启。
+- 不等待 AI，也不额外调用大模型。
+- ASR 给出一段明显没说完的文字时，第一版译文仍然立即显示，不增加首屏等待。
+- 对以逗号、冒号、连接词等结尾的片段，或者类似 “... and I choose.” 这种疑似被 ASR 提前断开的短尾句，会暂存最近语境。
+- 下一段 ASR 在 8 秒内到来时，把两段合并成完整句重新交给现有翻译引擎，并用修正后的译文覆盖上一版临时字幕。
+- 流式临时字幕不再写入历史；完整/拼接完成后的最终句才写入历史，减少重复记录。
+- 这套逻辑适用于普通实时翻译和 ROOT / Shizuku 通话翻译。
 
-注意：Android 官方文档说明，如果识别器实现不支持 `EXTRA_AUDIO_SOURCE`，它可能忽略该参数并自行打开麦克风。因此这版仍属于真机兼容测试版，需要在一加 Ace 6 / ColorOS 上确认系统 RecognitionService 的实际行为。
+## 悬浮窗“仅显示译文”
+- 新增“悬浮窗仅显示译文”开关。
+- 开启后隐藏：原文、声音/ASR/翻译诊断、暂停按钮、关闭按钮、OCR 独立文本。
+- 悬浮窗只保留译文本身，不再显示“译文：”前缀。
+- OCR 如果启用，也会把结果复用到唯一的译文区域，不额外叠第二块文字。
+- 状态提示和错误提示不再覆盖“仅译文”模式下的字幕；停止翻译仍可回 App 操作。
 
-稳定版仍保持 0.7.2.4；本版为开发测试版。
+## ASR
+- 保留 dev3：麦克风、MediaProjection 内部 PCM、ROOT/Shizuku PCM 都优先尝试 Android 系统 SpeechRecognizer；失败后再走免费在线、本地模型，付费兜底仍在最后且默认关闭。
+
+这是开发测试版；稳定版仍保持现有稳定分支。

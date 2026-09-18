@@ -47,6 +47,8 @@ public final class MainActivity extends Activity {
     private Spinner targetSpinner;
     private CheckBox showOriginal;
     private CheckBox showDiagnostics;
+    private CheckBox translationOnlyOverlay;
+    private CheckBox smartSentenceTranslation;
     private CheckBox preferOffline;
     private CheckBox enableOcr;
     private SeekBar fontSize;
@@ -191,12 +193,18 @@ public final class MainActivity extends Activity {
         showOriginal = check("显示原文", preferences.getBoolean("show_original", true));
         showDiagnostics = check("显示诊断（声音 / ASR / 翻译）",
             preferences.getBoolean("show_diagnostics", true));
+        translationOnlyOverlay = check("悬浮窗仅显示译文（隐藏原文、诊断、暂停/关闭按钮）",
+            preferences.getBoolean("translation_only_overlay", false));
+        smartSentenceTranslation = check("智能拼句修正（不使用 AI；先立即翻译，后续片段可自动合并重译）",
+            preferences.getBoolean("smart_sentence_translation", true));
         enableOcr = check("屏幕 OCR（ROOT 通话模式会忽略）",
             preferences.getBoolean("enable_ocr", false));
         preferOffline = check("手动选择系统 SpeechRecognizer 时强制请求离线（自动模式忽略此项，优先在线质量）",
             preferences.getBoolean("prefer_offline", false));
         displayCard.addView(showOriginal);
         displayCard.addView(showDiagnostics);
+        displayCard.addView(translationOnlyOverlay);
+        displayCard.addView(smartSentenceTranslation);
         displayCard.addView(enableOcr);
         displayCard.addView(preferOffline);
         displayCard.addView(label("字幕大小"));
@@ -361,6 +369,8 @@ public final class MainActivity extends Activity {
                 preferences.getBoolean("youdao_speech_fallback", false))
             .putExtra(TranslationService.EXTRA_SHOW_ORIGINAL, showOriginal.isChecked())
             .putExtra(TranslationService.EXTRA_SHOW_DIAGNOSTICS, showDiagnostics.isChecked())
+            .putExtra(TranslationService.EXTRA_TRANSLATION_ONLY, translationOnlyOverlay.isChecked())
+            .putExtra(TranslationService.EXTRA_SMART_SENTENCE, smartSentenceTranslation.isChecked())
             .putExtra(TranslationService.EXTRA_PREFER_OFFLINE, preferOffline.isChecked())
             .putExtra(TranslationService.EXTRA_MIC_PROCESSING, selectedMicProcessing())
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
@@ -483,6 +493,8 @@ public final class MainActivity extends Activity {
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
             .putBoolean("show_original", showOriginal.isChecked())
             .putBoolean("show_diagnostics", showDiagnostics.isChecked())
+            .putBoolean("translation_only_overlay", translationOnlyOverlay.isChecked())
+            .putBoolean("smart_sentence_translation", smartSentenceTranslation.isChecked())
             .putBoolean("prefer_offline", preferOffline.isChecked())
             .putString("mic_processing", selectedMicProcessing())
             .putBoolean("enable_ocr", enableOcr.isChecked())

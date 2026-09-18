@@ -87,6 +87,8 @@ public class TranslationService extends Service implements RecognitionListener {
     public static final String EXTRA_YOUDAO_SPEECH_FALLBACK = "youdao_speech_fallback";
     public static final String EXTRA_SHOW_ORIGINAL = "show_original";
     public static final String EXTRA_SHOW_DIAGNOSTICS = "show_diagnostics";
+    public static final String EXTRA_TRANSLATION_ONLY = "translation_only_overlay";
+    public static final String EXTRA_SMART_SENTENCE = "smart_sentence_translation";
     public static final String EXTRA_PREFER_OFFLINE = "prefer_offline";
     public static final String EXTRA_FONT_SIZE = "font_size";
     public static final String EXTRA_ENABLE_OCR = "enable_ocr";
@@ -136,6 +138,8 @@ public class TranslationService extends Service implements RecognitionListener {
     private String engineId = TranslationRouter.AUTO;
     private boolean showOriginal;
     private boolean showDiagnostics;
+    private boolean translationOnlyOverlay;
+    private boolean smartSentenceTranslation = true;
     private boolean enableOcr;
     private boolean allowYoudaoSpeech;
     private boolean preferOffline;
@@ -156,6 +160,7 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private boolean speechTranslationBusy;
     private final SpeechQueue speechQueue = new SpeechQueue();
+    private final SmartSentenceAssembler sentenceAssembler = new SmartSentenceAssembler();
     private String segmentLanguage = "";
 
     private WindowManager windowManager;
@@ -209,6 +214,8 @@ public class TranslationService extends Service implements RecognitionListener {
         engineId = value(intent.getStringExtra(EXTRA_ENGINE_ID), TranslationRouter.AUTO);
         showOriginal = intent.getBooleanExtra(EXTRA_SHOW_ORIGINAL, true);
         showDiagnostics = intent.getBooleanExtra(EXTRA_SHOW_DIAGNOSTICS, true);
+        translationOnlyOverlay = intent.getBooleanExtra(EXTRA_TRANSLATION_ONLY, false);
+        smartSentenceTranslation = intent.getBooleanExtra(EXTRA_SMART_SENTENCE, true);
         enableOcr = intent.getBooleanExtra(EXTRA_ENABLE_OCR, false);
         allowYoudaoSpeech = intent.getBooleanExtra(EXTRA_YOUDAO_SPEECH_FALLBACK, false);
         preferOffline = intent.getBooleanExtra(EXTRA_PREFER_OFFLINE, true);
@@ -244,6 +251,7 @@ public class TranslationService extends Service implements RecognitionListener {
         pendingOcrText = "";
         speechTranslationBusy = false;
         speechQueue.clear();
+        sentenceAssembler.reset();
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
@@ -758,7 +766,17 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void queueSpeechTranslation(String text, boolean finalResult, String language) {
         if (!running || text == null || text.trim().isEmpty()) return;
-        speechQueue.offer(text.trim(), finalResult, language);
+        if (smartSentenceTranslation) {
+            sentenceAssembler.offer(text.trim(), finalResult, language,
+                (assembled, complete, lang) -> enqueueSpeechTranslation(assembled, complete, lang));
+            return;
+        }
+        enqueueSpeechTranslation(text.trim(), finalResult, language);
+    }
+
+    private void enqueueSpeechTranslation(String text, boolean complete, String language) {
+        if (!running || text == null || text.trim().isEmpty()) return;
+        speechQueue.offer(text.trim(), complete, language);
         drainSpeechQueue();
     }
 
@@ -781,8 +799,8 @@ public class TranslationService extends Service implements RecognitionListener {
         if (!running) { finishSpeechTranslation(); return; }
         if (index >= parts.size()) {
             String translated = out.toString().trim();
-            if (translatedText != null) translatedText.setText("译文：" + translated);
-            saveHistory(original, translated);
+            if (translatedText != null) translatedText.setText(translationOnlyOverlay ? translated : "译文：" + translated);
+            if (finalResult) saveHistory(original, translated);
             finishSpeechTranslation();
             return;
         }
@@ -802,7 +820,7 @@ public class TranslationService extends Service implements RecognitionListener {
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
                 setDiagTranslation("翻译失败：" + message);
-                if (translatedText != null) translatedText.setText("翻译失败：" + message);
+                if (!translationOnlyOverlay && translatedText != null) translatedText.setText("翻译失败：" + message);
                 finishSpeechTranslation();
             }
         });
@@ -944,7 +962,11 @@ public class TranslationService extends Service implements RecognitionListener {
         translator.translate(cleaned, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 ocrBusy = false;
-                if (ocrTranslatedText != null) ocrTranslatedText.setText("屏幕译文：" + translated);
+                if (translationOnlyOverlay) {
+                    if (translatedText != null) translatedText.setText(translated);
+                } else if (ocrTranslatedText != null) {
+                    ocrTranslatedText.setText("屏幕译文：" + translated);
+                }
                 setDiagTranslation(engineName);
                 saveHistory(cleaned, translated);
                 consumePendingOcr();
@@ -1042,16 +1064,16 @@ public class TranslationService extends Service implements RecognitionListener {
         close.setOnClickListener(v -> stopEverything());
         controls.addView(pauseControl, new LinearLayout.LayoutParams(0, -2, 1));
         controls.addView(close, new LinearLayout.LayoutParams(0, -2, 1));
-        box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
+        if (!translationOnlyOverlay) box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
 
         diagnosticsText = overlayText(11, Color.rgb(200, 180, 255));
         diagnosticsText.setMaxLines(5);
         diagnosticsText.setGravity(Gravity.START);
-        diagnosticsText.setVisibility(showDiagnostics ? View.VISIBLE : View.GONE);
+        diagnosticsText.setVisibility(!translationOnlyOverlay && showDiagnostics ? View.VISIBLE : View.GONE);
         box.addView(diagnosticsText, new LinearLayout.LayoutParams(-1, -2));
 
         originalText = overlayText(Math.max(13, fontSize - 5), Color.rgb(220, 215, 235));
-        originalText.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
+        originalText.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translatedText = overlayText(fontSize, Color.WHITE);
         translatedText.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(originalText, new LinearLayout.LayoutParams(-1, -2));
@@ -1060,8 +1082,8 @@ public class TranslationService extends Service implements RecognitionListener {
         ocrOriginalText = overlayText(Math.max(12, fontSize - 6), Color.rgb(205, 215, 235));
         ocrTranslatedText = overlayText(Math.max(14, fontSize - 2), Color.WHITE);
         ocrTranslatedText.setTypeface(null, android.graphics.Typeface.BOLD);
-        ocrOriginalText.setVisibility(enableOcr && showOriginal ? View.VISIBLE : View.GONE);
-        ocrTranslatedText.setVisibility(enableOcr ? View.VISIBLE : View.GONE);
+        ocrOriginalText.setVisibility(!translationOnlyOverlay && enableOcr && showOriginal ? View.VISIBLE : View.GONE);
+        ocrTranslatedText.setVisibility(!translationOnlyOverlay && enableOcr ? View.VISIBLE : View.GONE);
         box.addView(ocrOriginalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(ocrTranslatedText, new LinearLayout.LayoutParams(-1, -2));
 
@@ -1141,6 +1163,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void showStatus(String value) {
+        if (translationOnlyOverlay) return;
         main.post(() -> { if (translatedText != null) translatedText.setText(value); });
     }
 
@@ -1151,8 +1174,8 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void renderDiagnostics() {
         if (diagnosticsText == null) return;
-        diagnosticsText.setVisibility(showDiagnostics ? View.VISIBLE : View.GONE);
-        if (!showDiagnostics) return;
+        diagnosticsText.setVisibility(!translationOnlyOverlay && showDiagnostics ? View.VISIBLE : View.GONE);
+        if (translationOnlyOverlay || !showDiagnostics) return;
         diagnosticsText.setText("翻译：" + diagTranslation + "\n声音：" + diagAudio + "\n" + diagSpeech
             + "\n屏幕：" + diagScreen);
     }
@@ -1250,6 +1273,7 @@ public class TranslationService extends Service implements RecognitionListener {
         pendingOcrText = "";
         speechTranslationBusy = false;
         speechQueue.clear();
+        sentenceAssembler.reset();
     }
 
     private void stopEverything() {

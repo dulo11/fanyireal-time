@@ -65,12 +65,15 @@ public final class RootCallTranslationService extends Service {
     private String engineId = TranslationRouter.AUTO;
     private boolean showOriginal = true;
     private boolean showDiagnostics = true;
+    private boolean translationOnlyOverlay;
+    private boolean smartSentenceTranslation = true;
     private long lastLevelUiAt;
     private long lastStreamTranslateAt;
     private long cloudChunkStartedAt;
     private String lastStreamTranslated = "";
     private boolean translateBusy;
     private final SpeechQueue speechQueue = new SpeechQueue();
+    private final SmartSentenceAssembler sentenceAssembler = new SmartSentenceAssembler();
 
     private WindowManager windowManager;
     private View overlay;
@@ -123,6 +126,8 @@ public final class RootCallTranslationService extends Service {
         engineId = value(intent.getStringExtra(TranslationService.EXTRA_ENGINE_ID), TranslationRouter.AUTO);
         showOriginal = intent.getBooleanExtra(TranslationService.EXTRA_SHOW_ORIGINAL, true);
         showDiagnostics = intent.getBooleanExtra(TranslationService.EXTRA_SHOW_DIAGNOSTICS, true);
+        translationOnlyOverlay = intent.getBooleanExtra(TranslationService.EXTRA_TRANSLATION_ONLY, false);
+        smartSentenceTranslation = intent.getBooleanExtra(TranslationService.EXTRA_SMART_SENTENCE, true);
         allowYoudaoSpeech = intent.getBooleanExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, false);
         int fontSize = intent.getIntExtra(TranslationService.EXTRA_FONT_SIZE, 24);
 
@@ -132,6 +137,7 @@ public final class RootCallTranslationService extends Service {
         paused = false;
         translateBusy = false;
         speechQueue.clear();
+        sentenceAssembler.reset();
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoModels.clear();
@@ -459,7 +465,17 @@ public final class RootCallTranslationService extends Service {
 
     private void queueTranslate(String text, boolean finalResult, String language) {
         if (!running || text == null || text.trim().isEmpty()) return;
-        speechQueue.offer(text.trim(), finalResult, language);
+        if (smartSentenceTranslation) {
+            sentenceAssembler.offer(text.trim(), finalResult, language,
+                (assembled, complete, lang) -> enqueueTranslate(assembled, complete, lang));
+            return;
+        }
+        enqueueTranslate(text.trim(), finalResult, language);
+    }
+
+    private void enqueueTranslate(String text, boolean complete, String language) {
+        if (!running || text == null || text.trim().isEmpty()) return;
+        speechQueue.offer(text.trim(), complete, language);
         drainTranslateQueue();
     }
 
@@ -478,16 +494,18 @@ public final class RootCallTranslationService extends Service {
                 if (!running || translator != current) return;
                 diagTranslation = engineName;
                 renderDiag();
-                if (translated != null) translated.setText("译文：" + out);
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putString("last_original", cleaned).putString("last_translation", out).apply();
+                if (translated != null) translated.setText(translationOnlyOverlay ? out : "译文：" + out);
+                if (next.complete) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString("last_original", cleaned).putString("last_translation", out).apply();
+                }
                 finishTranslate();
             }
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
                 diagTranslation = "翻译失败：" + message;
                 renderDiag();
-                if (translated != null) translated.setText("翻译失败：" + message);
+                if (!translationOnlyOverlay && translated != null) translated.setText("翻译失败：" + message);
                 finishTranslate();
             }
         });
@@ -569,15 +587,15 @@ public final class RootCallTranslationService extends Service {
         close.setOnClickListener(v -> stopEverything());
         controls.addView(pauseControl, new LinearLayout.LayoutParams(0, -2, 1));
         controls.addView(close, new LinearLayout.LayoutParams(0, -2, 1));
-        box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
+        if (!translationOnlyOverlay) box.addView(controls, new LinearLayout.LayoutParams(-1, -2));
 
         diag = overlayText(11, Color.rgb(200, 180, 255));
         diag.setGravity(Gravity.START);
-        diag.setVisibility(showDiagnostics ? View.VISIBLE : View.GONE);
+        diag.setVisibility(!translationOnlyOverlay && showDiagnostics ? View.VISIBLE : View.GONE);
         box.addView(diag, new LinearLayout.LayoutParams(-1, -2));
 
         original = overlayText(Math.max(13, fontSize - 5), Color.rgb(220, 215, 235));
-        original.setVisibility(showOriginal ? View.VISIBLE : View.GONE);
+        original.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translated = overlayText(fontSize, Color.WHITE);
         translated.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(original, new LinearLayout.LayoutParams(-1, -2));
@@ -651,12 +669,15 @@ public final class RootCallTranslationService extends Service {
     private void renderDiag() {
         main.post(() -> {
             if (diag == null) return;
-            diag.setVisibility(showDiagnostics ? View.VISIBLE : View.GONE);
-            if (showDiagnostics) diag.setText("声音：" + diagAudio + "\n" + diagAsr + "\n翻译：" + diagTranslation);
+            diag.setVisibility(!translationOnlyOverlay && showDiagnostics ? View.VISIBLE : View.GONE);
+            if (!translationOnlyOverlay && showDiagnostics) {
+                diag.setText("声音：" + diagAudio + "\n" + diagAsr + "\n翻译：" + diagTranslation);
+            }
         });
     }
 
     private void showStatus(String message) {
+        if (translationOnlyOverlay) return;
         main.post(() -> { if (translated != null) translated.setText(message); });
     }
 
@@ -745,6 +766,7 @@ public final class RootCallTranslationService extends Service {
         cloudRequestBusy = false;
         translateBusy = false;
         speechQueue.clear();
+        sentenceAssembler.reset();
     }
 
     private void stopEverything() {
