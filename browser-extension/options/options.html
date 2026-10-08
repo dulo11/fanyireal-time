@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FloatingTranslator 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>FloatingTranslator Browser</h1>
+    <p class="sub">翻译引擎与高级设置</p>
+
+    <section>
+      <h2>翻译引擎</h2>
+      <label>
+        <span>引擎</span>
+        <select id="provider">
+          <option value="google-web">Google Web（实验性，无 Key）</option>
+          <option value="azure">Microsoft / Azure Translator</option>
+        </select>
+      </label>
+      <p class="note">Google Web 模式用于快速测试，属于非正式接口，可能出现限流或失效。长期使用建议配置官方 Microsoft/Azure Translator。</p>
+    </section>
+
+    <section id="azureSection">
+      <h2>Microsoft / Azure Translator</h2>
+      <label>
+        <span>Endpoint</span>
+        <input id="azureEndpoint" type="url" placeholder="https://api.cognitive.microsofttranslator.com">
+      </label>
+      <label>
+        <span>Region</span>
+        <input id="azureRegion" type="text" placeholder="例如 eastasia">
+      </label>
+      <label>
+        <span>Key</span>
+        <input id="azureKey" type="password" autocomplete="off" placeholder="留空表示不修改已保存 Key">
+      </label>
+      <label class="check-row">
+        <input id="clearAzureKey" type="checkbox">
+        <span>清除本机已保存的 Key</span>
+      </label>
+      <p class="note">Key 只保存在当前浏览器的本地扩展存储中，不同步到 GitHub，也不会写入源码。</p>
+    </section>
+
+    <section>
+      <h2>行为</h2>
+      <label class="check-row">
+        <input id="enabled" type="checkbox">
+        <span>启用扩展</span>
+      </label>
+      <label class="check-row">
+        <input id="autoTranslate" type="checkbox">
+        <span>打开网页后自动持续翻译</span>
+      </label>
+      <p class="note">动态加载的新帖子、评论和聊天消息会通过 MutationObserver 自动加入翻译队列。</p>
+    </section>
+
+    <div class="actions">
+      <button id="save" class="primary">保存设置</button>
+      <span id="status"></span>
+    </div>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

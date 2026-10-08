@@ -1,0 +1,66 @@
+name: Build Browser Extension
+
+on:
+  push:
+    branches:
+      - feature/browser-translator-v0.1
+    paths:
+      - 'browser-extension/**'
+      - '.github/workflows/build-browser-extension.yml'
+  pull_request:
+    paths:
+      - 'browser-extension/**'
+      - '.github/workflows/build-browser-extension.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-browser-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m json.tool browser-extension/manifest.json >/dev/null
+          test -f browser-extension/background/service-worker.js
+          test -f browser-extension/content/content.js
+          test -f browser-extension/popup/popup.html
+          test -f browser-extension/options/options.html
+
+      - name: Read extension version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python - <<'PY'
+          import json
+          with open('browser-extension/manifest.json', encoding='utf-8') as f:
+              print(json.load(f)['version'])
+          PY
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd browser-extension
+          zip -r "../dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip" . \
+            -x '*.DS_Store' \
+            -x '*.git*'
+          cd ..
+          unzip -l "dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip"
+
+      - name: Upload extension ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: FloatingTranslator-Browser-v${{ steps.version.outputs.version }}
+          path: dist/FloatingTranslator-Browser-v${{ steps.version.outputs.version }}.zip
+          if-no-files-found: error
+          retention-days: 30

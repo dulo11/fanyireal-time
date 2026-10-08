@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "FloatingTranslator Browser",
+  "version": "0.1.0",
+  "description": "持续翻译整个网页，并自动翻译动态加载的新内容。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "action": {
+    "default_title": "FloatingTranslator",
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "css": ["styles/injected.css"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "options_page": "options/options.html"
+}
