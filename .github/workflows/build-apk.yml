@@ -89,7 +89,7 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.APK_NAME }}
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
       - name: Verify signing continuity with dev5
         env:
@@ -134,3 +134,4 @@ jobs:
             app/build/reports/tests/
             app/build/reports/lint-results-release.*
           if-no-files-found: ignore
+          retention-days: 3
