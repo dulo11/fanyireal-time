@@ -13,7 +13,7 @@ const html = read("popup/popup.html");
 
 for (const f of ["manifest.json", "compat/firefox/manifest.json"]) {
   const manifest = JSON.parse(read(f));
-  assert.equal(manifest.version, "1.3.13");
+  assert.equal(manifest.version, "1.3.14");
   assert.equal(manifest.content_scripts[0].all_frames, false, "Mobile must not inject 11 scripts into every iframe");
   assert.equal(manifest.content_scripts[0].match_about_blank, false);
 }
