@@ -197,7 +197,7 @@
   }
 
   function routeLabel(route) {
-    return ({ azure: "Azure", baidu: "百度", aliyun: "阿里云", "google-web": "Google Web", "google-fallback": "Google 回退", cache: "缓存" })[route] || route || "暂无";
+    return ({ azure: "Azure", baidu: "百度", aliyun: "阿里云", "ai-openai": "AI 大模型", "google-web": "Google Web", "google-fallback": "Google 回退", cache: "缓存" })[route] || route || "暂无";
   }
 
   async function refreshRoute() {
