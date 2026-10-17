@@ -14,6 +14,9 @@ const DEFAULTS = {
 
 const LOCAL_DEFAULTS = {
   floatingPanelVisibleV1: true,
+  floatingFabSizeV1: 52,
+  floatingFabOpacityV1: 1,
+  floatingFabSnapV1: false,
   fallbackGoogle: true
 };
 
@@ -148,6 +151,9 @@ async function refreshRuntimeRoute() {
 function render() {
   $("enabled").checked = Boolean(settings.enabled);
   $("floatingPanelVisible").checked = localSettings.floatingPanelVisibleV1 !== false;
+  $("floatingFabSize").value = String(localSettings.floatingFabSizeV1 ?? 52);
+  $("floatingFabOpacity").value = String(localSettings.floatingFabOpacityV1 ?? 1);
+  $("floatingFabSnap").checked = localSettings.floatingFabSnapV1 === true;
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
   $("fallbackGoogleQuick").checked = localSettings.fallbackGoogle !== false;
   $("skipTargetLanguage").checked = settings.skipTargetLanguage !== false;
@@ -227,6 +233,9 @@ function bindControls() {
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
   $("floatingPanelVisible").addEventListener("change", event => saveLocal({ floatingPanelVisibleV1: event.target.checked }));
+  $("floatingFabSize").addEventListener("change", event => saveLocal({ floatingFabSizeV1: Number(event.target.value) }));
+  $("floatingFabOpacity").addEventListener("change", event => saveLocal({ floatingFabOpacityV1: Number(event.target.value) }));
+  $("floatingFabSnap").addEventListener("change", event => saveLocal({ floatingFabSnapV1: event.target.checked }));
   $("fallbackGoogleQuick").addEventListener("change", event => saveLocal({ fallbackGoogle: event.target.checked }));
   $("skipTargetLanguage").addEventListener("change", event => saveSync({ skipTargetLanguage: event.target.checked }));
   $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
