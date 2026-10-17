@@ -13,6 +13,7 @@ const DEFAULTS = {
   skipTargetLanguage: true,
   chatMode: true,
   inputPreview: true,
+  inputQuickTranslate: false,
   inputSourceLang: "auto",
   inputTargetLang: "en"
 };
@@ -171,6 +172,7 @@ function render() {
   $("displayMode").value = settings.displayMode || "translated";
   $("chatMode").checked = Boolean(settings.chatMode);
   $("inputPreview").checked = Boolean(settings.inputPreview);
+  $("inputQuickTranslate").checked = Boolean(settings.inputQuickTranslate);
   $("inputSourceLang").value = settings.inputSourceLang || "auto";
   $("inputTargetLang").value = settings.inputTargetLang || "en";
   $("siteRule").value = currentHost ? (settings.siteRules?.[currentHost] || "default") : "default";
@@ -269,6 +271,7 @@ function bindControls() {
   $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
   $("chatMode").addEventListener("change", event => saveSync({ chatMode: event.target.checked }));
   $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
+  $("inputQuickTranslate").addEventListener("change", event => saveSync({ inputQuickTranslate: event.target.checked }));
   $("inputSourceLang").addEventListener("change", event => saveInputLanguages({ inputSourceLang: event.target.value }));
   $("inputTargetLang").addEventListener("change", event => saveInputLanguages({ inputTargetLang: event.target.value }));
 
