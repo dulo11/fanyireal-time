@@ -121,9 +121,13 @@
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
 
+  async function init() {
+    await globalThis.FTSiteStartup?.wait?.();
+    await loadSettings();
+  }
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", loadSettings, { once: true });
+    document.addEventListener("DOMContentLoaded", init, { once: true });
   } else {
-    loadSettings();
+    void init();
   }
 })();
