@@ -61,7 +61,8 @@
     lastUrl: location.href,
     routeTimer: null,
     adapter: null,
-    shadowProtectedRestores: 0
+    shadowProtectedRestores: 0,
+    readyForTranslation: false
   };
 
   const helper = () => globalThis.FTLanguage;
@@ -515,7 +516,7 @@
     state.settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     const shadowChanged = ["targetLang", "sourceLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"]
       .some(key => previous[key] !== state.settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(state.settings.siteRules);
-    if (shadowChanged) {
+    if (shadowChanged && state.readyForTranslation) {
       restoreShadowTranslations();
       if (translationEnabled()) {
         discoverShadowRoots(document);
@@ -623,6 +624,7 @@
     try { await exclusions()?.ready; } catch {}
     await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
+    state.readyForTranslation = true;
     markAdapterElements(document);
     startDocumentObserver();
     if (translationEnabled()) discoverShadowRoots(document);
