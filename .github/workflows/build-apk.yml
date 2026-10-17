@@ -2,11 +2,15 @@ name: Build Signed APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish stable version to Releases (otherwise only build/test)"
+        type: boolean
+        required: true
+        default: false
   push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - ".github/workflows/build-apk.yml"
+    tags:
+      - 'v*'
 
 concurrency:
   group: signed-release
@@ -83,15 +87,17 @@ jobs:
           sha256sum "$APK_NAME" FloatingTranslator-latest.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Upload signed APK artifact
+      - name: Upload signed APK artifact (manual test only)
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release != true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.APK_NAME }}
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
       - name: Verify signing continuity with dev5
+        if: github.event_name == 'push' || inputs.publish_release == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,7 +112,20 @@ jobs:
           test -s "$RUNNER_TEMP/current-digest.txt"
           diff "$RUNNER_TEMP/previous-digest.txt" "$RUNNER_TEMP/current-digest.txt"
 
+      - name: Validate official release version
+        if: github.event_name == 'push' || inputs.publish_release == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Official release requires stable x.y.z version"; exit 1; }
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            test "$GITHUB_REF_NAME" = "$RELEASE_TAG" || { echo "::error::Release tag must equal $RELEASE_TAG"; exit 1; }
+          else
+            test "$GITHUB_REF" = 'refs/heads/main' || { echo "::error::Publish from main only"; exit 1; }
+          fi
+
       - name: Publish GitHub Release
+        if: github.event_name == 'push' || inputs.publish_release == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -125,8 +144,8 @@ jobs:
               --notes-file RELEASE_NOTES.md --latest
           fi
 
-      - name: Upload verification reports
-        if: always()
+      - name: Upload verification reports (manual test only)
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.publish_release != true
         uses: actions/upload-artifact@v4
         with:
           name: release-verification-reports
