@@ -14,6 +14,9 @@ const DEFAULTS = {
   chatMode: true,
   inputPreview: true,
   inputQuickTranslate: false,
+  inputAutoReplace: false,
+  inputAutoReplaceDelay: 1500,
+  siteInputAutoReplace: {},
   inputSourceLang: "auto",
   inputTargetLang: "en"
 };
@@ -173,6 +176,11 @@ function render() {
   $("chatMode").checked = Boolean(settings.chatMode);
   $("inputPreview").checked = Boolean(settings.inputPreview);
   $("inputQuickTranslate").checked = Boolean(settings.inputQuickTranslate);
+  $("inputAutoReplace").checked = settings.inputAutoReplace === true;
+  $("inputAutoReplaceDelay").value = String(settings.inputAutoReplaceDelay || 1500);
+  $("siteInputAutoReplace").value = currentHost
+    ? (settings.siteInputAutoReplace?.[currentHost] || "default") : "default";
+  $("siteInputAutoReplace").disabled = !currentHost;
   $("inputSourceLang").value = settings.inputSourceLang || "auto";
   $("inputTargetLang").value = settings.inputTargetLang || "en";
   $("siteRule").value = currentHost ? (settings.siteRules?.[currentHost] || "default") : "default";
@@ -272,6 +280,8 @@ function bindControls() {
   $("chatMode").addEventListener("change", event => saveSync({ chatMode: event.target.checked }));
   $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
   $("inputQuickTranslate").addEventListener("change", event => saveSync({ inputQuickTranslate: event.target.checked }));
+  $("inputAutoReplace").addEventListener("change", event => saveSync({ inputAutoReplace: event.target.checked }));
+  $("inputAutoReplaceDelay").addEventListener("change", event => saveSync({ inputAutoReplaceDelay: Number(event.target.value) }));
   $("inputSourceLang").addEventListener("change", event => saveInputLanguages({ inputSourceLang: event.target.value }));
   $("inputTargetLang").addEventListener("change", event => saveInputLanguages({ inputTargetLang: event.target.value }));
 
@@ -288,6 +298,14 @@ function bindControls() {
     if (event.target.value === "default") delete siteRules[currentHost];
     else siteRules[currentHost] = event.target.value;
     await saveSync({ siteRules });
+  });
+
+  $("siteInputAutoReplace").addEventListener("change", async event => {
+    if (!currentHost) return;
+    const siteInputAutoReplace = { ...(settings.siteInputAutoReplace || {}) };
+    if (event.target.value === "default") delete siteInputAutoReplace[currentHost];
+    else siteInputAutoReplace[currentHost] = event.target.value;
+    await saveSync({ siteInputAutoReplace });
   });
 
   $("siteDisplayMode").addEventListener("change", async event => {

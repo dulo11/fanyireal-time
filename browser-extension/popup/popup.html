@@ -70,12 +70,18 @@
       <label class="check-row"><input id="inputPreview" type="checkbox"><span>输入时实时预览译文</span></label>
       <label class="check-row"><input id="inputQuickTranslate" type="checkbox"><span>输入框快捷翻译（双击或连续三个空格）</span></label>
       <div class="host">默认关闭，开启后仅弹出译文供你复制，不擅自修改输入内容。</div>
+      <label class="check-row"><input id="inputAutoReplace" type="checkbox"><span>停止输入后自动替换为译文（默认关闭）</span></label>
+      <div class="host">主动开启后才生效：会自动修改正在编辑的文字，但不会点击发送；替换后提供12秒撤销按钮。聊天中请确认译文再发送。</div>
+      <div class="grid">
+        <label><span>停止输入多久后翻译并替换</span><select id="inputAutoReplaceDelay"><option value="800">0.8 秒</option><option value="1500">1.5 秒</option><option value="2500">2.5 秒</option><option value="4000">4 秒</option></select></label>
+        <label><span>当前网站的自动替换</span><select id="siteInputAutoReplace"><option value="default">跟随全局</option><option value="on">只在此网站开启</option><option value="off">只在此网站关闭</option></select></label>
+      </div>
       <div class="grid">
         <label><span>我输入的语言</span><select id="inputSourceLang"></select></label>
         <label><span>我发送为</span><select id="inputTargetLang"></select></label>
       </div>
       <div class="actions"><button id="swapInputLang">交换输入语言</button></div>
-      <div class="host">按网站记住最后一次“输入语言 → 发送语言”。输入预览仍支持仅复制、交换和本次输入暂停预览。</div>
+      <div class="host">按网站记住“输入语言 → 发送语言”及自动替换模式。原有的实时预览、手动替换、仅复制和交换语言功能继续保留。</div>
     </section>
 
     <section class="card">

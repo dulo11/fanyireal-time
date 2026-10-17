@@ -7,6 +7,8 @@
   const SETTINGS_DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    inputPreview: true,
+    inputAutoReplace: false,
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated"
@@ -63,6 +65,8 @@
       <div id="status" class="status">正在读取页面状态…</div>
       <label class="toggle"><input id="enabled" type="checkbox"><span>启用翻译</span></label>
       <label class="toggle"><input id="auto" type="checkbox"><span>自动持续翻译网页</span></label>
+      <label class="toggle"><input id="inputPreview" type="checkbox"><span>输入时实时预览译文</span></label>
+      <label class="toggle"><input id="inputAutoReplace" type="checkbox"><span>停止输入后自动替换（默认关闭）</span></label>
       <div class="row">
         <label class="field"><span>源语言</span><select id="source"></select></label>
         <label class="field"><span>翻译为</span><select id="target"></select></label>
@@ -163,6 +167,8 @@
   function render() {
     $("enabled").checked = settings.enabled !== false;
     $("auto").checked = settings.autoTranslate !== false;
+    $("inputPreview").checked = settings.inputPreview !== false;
+    $("inputAutoReplace").checked = settings.inputAutoReplace === true;
     $("source").value = settings.sourceLang || "auto";
     $("target").value = settings.targetLang || "zh-CN";
     $("pause").textContent = pageState.paused ? "继续" : "暂停";
@@ -358,6 +364,8 @@
   $("close").addEventListener("click", () => togglePanel(false));
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("auto").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
+  $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
+  $("inputAutoReplace").addEventListener("change", event => saveSync({ inputAutoReplace: event.target.checked }));
   $("source").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
   $("target").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
   $("pause").addEventListener("click", () => command("pause-toggle"));

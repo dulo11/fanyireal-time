@@ -15,7 +15,10 @@
     inputPreview: true,
     inputSourceLang: "auto",
     inputTargetLang: "en",
-    inputPreviewDelay: 550
+    inputPreviewDelay: 550,
+    inputAutoReplace: false,
+    inputAutoReplaceDelay: 1500,
+    siteInputAutoReplace: {}
   };
 
   const SKIP = [
@@ -54,6 +57,7 @@
     shadowBusy: new WeakSet(),
     docObserver: null,
     inputStates: new WeakMap(),
+    composingInputs: new WeakSet(),
     mutedInputs: new WeakSet(),
     activeEditable: null,
     previewEl: null,
@@ -284,10 +288,70 @@
     positionPreview();
   }
 
+  function autoReplaceEnabled() {
+    if (!state.settings.enabled || !state.settings.chatMode || !state.settings.inputPreview) return false;
+    const rule = state.settings.siteInputAutoReplace?.[location.hostname];
+    if (rule === "on") return true;
+    if (rule === "off") return false;
+    return state.settings.inputAutoReplace === true;
+  }
+
+  function canAutoReplace(element, record, text) {
+    if (!autoReplaceEnabled() || !element?.isConnected || !isEditable(element)) return false;
+    if (state.composingInputs.has(element) || state.mutedInputs.has(element) || isExcluded(element)) return false;
+    if (element instanceof HTMLInputElement && !["text", "search"].includes(element.type)) return false;
+    if (text.length > 1500 || text.length < 2) return false;
+    if (record.lastTrustedText !== text || !record.lastTrustedInputAt) return false;
+    return Date.now() - record.lastTrustedInputAt < 15000;
+  }
+
+  function showAutoReplaceUndo(anchor, original, translated) {
+    removePreview();
+    const panel = document.createElement("div");
+    panel.className = "ft-input-preview";
+    panel.dataset.ftOwned = "1";
+    panel.addEventListener("pointerdown", () => { state.previewInteracting = true; }, true);
+    panel.addEventListener("pointerup", () => setTimeout(() => { state.previewInteracting = false; }, 120), true);
+
+    const label = document.createElement("div");
+    label.className = "ft-input-preview-result";
+    label.textContent = "已自动替换成目标语言 · " + translated.slice(0, 300);
+    panel.appendChild(label);
+    const actions = document.createElement("div");
+    actions.className = "ft-input-preview-actions";
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.textContent = "撤销自动替换";
+    undo.addEventListener("click", () => {
+      const record = inputStateFor(anchor);
+      // 页面自身或用户已经修改译文，则不覆盖新的输入内容。
+      if (anchor.isConnected && readEditable(anchor).trim() === translated.trim()) {
+        record.lastAutoReplaceText = original;
+        record.lastAutoReplaceAt = Date.now();
+        record.lastTrustedText = "";
+        cancelInputPreview(anchor);
+        writeEditable(anchor, original);
+        anchor.focus();
+      }
+      removePreview();
+    });
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "关闭提示";
+    close.addEventListener("click", removePreview);
+    actions.append(undo, close);
+    panel.appendChild(actions);
+    document.documentElement.appendChild(panel);
+    state.previewEl = panel;
+    state.previewAnchor = anchor;
+    positionPreview();
+    setTimeout(() => { if (state.previewEl === panel) removePreview(); }, 12000);
+  }
+
   function inputStateFor(element) {
     let record = state.inputStates.get(element);
     if (!record) {
-      record = { timer: null, seq: 0, lastText: "" };
+      record = { timer: null, seq: 0, lastText: "", lastTrustedInputAt: 0, lastTrustedText: "", lastAutoReplaceText: "", lastAutoReplaceAt: 0 };
       state.inputStates.set(element, record);
     }
     return record;
@@ -308,10 +372,11 @@
     const seq = record.seq;
     state.activeEditable = element;
 
-    if (state.mutedInputs.has(element) || isExcluded(element)) return removePreview();
+    if (state.mutedInputs.has(element) || isExcluded(element) || state.composingInputs.has(element)) return removePreview();
     if (!state.settings.enabled || !state.settings.chatMode || !state.settings.inputPreview) return removePreview();
     const text = readEditable(element).trim();
     record.lastText = text;
+    if (record.lastAutoReplaceText === text && Date.now() - record.lastAutoReplaceAt < 120000) return;
     if (text.length < 2) return removePreview();
     if (shouldSkipBecauseAlreadyTarget(text, state.settings.inputTargetLang, state.settings.inputSourceLang)) return removePreview();
 
@@ -322,12 +387,22 @@
         const translated = await translateOne(current, state.settings.inputSourceLang || "auto", state.settings.inputTargetLang || "en");
         if (seq !== record.seq || !element.isConnected || state.activeEditable !== element || readEditable(element).trim() !== current || state.mutedInputs.has(element)) return;
         if (translated.trim() === current.trim()) return removePreview();
+        if (canAutoReplace(element, record, current) && seq === record.seq) {
+          record.lastAutoReplaceText = translated;
+          record.lastAutoReplaceAt = Date.now();
+          record.lastTrustedText = "";
+          writeEditable(element, translated);
+          showAutoReplaceUndo(element, current, translated);
+          return;
+        }
         showInputPreview(element, current, translated);
       } catch (error) {
         if (seq !== record.seq || state.activeEditable !== element || state.mutedInputs.has(element)) return;
         showInputPreview(element, text, `实时输入翻译失败：${error?.message || error}`, true);
       }
-    }, Math.max(250, Number(state.settings.inputPreviewDelay) || 550));
+    }, autoReplaceEnabled()
+      ? Math.max(600, Math.min(6000, Number(state.settings.inputAutoReplaceDelay) || 1500))
+      : Math.max(250, Number(state.settings.inputPreviewDelay) || 550));
   }
 
   function findAdapter() {
@@ -563,9 +638,34 @@
     if (!state.routeTimer) state.routeTimer = setInterval(handleRouteChange, 1200);
   }
 
+  document.addEventListener("compositionstart", event => {
+    const editable = resolveEditable(event.target);
+    if (editable) {
+      state.composingInputs.add(editable);
+      cancelInputPreview(editable);
+    }
+  }, true);
+
+  document.addEventListener("compositionend", event => {
+    const editable = resolveEditable(event.target);
+    if (!editable) return;
+    state.composingInputs.delete(editable);
+    const record = inputStateFor(editable);
+    record.lastTrustedInputAt = Date.now();
+    record.lastTrustedText = readEditable(editable).trim();
+    scheduleInputPreview(editable);
+  }, true);
+
   document.addEventListener("input", event => {
     const editable = resolveEditable(event.target);
-    if (editable) scheduleInputPreview(editable);
+    if (!editable || state.composingInputs.has(editable) || event.isComposing) return;
+    if (event.isTrusted) {
+      const record = inputStateFor(editable);
+      record.lastTrustedInputAt = Date.now();
+      record.lastTrustedText = readEditable(editable).trim();
+      record.lastAutoReplaceText = "";
+    }
+    scheduleInputPreview(editable);
   }, true);
 
   document.addEventListener("focusin", event => {
