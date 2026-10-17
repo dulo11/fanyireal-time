@@ -2,7 +2,10 @@
   if (window.top !== window || window.__FT_SELECTION_TOOLS_V12__) return;
   window.__FT_SELECTION_TOOLS_V12__ = true;
 
-  const options = { enabled: true, inputQuickTranslate: false, sourceLang: "auto", targetLang: "zh-CN", inputTargetLang: "en" };
+  const options = {
+    enabled: true, inputQuickTranslate: false, selectionToolsEnabled: true,
+    selectionTargetLang: "page", sourceLang: "auto", targetLang: "zh-CN", inputTargetLang: "en"
+  };
   const host = document.createElement("div");
   host.dataset.ftOwned = "1";
   host.id = "ft-selection-action-host";
@@ -17,17 +20,36 @@
       #result{font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0;user-select:text;-webkit-user-select:text}
       .bar{display:flex;align-items:center;gap:7px}.bar span{flex:1;font-weight:700;font-size:13px}
       .bar button{background:#eee;color:#333;min-height:30px}
+      .tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0}
+      .tools button{background:#f1efff;color:#4f35ac;min-height:31px;box-shadow:none}
+      .tools select{pointer-events:auto;min-height:34px;min-width:100px;max-width:170px;border-radius:10px;padding:0 8px;border:1px solid #d5d3e5;background:white;color:#222}
+      #original{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:55px;overflow:auto;color:#555}
       .hint{color:#666;font-size:11px}
-      @media(prefers-color-scheme:dark){#card{background:#28282f;color:#f5f5f5;border-color:#444}.bar button{background:#444;color:#eee}.hint{color:#aaa}}
+      @media(prefers-color-scheme:dark){#card{background:#28282f;color:#f5f5f5;border-color:#444}.bar button{background:#444;color:#eee}.hint,#original{color:#aaa}.tools select{background:#34343d;color:#fff}.tools button{background:#4d3c70;color:#f0eaff}}
     </style>
     <button id="trigger" type="button" aria-label="翻译选中的文字">译</button>
     <section id="card" role="dialog" aria-label="选词翻译结果">
-      <div class="bar"><span>浮译 · 划词翻译</span><button id="copy" type="button">复制</button><button id="close" type="button">×</button></div>
-      <div id="result">翻译中…</div><div class="hint">选词翻译只在点击「译」后请求，不会自动上传你选中的内容。</div>
+      <div class="bar"><span>浮译 · 划词翻译</span><button id="close" type="button">×</button></div>
+      <div class="tools"><label for="selectionTarget">翻译为</label><select id="selectionTarget">
+        <option value="page">跟随网页目标语言</option>
+        <option value="zh-CN">中文简体</option><option value="zh-TW">中文繁体</option>
+        <option value="en">英语</option><option value="ja">日语</option><option value="vi">越南语</option>
+        <option value="fil">菲律宾语</option><option value="ms">马来语</option><option value="th">泰语</option>
+        <option value="de">德语</option><option value="fr">法语</option><option value="es">西班牙语</option>
+      </select><button id="retranslate" type="button">重新翻译</button></div>
+      <div id="original"></div>
+      <div id="result">翻译中…</div>
+      <div class="tools"><button id="copy" type="button">复制译文</button><button id="copyOriginal" type="button">复制原文</button><button id="copyBoth" type="button">双语复制</button></div>
+      <div class="hint">只在主动点击「译」或使用输入框快捷翻译时请求。结果不会自动发送。</div>
     </section>`;
   const trigger = root.getElementById("trigger");
   const card = root.getElementById("card");
   const result = root.getElementById("result");
+  const originalEl = root.getElementById("original");
+  const selectionTargetEl = root.getElementById("selectionTarget");
+  let lastOriginal = "";
+  let lastTranslated = "";
+  let lastRect = null;
   let selected = "";
   let selectedRect = null;
   let requestSeq = 0;
@@ -54,16 +76,25 @@
   }
   function refreshSelection() {
     const selection = selectedText();
-    if (!selection || card.style.display === "block") { hideTrigger(); return; }
+    if (!selection || card.style.display === "block" || options.selectionToolsEnabled === false || options.enabled === false) { hideTrigger(); return; }
     selected = selection.text;
     selectedRect = selection.rect;
     place(trigger, selection.rect);
     trigger.style.display = "block";
   }
+  function resolvedTargetLanguage() {
+    return options.selectionTargetLang === "page" ? (options.targetLang || "zh-CN")
+      : (options.selectionTargetLang || options.targetLang || "zh-CN");
+  }
+
   async function translateSelection(text, targetLang, rect) {
     const seq = ++requestSeq;
+    lastOriginal = String(text || "");
+    lastTranslated = "";
+    lastRect = rect || lastRect;
     card.style.display = "block";
-    place(card, rect);
+    place(card, lastRect);
+    originalEl.textContent = "原文：" + lastOriginal;
     result.textContent = "翻译中…";
     hideTrigger();
     if (options.enabled === false) {
@@ -82,8 +113,9 @@
       if (seq !== requestSeq) return;
       if (!response?.ok) throw new Error(response?.error || "翻译失败");
       const translated = String(response.translations?.[0] || text);
+      lastTranslated = translated;
       result.textContent = translated;
-      // 快捷输入仅显示译文，由用户自行复制/粘贴，避免自动更改聊天内容。
+      // 输入框快捷翻译只展示译文，不影响 v1.3.13 现有的自动替换逻辑。
     } catch (err) {
       if (seq === requestSeq) result.textContent = "翻译失败：" + String(err?.message || err);
     }
@@ -92,16 +124,36 @@
   root.getElementById("close").addEventListener("click", () => {
     card.style.display = "none"; requestSeq++;
   });
-  root.getElementById("copy").addEventListener("click", async () => {
+  async function copyResult(buttonId, value) {
+    if (!value) return;
+    const button = root.getElementById(buttonId);
+    const previous = button.textContent;
     try {
-      await navigator.clipboard.writeText(result.textContent || "");
-      root.getElementById("copy").textContent = "已复制";
-    } catch { root.getElementById("copy").textContent = "长按译文复制"; }
+      await navigator.clipboard.writeText(value);
+      button.textContent = "已复制";
+    } catch { button.textContent = "长按内容复制"; }
+    setTimeout(() => { if (button.isConnected) button.textContent = previous; }, 1500);
+  }
+  root.getElementById("copy").addEventListener("click", () => void copyResult("copy", lastTranslated));
+  root.getElementById("copyOriginal").addEventListener("click", () => void copyResult("copyOriginal", lastOriginal));
+  root.getElementById("copyBoth").addEventListener("click", () => {
+    if (lastTranslated) void copyResult("copyBoth", lastOriginal + "\n" + lastTranslated);
+  });
+  selectionTargetEl.addEventListener("change", async event => {
+    options.selectionTargetLang = event.target.value;
+    try { await chrome.storage.sync.set({ selectionTargetLang: options.selectionTargetLang }); } catch {}
+    if (lastOriginal && card.style.display === "block") {
+      void translateSelection(lastOriginal, resolvedTargetLanguage(), lastRect);
+    }
+  });
+  root.getElementById("retranslate").addEventListener("click", () => {
+    if (lastOriginal) void translateSelection(lastOriginal, resolvedTargetLanguage(), lastRect);
   });
   trigger.addEventListener("pointerdown", event => event.preventDefault());
   trigger.addEventListener("click", () => {
     if (!selected) return;
-    void translateSelection(selected, options.targetLang || "zh-CN", selectedRect);
+    selectionTargetEl.value = options.selectionTargetLang || "page";
+    void translateSelection(selected, resolvedTargetLanguage(), selectedRect);
   });
   document.addEventListener("selectionchange", () => {
     clearTimeout(selectionTimer);
@@ -133,12 +185,14 @@
 
   async function refreshOptions() {
     try { Object.assign(options, await chrome.storage.sync.get(options)); } catch {}
-    if (options.enabled === false) { card.style.display = "none"; hideTrigger(); }
+    selectionTargetEl.value = options.selectionTargetLang || "page";
+    if (options.enabled === false || options.selectionToolsEnabled === false) { card.style.display = "none"; hideTrigger(); }
   }
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync") return;
     for (const [key, change] of Object.entries(changes)) if (key in options) options[key] = change.newValue;
-    if (options.enabled === false) { card.style.display = "none"; hideTrigger(); }
+    if (changes.selectionTargetLang) selectionTargetEl.value = options.selectionTargetLang || "page";
+    if (options.enabled === false || options.selectionToolsEnabled === false) { card.style.display = "none"; hideTrigger(); }
   });
   if (document.documentElement) document.documentElement.appendChild(host);
   else document.addEventListener("DOMContentLoaded", () => document.documentElement?.appendChild(host), { once: true });
