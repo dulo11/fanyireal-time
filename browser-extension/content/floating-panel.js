@@ -77,6 +77,9 @@
   const panel = $("panel");
 
   function applyFloatingVisibility() {
+    // 隐藏/恢复时释放上一次手势，避免隐藏前残留的状态影响再次点击。
+    drag = null;
+    suppressClickUntil = 0;
     fab.style.display = floatingVisible ? "grid" : "none";
     if (!floatingVisible) togglePanel(false);
   }
@@ -295,8 +298,16 @@
 
   fab.addEventListener("touchend", event => {
     if (drag?.source !== "touch") return;
-    const t = Array.from(event.changedTouches).find(t => t.identifier === drag.id);
-    if (t) void finishDrag(null, "touch");
+    const t = Array.from(event.changedTouches || []).find(t => t.identifier === drag.id);
+    if (!t) return;
+    const moved = drag.moved;
+    void finishDrag(null, "touch");
+    if (!moved && floatingVisible) {
+      // 部分安卓浏览器在隐藏→恢复后不再派发兼容 click。
+      // 用手指抬起直接打开面板，同时拦截可能随后到来的合成 click。
+      suppressClickUntil = Date.now() + 650;
+      togglePanel();
+    }
   }, { passive: true });
 
   fab.addEventListener("touchcancel", () => {
@@ -307,28 +318,9 @@
   fab.addEventListener("click", event => {
     event.preventDefault();
     event.stopPropagation();
-    if (Date.now() < suppressClickUntil) return;
+    if (!floatingVisible || Date.now() < suppressClickUntil) return;
     togglePanel();
   });
-
-  // 旧 Android WebView/浏览器若没有 PointerEvent，至少保证轻触可打开。
-  if (!("PointerEvent" in window)) {
-    let touchStart = null;
-    fab.addEventListener("touchstart", event => {
-      const t = event.touches?.[0];
-      if (t) touchStart = { x: t.clientX, y: t.clientY };
-    }, { passive: true });
-    fab.addEventListener("touchend", event => {
-      const t = event.changedTouches?.[0];
-      if (!t || !touchStart) return;
-      const moved = Math.hypot(t.clientX - touchStart.x, t.clientY - touchStart.y) > 8;
-      touchStart = null;
-      if (!moved) {
-        togglePanel();
-        suppressClickUntil = Date.now() + 450;
-      }
-    }, { passive: true });
-  }
 
   $("close").addEventListener("click", () => togglePanel(false));
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
