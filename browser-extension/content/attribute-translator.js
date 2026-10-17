@@ -143,7 +143,7 @@
   async function flush() {
     if (processing || !enabled() || !queue.size) return;
     processing = true;
-    const items = [...queue.values()].slice(0, 40);
+    const items = [...queue.values()].slice(0, 8);
     for (const item of items) queue.delete(queueKey(item.element, item.attr));
 
     try {
@@ -206,7 +206,13 @@
           const current = element.getAttribute(attr) || "";
           if (record && current === record.rendered) continue;
           if (record && current === record.original) {
-            element.setAttribute(attr, record.rendered);
+            // 网站框架反复覆盖属性时不要无限抢写，避免网页冻结。
+            const now = Date.now();
+            if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
+              record.restoreWindowStart = now;
+              record.restoreAttempts = 0;
+            }
+            if (++record.restoreAttempts <= 3) element.setAttribute(attr, record.rendered);
             continue;
           }
           if (record && current !== record.original) records.get(element)?.delete(attr);
@@ -270,6 +276,12 @@
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
   window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
+  window.addEventListener("ft-translation-safety-pause", () => {
+    paused = true;
+    queue.clear();
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }, true);
 
   async function init() {
     try { await exclusions()?.ready; } catch {}
