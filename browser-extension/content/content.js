@@ -491,6 +491,7 @@
     state.generation++;
     cancelScans();
     clearTimeout(state.flushTimer);
+    state.flushTimer = null;
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
     state.queue.clear();
