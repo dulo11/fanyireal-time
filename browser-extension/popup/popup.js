@@ -13,6 +13,7 @@ const DEFAULTS = {
 };
 
 const LOCAL_DEFAULTS = {
+  floatingPanelVisibleV1: true,
   fallbackGoogle: true
 };
 
@@ -146,6 +147,7 @@ async function refreshRuntimeRoute() {
 
 function render() {
   $("enabled").checked = Boolean(settings.enabled);
+  $("floatingPanelVisible").checked = localSettings.floatingPanelVisibleV1 !== false;
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
   $("fallbackGoogleQuick").checked = localSettings.fallbackGoogle !== false;
   $("skipTargetLanguage").checked = settings.skipTargetLanguage !== false;
@@ -224,6 +226,7 @@ async function refreshExclusions() {
 function bindControls() {
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
+  $("floatingPanelVisible").addEventListener("change", event => saveLocal({ floatingPanelVisibleV1: event.target.checked }));
   $("fallbackGoogleQuick").addEventListener("change", event => saveLocal({ fallbackGoogle: event.target.checked }));
   $("skipTargetLanguage").addEventListener("change", event => saveSync({ skipTargetLanguage: event.target.checked }));
   $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
