@@ -48,7 +48,7 @@ function testDomLoopProtection() {
     active: true, paused: false, protectedRestores: 0,
     settings: { displayMode: 'translated', performanceSafeMode: false }
   };
-  const ctx = { state, isExcludedElement: () => false, Date };
+  const ctx = { state, isExcludedElement: () => false, effectiveDisplayMode: () => state.settings.displayMode, Date };
   vm.runInNewContext(extract(main, '  function restoreProtectedNode(', '\n  function enqueueNode('), ctx);
   const node = { isConnected: true, nodeValue: 'original', parentElement: {} };
   const record = { originalFull: 'original', renderedFull: 'translated' };

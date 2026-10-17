@@ -155,7 +155,10 @@
     let last = null;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
+      if (init.signal?.aborted) throw new Error("翻译任务已取消");
       const controller = new AbortController();
+      const forwardAbort = () => controller.abort();
+      if (init.signal) init.signal.addEventListener("abort", forwardAbort, { once: true });
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(url, { ...init, signal: controller.signal });
@@ -169,10 +172,13 @@
         await sleep(Math.min(3000, 450 * (2 ** attempt) + error.retryAfterMs));
       } catch (error) {
         clearTimeout(timer);
+        if (init.signal?.aborted) throw new Error("翻译任务已取消");
         if (error?.category) throw error;
         last = makeError(`${label}网络失败：${error?.name === "AbortError" ? "请求超时" : (error?.message || error)}`, "transient");
         if (attempt === retries) throw last;
         await sleep(450 * (2 ** attempt));
+      } finally {
+        if (init.signal) init.signal.removeEventListener("abort", forwardAbort);
       }
     }
     throw last || makeError(`${label}请求失败`);
@@ -271,7 +277,7 @@
       const headers = { "Content-Type": "application/json", "Ocp-Apim-Subscription-Key": credential.key };
       if (credential.region || config.azureRegion) headers["Ocp-Apim-Subscription-Region"] = credential.region || config.azureRegion;
       const { text } = await requestText(`${endpoint}/translate?${params}`, {
-        method: "POST", headers, body: JSON.stringify(batch.map(item => ({ text: item.text })))
+        method: "POST", headers, signal: options.__signal, body: JSON.stringify(batch.map(item => ({ text: item.text })))
       }, config, credential.label || "Azure");
       let data;
       try { data = JSON.parse(text); } catch { throw makeError("Azure 返回了无法解析的数据", "transient"); }
@@ -297,7 +303,7 @@
     return makeError(`百度翻译错误：${code} ${data.error_msg || ""}`.trim(), "request", 400);
   }
 
-  async function baiduPiece(piece, source, target, credential, config) {
+  async function baiduPiece(piece, source, target, credential, config, signal = null) {
     const endpoint = credential.endpoint || "https://fanyi-api.baidu.com/ait/api/aiTextTranslate";
     const appid = credential.appId || credential.appid || "";
     if (!appid) throw makeError("百度凭据缺少 APPID", "auth");
@@ -318,6 +324,7 @@
       throw makeError("百度凭据需要 API Key，或 APPID + 密钥", "auth");
     }
 
+    init.signal = signal;
     const { text } = await requestText(endpoint, init, config, credential.label || "百度翻译");
     let data;
     try { data = JSON.parse(text); } catch { throw makeError("百度翻译返回了无法解析的数据", "transient"); }
@@ -337,7 +344,7 @@
       const hit = await cached("baidu", source, target, text, config);
       if (typeof hit === "string") { results.push(hit); continue; }
       const pieces = [];
-      for (const piece of splitText(text, 1800)) pieces.push(await baiduPiece(piece, source, target, credential, config));
+      for (const piece of splitText(text, 1800)) pieces.push(await baiduPiece(piece, source, target, credential, config, options.__signal));
       const translated = pieces.join("");
       await cacheWrite("baidu", source, target, text, translated);
       results.push(translated);
@@ -349,7 +356,7 @@
     return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
-  async function aliyunPiece(piece, source, target, credential, config) {
+  async function aliyunPiece(piece, source, target, credential, config, signal = null) {
     if (!credential.accessKeyId || !credential.accessKeySecret) throw makeError("阿里云凭据缺少 AccessKey ID / Secret", "auth");
     const endpoint = String(credential.endpoint || "https://mt.cn-hangzhou.aliyuncs.com").replace(/\/$/, "");
     const resource = "/api/translate/web/general";
@@ -384,7 +391,7 @@
       "x-acs-version": version,
       "Authorization": `acs ${credential.accessKeyId}:${signature}`
     };
-    const { text } = await requestText(url, { method: "POST", headers, body }, config, credential.label || "阿里云翻译");
+    const { text } = await requestText(url, { method: "POST", headers, body, signal }, config, credential.label || "阿里云翻译");
     let data;
     try { data = JSON.parse(text); } catch {
       if (/Signature|AccessKey|Forbidden|Unauthorized/i.test(text)) throw makeError(`阿里云认证失败：${text.slice(0, 180)}`, "auth", 403);
@@ -412,7 +419,7 @@
       const hit = await cached("aliyun", source, target, text, config);
       if (typeof hit === "string") { results.push(hit); continue; }
       const pieces = [];
-      for (const piece of splitText(text, 4500)) pieces.push(await aliyunPiece(piece, source, target, credential, config));
+      for (const piece of splitText(text, 4500)) pieces.push(await aliyunPiece(piece, source, target, credential, config, options.__signal));
       const translated = pieces.join("");
       await cacheWrite("aliyun", source, target, text, translated);
       results.push(translated);
@@ -464,6 +471,7 @@
     const errors = [];
 
     for (const provider of order) {
+      if (options.__signal?.aborted) throw new Error("翻译任务已取消");
       if (provider === "google-web") {
         if (!config.fallbackGoogle && options?.provider !== "google-web") continue;
         try {
@@ -471,6 +479,7 @@
           await writeRoute(provider, null, true);
           return result;
         } catch (error) {
+          if (options.__signal?.aborted) throw new Error("翻译任务已取消");
           errors.push(`${PROVIDER_LABELS[provider]}：${error?.message || error}`);
           await writeRoute(provider, null, false, error?.message || error);
           continue;
@@ -481,6 +490,7 @@
       if (!credentials.length) continue;
       let attempted = false;
       for (const credential of credentials) {
+        if (options.__signal?.aborted) throw new Error("翻译任务已取消");
         if (!isAvailable(provider, credential)) continue;
         attempted = true;
         try {
@@ -489,6 +499,7 @@
           await writeRoute(provider, credential, true);
           return result;
         } catch (error) {
+          if (options.__signal?.aborted) throw new Error("翻译任务已取消");
           markFailure(provider, credential, error, config);
           errors.push(`${credential.label || PROVIDER_LABELS[provider]}：${error?.message || error}`);
           await writeRoute(provider, credential, false, error?.message || error);

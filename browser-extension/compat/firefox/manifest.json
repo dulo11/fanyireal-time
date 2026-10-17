@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "浮译",
-  "version": "1.3.11",
+  "version": "1.3.12",
   "description": "浮译 Firefox 浏览器版：Azure 多 Key 池、百度/阿里云、智能冷却、Google Web 兜底与持续网页翻译。",
   "permissions": [
     "storage",
@@ -44,6 +44,7 @@
         "content/v02-enhancements.js",
         "content/mixed-page-guard.js",
         "content/attribute-translator.js",
+        "content/selection-tools.js",
         "content/floating-panel-bridge.js",
         "content/floating-panel.js"
       ],
