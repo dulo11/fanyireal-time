@@ -30,9 +30,16 @@ jobs:
           from pathlib import Path
           folder = Path(os.environ['RUNNER_TEMP'])
           records = []
-          for line in (folder / 'artifacts-jsonl').read_text().splitlines():
-              if line.strip():
-                  records.extend(json.loads(line).get('artifacts', []))
+          data = (folder / 'artifacts-jsonl').read_text()
+          decoder = json.JSONDecoder()
+          pos = 0
+          while pos < len(data):
+              while pos < len(data) and data[pos].isspace():
+                  pos += 1
+              if pos >= len(data):
+                  break
+              item, pos = decoder.raw_decode(data, pos)
+              records.extend(item.get('artifacts', []))
           valid = [a for a in records if not a.get('expired', False)]
           valid.sort(key=lambda a: (a.get('created_at', ''), a['id']), reverse=True)
           keep = set()
