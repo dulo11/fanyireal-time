@@ -2,6 +2,10 @@ const DEFAULTS = {
   enabled: true,
   autoTranslate: true,
   performanceSafeMode: true,
+  visiblePriority: true,
+  bilingualFontScale: 100,
+  bilingualColor: "#6750e8",
+  siteDisplayModes: {},
   sourceLang: "auto",
   targetLang: "zh-CN",
   displayMode: "translated",
@@ -156,6 +160,9 @@ function render() {
   $("floatingFabOpacity").value = String(localSettings.floatingFabOpacityV1 ?? 1);
   $("floatingFabSnap").checked = localSettings.floatingFabSnapV1 === true;
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
+  $("visiblePriority").checked = settings.visiblePriority !== false;
+  $("bilingualFontScale").value = String(settings.bilingualFontScale || 100);
+  $("bilingualColor").value = /^#[0-9a-f]{6}$/i.test(settings.bilingualColor || "") ? settings.bilingualColor : "#6750e8";
   $("performanceSafeMode").checked = settings.performanceSafeMode !== false;
   $("fallbackGoogleQuick").checked = localSettings.fallbackGoogle !== false;
   $("skipTargetLanguage").checked = settings.skipTargetLanguage !== false;
@@ -168,6 +175,8 @@ function render() {
   $("inputTargetLang").value = settings.inputTargetLang || "en";
   $("siteRule").value = currentHost ? (settings.siteRules?.[currentHost] || "default") : "default";
   $("siteRule").disabled = !currentHost;
+  $("siteDisplayMode").value = currentHost ? (settings.siteDisplayModes?.[currentHost] || "default") : "default";
+  $("siteDisplayMode").disabled = !currentHost;
   $("host").textContent = currentHost || "此页面不支持扩展脚本";
   $("pauseResume").textContent = pagePaused ? "继续翻译" : "暂停翻译";
   $("swapInputLang").disabled = (settings.inputSourceLang || "auto") === "auto";
@@ -213,6 +222,17 @@ async function refreshPageState() {
   if (settings.chatMode && settings.inputPreview) pieces.push("聊天输入预览开");
   $("pageState").textContent = pieces.join(" · ");
   $("pageState").title = response.lastError || "";
+  const diagnostic = [
+    `网站：${response.host || currentHost || "-"}`,
+    `翻译：${response.active ? (response.paused ? "已暂停" : "运行中") : "未运行"}`,
+    `排队：${response.queued ?? 0}；视区外待处理：${response.deferred ?? 0}`,
+    `已翻译：${response.processed ?? 0}；失败：${response.failed ?? 0}`,
+    `最近请求：${Number.isFinite(response.lastRequestMs) && response.lastRequestAt ? response.lastRequestMs + "ms" : "暂无"}`,
+    `翻译任务：${response.processing ? "处理中" : "空闲"}`,
+    `视区优先：${response.visiblePriority ? "开" : "关"}`,
+    `异常：${response.safetyPauseReason || response.lastError || "无"}`
+  ];
+  $("pageDiagnostics").textContent = diagnostic.join("\n");
   render();
 }
 
@@ -235,6 +255,9 @@ function bindControls() {
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
   $("performanceSafeMode").addEventListener("change", event => saveSync({ performanceSafeMode: event.target.checked }));
+  $("visiblePriority").addEventListener("change", event => saveSync({ visiblePriority: event.target.checked }));
+  $("bilingualFontScale").addEventListener("change", event => saveSync({ bilingualFontScale: Number(event.target.value) }));
+  $("bilingualColor").addEventListener("change", event => saveSync({ bilingualColor: event.target.value }));
   $("floatingPanelVisible").addEventListener("change", event => saveLocal({ floatingPanelVisibleV1: event.target.checked }));
   $("floatingFabSize").addEventListener("change", event => saveLocal({ floatingFabSizeV1: Number(event.target.value) }));
   $("floatingFabOpacity").addEventListener("change", event => saveLocal({ floatingFabOpacityV1: Number(event.target.value) }));
@@ -262,6 +285,14 @@ function bindControls() {
     if (event.target.value === "default") delete siteRules[currentHost];
     else siteRules[currentHost] = event.target.value;
     await saveSync({ siteRules });
+  });
+
+  $("siteDisplayMode").addEventListener("change", async event => {
+    if (!currentHost) return;
+    const siteDisplayModes = { ...(settings.siteDisplayModes || {}) };
+    if (event.target.value === "default") delete siteDisplayModes[currentHost];
+    else siteDisplayModes[currentHost] = event.target.value;
+    await saveSync({ siteDisplayModes });
   });
 
   $("pickExclusion").addEventListener("click", async () => {
@@ -292,6 +323,44 @@ function bindControls() {
     $("pageState").textContent = pagePaused ? "当前已暂停，继续后再补扫" : "正在补扫遗漏内容…";
     if (!pagePaused) await sendToPage({ type: "FT_RESCAN_PAGE" });
     setTimeout(refreshPageState, 250);
+  });
+
+  $("clearQueue").addEventListener("click", async () => {
+    const response = await sendToPage({ type: "FT_CLEAR_QUEUE" });
+    $("diagnosticsFeedback").textContent = response?.ok ? "翻译队列已清空，后续滚动和自动翻译仍可继续。" : "无法清空队列，请暂停或关闭当前网页翻译。";
+    setTimeout(refreshPageState, 150);
+  });
+
+  $("refreshDiagnostics").addEventListener("click", refreshPageState);
+  $("copyDiagnostics").addEventListener("click", async () => {
+    const page = await sendToPage({ type: "FT_GET_PAGE_STATE" });
+    const safe = {
+      version: chrome.runtime.getManifest().version,
+      host: currentHost,
+      browser: navigator.userAgent,
+      active: page?.active,
+      paused: page?.paused,
+      queued: page?.queued,
+      deferred: page?.deferred,
+      processing: page?.processing,
+      processed: page?.processed,
+      failed: page?.failed,
+      retried: page?.retried,
+      lastRequestMs: page?.lastRequestMs,
+      lastError: page?.lastError,
+      safetyPauseReason: page?.safetyPauseReason,
+      autoTranslate: settings.autoTranslate,
+      performanceSafeMode: settings.performanceSafeMode,
+      visiblePriority: settings.visiblePriority
+    };
+    const data = JSON.stringify(safe, null, 2);
+    try {
+      await navigator.clipboard.writeText(data);
+      $("diagnosticsFeedback").textContent = "诊断已复制（不含翻译密钥）";
+    } catch {
+      $("pageDiagnostics").textContent = data;
+      $("diagnosticsFeedback").textContent = "无法访问剪贴板；上方已显示诊断文本，可长按复制。";
+    }
   });
 
   $("restorePage").addEventListener("click", async () => {
@@ -334,7 +403,7 @@ async function init() {
     refreshBusy = true;
     try { await Promise.allSettled([refreshPageState(), refreshRuntimeRoute()]); }
     finally { refreshBusy = false; }
-  }, 1400);
+  }, 5000);
 }
 
 init().catch(error => {
