@@ -5,6 +5,7 @@
   const DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    performanceSafeMode: true,
     sourceLang: "auto",
     targetLang: "zh-CN",
     siteRules: {},
@@ -45,6 +46,8 @@
   }
 
   function enabled() {
+    // 默认在移动端关闭属性翻译，避免修改 React/Vue 的 aria-label / value 导致重绘循环。
+    if (settings.performanceSafeMode !== false) return false;
     if (!settings.enabled || paused) return false;
     const rule = siteRule();
     if (rule === "never") return false;
@@ -233,7 +236,7 @@
   async function loadSettings() {
     const previous = settings;
     settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
-    const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage"]
+    const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage", "performanceSafeMode"]
       .some(key => previous[key] !== settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(settings.siteRules);
     if (changed) restoreAll();
     if (initialized && enabled()) scan(document);
