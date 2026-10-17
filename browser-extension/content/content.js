@@ -104,6 +104,34 @@
     } catch { return true; }
   }
 
+  function applyBilingualStyle() {
+    try {
+      const scale = Math.max(75, Math.min(140, Number(state.settings.bilingualFontScale) || 100));
+      const color = /^#[0-9a-f]{6}$/i.test(String(state.settings.bilingualColor))
+        ? state.settings.bilingualColor : "#6750e8";
+      document.documentElement.style.setProperty("--ft-bilingual-color", color);
+      document.documentElement.style.setProperty("--ft-bilingual-scale", String(scale / 100));
+    } catch {}
+  }
+
+  function installPerformanceSafety() {
+    if (typeof PerformanceObserver !== "function") return;
+    try {
+      const observer = new PerformanceObserver(list => {
+        if (!state.active || state.paused || state.settings.performanceSafeMode === false) return;
+        if (!state.processing && !state.queue.size) return;
+        const now = Date.now();
+        if (now - state.longTaskWindowStart > 10000) {
+          state.longTaskWindowStart = now;
+          state.longTaskCount = 0;
+        }
+        for (const entry of list.getEntries()) if (entry.duration >= 180) state.longTaskCount++;
+        if (state.longTaskCount >= 6) pauseForSafety("检测到多次长任务导致页面响应迟缓，已自动暂停翻译");
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {} // 部分安卓内核不支持 longtask。
+  }
+
   function shouldTranslatePage() {
     if (!state.settings.enabled) return false;
     const rule = siteRule();
@@ -488,6 +516,7 @@
 
     if (materiallyChanged) restorePage();
     state.settings = next;
+    applyBilingualStyle();
     state.active = shouldTranslatePage();
     if (rescan && state.readyForTranslation && state.active && !state.paused) scheduleTreeScan(document.body);
   }
@@ -704,6 +733,19 @@
       sendResponse({ ok: true });
       return false;
     }
+    if (message?.type === "FT_CLEAR_QUEUE") {
+      state.generation++;
+      cancelCurrentRequest();
+      cancelScans();
+      state.queue.clear();
+      state.deferredNodes.clear();
+      clearTimeout(state.flushTimer);
+      state.flushTimer = null;
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+      sendResponse({ ok: true, cleared: true });
+      return false;
+    }
     if (message?.type === "FT_RESCAN_PAGE") {
       handleRouteRescan();
       sendResponse({ ok: true, paused: state.paused });
@@ -790,6 +832,7 @@
     await loadSettings({ rescan: false });
     state.readyForTranslation = true;
     startObserver();
+    installPerformanceSafety();
     if (state.active && !state.paused) scheduleTreeScan(document.body);
   }
 
