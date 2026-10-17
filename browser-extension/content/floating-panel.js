@@ -9,9 +9,11 @@
     autoTranslate: true,
     inputPreview: true,
     inputAutoReplace: false,
+    inputTargetLang: "en",
+    selectionToolsEnabled: true,
+    displayMode: "translated",
     sourceLang: "auto",
     targetLang: "zh-CN",
-    displayMode: "translated"
   };
   const LANGUAGES = [
     ["auto", "自动检测"], ["zh-CN", "中文简体"], ["zh-TW", "中文繁体"], ["en", "英语"],
@@ -67,9 +69,14 @@
       <label class="toggle"><input id="auto" type="checkbox"><span>自动持续翻译网页</span></label>
       <label class="toggle"><input id="inputPreview" type="checkbox"><span>输入时实时预览译文</span></label>
       <label class="toggle"><input id="inputAutoReplace" type="checkbox"><span>停止输入后自动替换（默认关闭）</span></label>
+      <label class="toggle"><input id="selectionToolsEnabled" type="checkbox"><span>网页选中文字后显示「译」按钮</span></label>
       <div class="row">
         <label class="field"><span>源语言</span><select id="source"></select></label>
         <label class="field"><span>翻译为</span><select id="target"></select></label>
+      </div>
+      <div class="row">
+        <label class="field"><span>网页显示方式</span><select id="displayMode"><option value="translated">仅译文</option><option value="bilingual">原文＋译文</option></select></label>
+        <label class="field"><span>聊天发送语言</span><select id="inputTarget"></select></label>
       </div>
       <div class="actions">
         <button id="pause" type="button" class="primary">暂停</button>
@@ -137,6 +144,10 @@
         target.value = value;
         target.textContent = label;
         $("target").appendChild(target);
+        const inputTarget = document.createElement("option");
+        inputTarget.value = value;
+        inputTarget.textContent = label;
+        $("inputTarget").appendChild(inputTarget);
       }
     }
   }
@@ -169,6 +180,9 @@
     $("auto").checked = settings.autoTranslate !== false;
     $("inputPreview").checked = settings.inputPreview !== false;
     $("inputAutoReplace").checked = settings.inputAutoReplace === true;
+    $("selectionToolsEnabled").checked = settings.selectionToolsEnabled !== false;
+    $("displayMode").value = settings.displayMode || "translated";
+    $("inputTarget").value = settings.inputTargetLang || "en";
     $("source").value = settings.sourceLang || "auto";
     $("target").value = settings.targetLang || "zh-CN";
     $("pause").textContent = pageState.paused ? "继续" : "暂停";
@@ -366,6 +380,9 @@
   $("auto").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
   $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
   $("inputAutoReplace").addEventListener("change", event => saveSync({ inputAutoReplace: event.target.checked }));
+  $("selectionToolsEnabled").addEventListener("change", event => saveSync({ selectionToolsEnabled: event.target.checked }));
+  $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
+  $("inputTarget").addEventListener("change", event => saveSync({ inputTargetLang: event.target.value }));
   $("source").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
   $("target").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
   $("pause").addEventListener("click", () => command("pause-toggle"));
