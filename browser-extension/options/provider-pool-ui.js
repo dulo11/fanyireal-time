@@ -1,9 +1,10 @@
 (() => {
-  const DEFAULT_ORDER = ["azure", "baidu", "aliyun", "google-web"];
+  const DEFAULT_ORDER = ["azure", "baidu", "aliyun", "google-web", "ai-openai"];
   const PROVIDERS = {
     azure: { label: "Azure", key: "azureCredentials" },
     baidu: { label: "百度翻译", key: "baiduCredentials" },
     aliyun: { label: "阿里云翻译", key: "aliyunCredentials" },
+    "ai-openai": { label: "AI 翻译（兼容接口）", key: "aiCredentials" },
     "google-web": { label: "Google Web", key: "" }
   };
 
@@ -14,6 +15,8 @@
     azureCredentials: [],
     baiduCredentials: [],
     aliyunCredentials: [],
+    aiCredentials: [],
+    aiTranslationStyle: "",
     azureKey: "",
     azureRegion: "",
     azureEndpoint: "https://api.cognitive.microsofttranslator.com"
@@ -23,7 +26,8 @@
     providerOrder: [...DEFAULT_ORDER],
     azureCredentials: [],
     baiduCredentials: [],
-    aliyunCredentials: []
+    aliyunCredentials: [],
+    aiCredentials: []
   };
 
   const $ = id => document.getElementById(id);
@@ -47,6 +51,9 @@
     }
     if (provider === "baidu") {
       return { id: newId(provider), label: `百度凭据 ${index + 1}`, enabled: true, appId: "", apiKey: "", secret: "", endpoint: "https://fanyi-api.baidu.com/ait/api/aiTextTranslate" };
+    }
+    if (provider === "ai-openai") {
+      return { id: newId(provider), label: `AI 模型 ${index + 1}`, enabled: true, apiKey: "", model: "deepseek-chat", endpoint: "https://api.deepseek.com/chat/completions" };
     }
     return { id: newId(provider), label: `阿里云凭据 ${index + 1}`, enabled: true, accessKeyId: "", accessKeySecret: "", endpoint: "https://mt.cn-hangzhou.aliyuncs.com" };
   }
@@ -130,6 +137,12 @@
         labelWrap("AccessKey Secret", secretInput(credential, "accessKeySecret", "AccessKey Secret")),
         labelWrap("Endpoint", textInput(credential, "endpoint", "https://mt.cn-hangzhou.aliyuncs.com", "url"))
       );
+    } else if (provider === "ai-openai") {
+      card.append(
+        labelWrap("API Key", secretInput(credential, "apiKey", "sk-...")),
+        labelWrap("模型名称", textInput(credential, "model", "deepseek-chat / gpt-4.1-mini / 自定义模型")),
+        labelWrap("完整 HTTPS 接口地址", textInput(credential, "endpoint", "https://api.deepseek.com/chat/completions", "url"))
+      );
     }
 
     const actions = document.createElement("div");
@@ -138,6 +151,7 @@
       if (provider === "azure") credential.key = "";
       if (provider === "baidu") { credential.apiKey = ""; credential.secret = ""; }
       if (provider === "aliyun") credential.accessKeySecret = "";
+      if (provider === "ai-openai") credential.apiKey = "";
       renderProvider(provider);
     });
     const remove = actionButton("删除此凭据", () => {
@@ -168,7 +182,7 @@
 
   function renderOrder() {
     state.providerOrder = normalizeOrder(state.providerOrder);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < DEFAULT_ORDER.length; i++) {
       const select = $(`providerOrder${i + 1}`);
       if (!select) continue;
       select.innerHTML = "";
@@ -195,6 +209,8 @@
     state.azureCredentials = Array.isArray(local.azureCredentials) ? structuredClone(local.azureCredentials) : [];
     state.baiduCredentials = Array.isArray(local.baiduCredentials) ? structuredClone(local.baiduCredentials) : [];
     state.aliyunCredentials = Array.isArray(local.aliyunCredentials) ? structuredClone(local.aliyunCredentials) : [];
+    state.aiCredentials = Array.isArray(local.aiCredentials) ? structuredClone(local.aiCredentials) : [];
+    $("aiTranslationStyle").value = String(local.aiTranslationStyle || "");
 
     if (!state.azureCredentials.length && local.azureKey) {
       state.azureCredentials.push({
@@ -211,6 +227,7 @@
     renderProvider("azure");
     renderProvider("baidu");
     renderProvider("aliyun");
+    renderProvider("ai-openai");
     await refreshPoolStatus();
   }
 
@@ -219,7 +236,8 @@
       $("providerOrder1").value,
       $("providerOrder2").value,
       $("providerOrder3").value,
-      $("providerOrder4").value
+      $("providerOrder4").value,
+      $("providerOrder5").value
     ]);
     const cooldownSeconds = Math.max(5, Math.min(3600, Number($("providerCooldownSeconds").value) || 60));
     await chrome.storage.local.set({
@@ -228,7 +246,9 @@
       providerCooldownMs: cooldownSeconds * 1000,
       azureCredentials: state.azureCredentials,
       baiduCredentials: state.baiduCredentials,
-      aliyunCredentials: state.aliyunCredentials
+      aliyunCredentials: state.aliyunCredentials,
+      aiCredentials: state.aiCredentials,
+      aiTranslationStyle: String($("aiTranslationStyle").value || "").slice(0, 1000)
     });
     await chrome.runtime.sendMessage({ type: "FT_PROVIDER_POOL_RESET_HEALTH" }).catch(() => null);
     $("providerPoolSaveStatus").textContent = "多引擎配置已保存";
@@ -256,7 +276,7 @@
     }
     const status = response.status || {};
     const lines = [`凭据池：${status.enabled ? "已启用" : "已关闭"} · 顺序 ${status.order?.map(item => PROVIDERS[item]?.label || item).join(" → ") || "-"}`];
-    for (const provider of ["azure", "baidu", "aliyun"]) {
+    for (const provider of ["azure", "baidu", "aliyun", "ai-openai"]) {
       for (const item of status.providers?.[provider] || []) lines.push(statusLine(provider, item));
     }
     node.textContent = lines.join("\n");
@@ -275,6 +295,7 @@
     bindAdd("azure");
     bindAdd("baidu");
     bindAdd("aliyun");
+    bindAdd("ai-openai");
     $("saveProviderPool")?.addEventListener("click", () => savePool().catch(error => { $("providerPoolSaveStatus").textContent = `保存失败：${error?.message || error}`; }));
     $("refreshProviderPoolStatus")?.addEventListener("click", () => refreshPoolStatus());
     $("resetProviderPoolHealth")?.addEventListener("click", async () => {
