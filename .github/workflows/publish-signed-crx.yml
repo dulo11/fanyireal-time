@@ -86,6 +86,8 @@ jobs:
             build/chromium
           (cd build/chromium && zip -qr "../../dist/FloatingTranslator-Chromium-v${VERSION}.zip" .)
           test -s dist/FloatingTranslator-Chromium.crx
+          cp dist/FloatingTranslator-Chromium.crx "dist/FloatingTranslator-Chromium-v${VERSION}.crx"
+          test -s "dist/FloatingTranslator-Chromium-v${VERSION}.crx"
           test -s "dist/FloatingTranslator-Chromium-v${VERSION}.zip"
 
       - name: Generate update manifest and checksums
@@ -102,7 +104,7 @@ jobs:
             </app>
           </gupdate>
           XML
-          (cd dist && sha256sum FloatingTranslator-Chromium.crx "FloatingTranslator-Chromium-v${VERSION}.zip" > SHA256SUMS.txt)
+          (cd dist && sha256sum FloatingTranslator-Chromium.crx "FloatingTranslator-Chromium-v${VERSION}.crx" "FloatingTranslator-Chromium-v${VERSION}.zip" > SHA256SUMS.txt)
           cat dist/updates.xml
           cat dist/SHA256SUMS.txt
 
@@ -117,6 +119,7 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" \
               dist/FloatingTranslator-Chromium.crx \
+              "dist/FloatingTranslator-Chromium-v${VERSION}.crx" \
               "dist/FloatingTranslator-Chromium-v${VERSION}.zip" \
               dist/updates.xml \
               dist/SHA256SUMS.txt \
@@ -124,6 +127,7 @@ jobs:
           else
             gh release create "$TAG" \
               dist/FloatingTranslator-Chromium.crx \
+              "dist/FloatingTranslator-Chromium-v${VERSION}.crx" \
               "dist/FloatingTranslator-Chromium-v${VERSION}.zip" \
               dist/updates.xml \
               dist/SHA256SUMS.txt \
@@ -162,6 +166,7 @@ jobs:
           name: FloatingTranslator-Signed-Chromium-v${{ steps.meta.outputs.version }}
           path: |
             dist/FloatingTranslator-Chromium.crx
+            dist/FloatingTranslator-Chromium-v${{ steps.meta.outputs.version }}.crx
             dist/FloatingTranslator-Chromium-v${{ steps.meta.outputs.version }}.zip
             dist/updates.xml
             dist/SHA256SUMS.txt
