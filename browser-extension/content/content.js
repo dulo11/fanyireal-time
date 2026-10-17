@@ -38,6 +38,7 @@
     retryTimer: null,
     nodeState: new WeakMap(),
     nodeRetries: new WeakMap(),
+    consecutiveBatchErrors: 0,
     trackedNodes: new Set(),
     generation: 0,
     observer: null,
@@ -140,6 +141,13 @@
   function restoreProtectedNode(node, record) {
     if (!record || !node?.isConnected || !state.active || state.paused || isExcludedElement(node.parentElement)) return false;
     if (node.nodeValue !== record.originalFull) return false;
+    // React/Vue 可将译文恢复为原文；反复抢写会与站点 DOM 更新形成死循环。
+    const now = Date.now();
+    if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
+      record.restoreWindowStart = now;
+      record.restoreAttempts = 0;
+    }
+    if (++record.restoreAttempts > 3) return false;
 
     if (state.settings.displayMode === "bilingual") {
       if (!record.translationEl?.isConnected) {
@@ -233,7 +241,7 @@
     let chars = 0;
     for (const node of candidates) {
       const core = splitWhitespace(node.nodeValue).core;
-      if (batch.length >= 40 || (batch.length && chars + core.length > 16000)) break;
+      if (batch.length >= 8 || (batch.length && chars + core.length > 2400)) break;
       batch.push(node);
       chars += core.length;
     }
@@ -247,7 +255,7 @@
       if (!entry.node?.isConnected || !isEligibleTextNode(entry.node)) continue;
       const retries = (state.nodeRetries.get(entry.node) || 0) + 1;
       state.nodeRetries.set(entry.node, retries);
-      if (retries <= 4) {
+      if (retries <= 1) {
         state.queue.add(entry.node);
         state.retried++;
         maxRetry = Math.max(maxRetry, retries);
@@ -259,6 +267,28 @@
       state.retryTimer = null;
       scheduleFlush(0);
     }, Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
+  }
+
+  function pauseForSafety(reason) {
+    state.lastError = reason;
+    setPaused(true);
+    try {
+      window.dispatchEvent(new CustomEvent("ft-translation-safety-pause", { detail: { reason } }));
+    } catch {}
+  }
+
+  async function sendTranslationWithDeadline(message, timeoutMs = 18000) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        chrome.runtime.sendMessage(message),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("翻译请求超过18秒，已自动暂停本页；请检查引擎或网络后再继续")), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   }
 
   async function processQueue() {
@@ -276,7 +306,7 @@
       }).filter(entry => hasLetters(entry.parts.core));
       if (!entries.length) return;
 
-      const response = await chrome.runtime.sendMessage({
+      const response = await sendTranslationWithDeadline({
         type: "FT_TRANSLATE_DETAILED",
         texts: entries.map(entry => entry.parts.core),
         options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
@@ -308,14 +338,27 @@
       if (failedEntries.length) {
         state.failed += failedEntries.length;
         state.lastError = firstError;
-        retryFailedEntries(failedEntries);
+        state.consecutiveBatchErrors++;
+        if (state.consecutiveBatchErrors >= 2) {
+          pauseForSafety(`连续翻译失败，已暂停本页：${firstError}`);
+        } else {
+          retryFailedEntries(failedEntries);
+        }
       } else {
+        state.consecutiveBatchErrors = 0;
         state.lastError = "";
       }
     } catch (error) {
+      if (generation !== state.generation || state.paused) return;
       state.failed += Math.max(1, entries.length);
-      state.lastError = String(error?.message || error);
-      retryFailedEntries(entries);
+      const reason = String(error?.message || error);
+      state.lastError = reason;
+      state.consecutiveBatchErrors++;
+      if (reason.includes("超过18秒") || state.consecutiveBatchErrors >= 2) {
+        pauseForSafety(reason);
+      } else {
+        retryFailedEntries(entries);
+      }
       console.warn("[FloatingTranslator]", error);
     } finally {
       state.processing = false;
@@ -360,6 +403,7 @@
     state.retried = 0;
     state.protectedRestores = 0;
     state.lastError = "";
+    state.consecutiveBatchErrors = 0;
   }
 
   async function loadSettings({ rescan = true } = {}) {
@@ -515,6 +559,8 @@
       state.retryTimer = null;
       return;
     }
+    state.consecutiveBatchErrors = 0;
+    state.lastError = "";
     if (state.active) {
       scheduleTreeScan(document.body);
       if (state.queue.size) scheduleFlush(0);
