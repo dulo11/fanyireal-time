@@ -9,7 +9,7 @@ const select = read("content/selection-tools.js");
 const floating = read("content/floating-panel.js");
 const popup = read("popup/popup.js");
 const html = read("popup/popup.html");
-for (const m of [manifest, firefox]) assert.equal(m.version, "1.3.14");
+for (const m of [manifest, firefox]) assert.equal(m.version, "1.3.15");
 assert.ok(manifest.content_scripts[0].js.includes("content/selection-tools.js"));
 assert.match(select, /selectionToolsEnabled: true/);
 assert.match(select, /selectionTargetLang: "page"/);
@@ -42,4 +42,4 @@ assert.equal(context.resolvedTargetLanguage(), "en", "Independent selection targ
 options.selectionTargetLang = "page";
 options.targetLang = "zh-CN";
 assert.equal(context.resolvedTargetLanguage(), "zh-CN", "Chinese selection target is allowed, no automatic skip");
-console.log("v1.3.14 selection and mobile floating shortcuts tests passed");
+console.log("v1.3.15 selection and mobile floating shortcuts tests passed");
