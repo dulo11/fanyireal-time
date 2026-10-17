@@ -6,6 +6,10 @@
     enabled: true,
     autoTranslate: true,
     performanceSafeMode: true,
+    visiblePriority: true,
+    bilingualFontScale: 100,
+    bilingualColor: "#6750e8",
+    siteDisplayModes: {},
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated",
@@ -59,7 +63,15 @@
     readyForTranslation: false,
     safeMutationTimer: null,
     safeMutationRoots: new Set(),
-    safeMutationLastFlush: 0
+    safeMutationLastFlush: 0,
+    deferredNodes: new Set(),
+    viewportRefreshTimer: null,
+    currentRequestId: "",
+    lastRequestMs: 0,
+    lastRequestAt: 0,
+    safetyPauseReason: "",
+    longTaskCount: 0,
+    longTaskWindowStart: 0
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -77,6 +89,19 @@
   function siteRule() {
     try { return state.settings.siteRules?.[location.hostname] || "default"; }
     catch { return "default"; }
+  }
+
+  function effectiveDisplayMode() {
+    const override = state.settings.siteDisplayModes?.[location.hostname];
+    return ["translated", "bilingual"].includes(override) ? override : state.settings.displayMode;
+  }
+
+  function nearViewport(node) {
+    if (state.settings.visiblePriority === false) return true;
+    try {
+      const rect = node?.parentElement?.getBoundingClientRect?.();
+      return !rect || (rect.bottom >= -200 && rect.top <= innerHeight + 550);
+    } catch { return true; }
   }
 
   function shouldTranslatePage() {
@@ -158,7 +183,7 @@
     }
     if (++record.restoreAttempts > 3) return false;
 
-    if (state.settings.displayMode === "bilingual") {
+    if (effectiveDisplayMode() === "bilingual") {
       if (!record.translationEl?.isConnected) {
         const span = record.translationEl || createTranslationSpan(node, record.translatedCore);
         record.translationEl = span;
@@ -176,6 +201,11 @@
 
   function enqueueNode(node) {
     if (!state.active || state.paused || !isEligibleTextNode(node)) return;
+    if (!nearViewport(node)) {
+      if (state.deferredNodes.size < 2400) state.deferredNodes.add(node);
+      return;
+    }
+    state.deferredNodes.delete(node);
     const previous = state.nodeState.get(node);
     if (previous) {
       const current = node.nodeValue;
@@ -246,13 +276,13 @@
     state.pendingTreeRoots.length = 0;
   }
 
-  function scheduleFlush(delay = 90) {
+  function scheduleFlush(delay = 180) {
     if (state.paused || !state.active || state.flushTimer !== null) return;
     // 原实现每添加一个文字节点都会重置计时器：长页面可能持续推迟队列。
     state.flushTimer = setTimeout(() => {
       state.flushTimer = null;
       void processQueue();
-    }, delay);
+    }, state.settings.performanceSafeMode !== false ? Math.max(200, delay) : delay);
   }
 
   function takeBatch() {
@@ -291,10 +321,19 @@
 
   function pauseForSafety(reason) {
     state.lastError = reason;
+    state.safetyPauseReason = reason;
     setPaused(true);
     try {
       window.dispatchEvent(new CustomEvent("ft-translation-safety-pause", { detail: { reason } }));
     } catch {}
+  }
+
+  function cancelCurrentRequest() {
+    const id = state.currentRequestId;
+    if (!id) return;
+    state.currentRequestId = "";
+    try { Promise.resolve(chrome.runtime.sendMessage({ type: "FT_CANCEL_TRANSLATION", requestId: id })).catch(() => {}); }
+    catch {}
   }
 
   async function sendTranslationWithDeadline(message, timeoutMs = 18000) {
@@ -326,12 +365,18 @@
       }).filter(entry => hasLetters(entry.parts.core));
       if (!entries.length) return;
 
+      const requestId = `ft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      state.currentRequestId = requestId;
+      const requestStarted = Date.now();
       const response = await sendTranslationWithDeadline({
         type: "FT_TRANSLATE_DETAILED",
+        requestId,
         texts: entries.map(entry => entry.parts.core),
         options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
       });
 
+      state.lastRequestMs = Date.now() - requestStarted;
+      state.lastRequestAt = Date.now();
       if (generation !== state.generation || !state.active) return;
       if (state.paused) {
         for (const entry of entries) if (entry.node?.isConnected) state.queue.add(entry.node);
@@ -344,7 +389,8 @@
       entries.forEach((entry, index) => {
         const translated = response.translations?.[index];
         const itemError = response.errors?.[index];
-        if (typeof translated === "string" && entry.node.isConnected && !isExcludedElement(entry.node.parentElement)) {
+        if (typeof translated === "string" && entry.node.isConnected &&
+            entry.node.nodeValue === entry.originalFull && !isExcludedElement(entry.node.parentElement)) {
           applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
           state.nodeRetries.delete(entry.node);
           state.processed++;
@@ -381,15 +427,16 @@
       }
       console.warn("[FloatingTranslator]", error);
     } finally {
+      state.currentRequestId = "";
       state.processing = false;
-      if (state.active && !state.paused && state.queue.size && !state.retryTimer) scheduleFlush(50);
+      if (state.active && !state.paused && state.queue.size && !state.retryTimer) scheduleFlush(150);
     }
   }
 
   function applyTranslation(node, parts, originalFull, translatedCore) {
     const renderedFull = `${parts.prefix}${translatedCore}${parts.suffix}`;
     const record = { originalFull, translatedCore, renderedFull, translationEl: null };
-    if (state.settings.displayMode === "bilingual") {
+    if (effectiveDisplayMode() === "bilingual") {
       const span = createTranslationSpan(node, translatedCore);
       node.parentNode?.insertBefore(span, node.nextSibling);
       record.translationEl = span;
@@ -402,7 +449,11 @@
 
   function restorePage() {
     state.generation++;
+    cancelCurrentRequest();
     cancelScans();
+    state.deferredNodes.clear();
+    clearTimeout(state.viewportRefreshTimer);
+    state.viewportRefreshTimer = null;
     clearTimeout(state.flushTimer);
     state.flushTimer = null;
     clearTimeout(state.retryTimer);
@@ -432,7 +483,7 @@
   async function loadSettings({ rescan = true } = {}) {
     const next = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     const materiallyChanged = [
-      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage", "performanceSafeMode"
+      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage", "performanceSafeMode", "visiblePriority", "bilingualFontScale", "bilingualColor", "siteDisplayModes"
     ].some(key => state.settings[key] !== next[key]) || JSON.stringify(state.settings.siteRules) !== JSON.stringify(next.siteRules);
 
     if (materiallyChanged) restorePage();
@@ -586,7 +637,11 @@
   function handleRouteRescan() {
     if (!state.active || state.paused) return;
     state.generation++;
+    cancelCurrentRequest();
     cancelScans();
+    state.deferredNodes.clear();
+    clearTimeout(state.viewportRefreshTimer);
+    state.viewportRefreshTimer = null;
     clearTimeout(state.flushTimer);
     state.flushTimer = null;
     clearTimeout(state.retryTimer);
@@ -605,6 +660,10 @@
   function setPaused(paused) {
     state.paused = Boolean(paused);
     if (state.paused) {
+      state.generation++;
+      cancelCurrentRequest();
+      state.queue.clear();
+      state.deferredNodes.clear();
       clearTimeout(state.safeMutationTimer);
       state.safeMutationTimer = null;
       state.safeMutationRoots.clear();
@@ -617,6 +676,7 @@
     }
     state.consecutiveBatchErrors = 0;
     state.lastError = "";
+    state.safetyPauseReason = "";
     if (state.active) {
       scheduleTreeScan(document.body);
       if (state.queue.size) scheduleFlush(0);
@@ -678,7 +738,13 @@
         failed: state.failed,
         retried: state.retried,
         protectedRestores: state.protectedRestores,
-        lastError: state.lastError
+        lastError: state.lastError,
+        lastRequestMs: state.lastRequestMs,
+        lastRequestAt: state.lastRequestAt,
+        safetyPauseReason: state.safetyPauseReason,
+        deferred: state.deferredNodes.size,
+        runningRequest: Boolean(state.currentRequestId),
+        visiblePriority: state.settings.visiblePriority !== false
       });
       return false;
     }
@@ -691,6 +757,26 @@
   document.addEventListener("keydown", translateFocusedInput, true);
   window.addEventListener("ft-route-change", handleRouteRescan, true);
   window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
+  function updateVisibleQueue() {
+    if (!state.active || state.paused || !state.deferredNodes.size) return;
+    let checked = 0;
+    for (const node of state.deferredNodes) {
+      if (++checked > 1800) break;
+      if (!node.isConnected) { state.deferredNodes.delete(node); continue; }
+      if (nearViewport(node)) {
+        state.deferredNodes.delete(node);
+        enqueueNode(node);
+      }
+    }
+  }
+
+  window.addEventListener("scroll", () => {
+    if (state.viewportRefreshTimer !== null) return;
+    state.viewportRefreshTimer = setTimeout(() => {
+      state.viewportRefreshTimer = null;
+      updateVisibleQueue();
+    }, 250);
+  }, { passive: true, capture: true });
   window.addEventListener("focus", () => scheduleSafetyScan(350), { passive: true });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") scheduleSafetyScan(350);
