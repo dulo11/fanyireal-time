@@ -360,6 +360,13 @@
   function restoreShadowRecord(node, record) {
     if (!node?.isConnected || !record || !translationEnabled() || isExcluded(node.parentElement)) return false;
     if (node.nodeValue !== record.original) return false;
+    // 防止 Shadow DOM 内部框架与译文守护反复抢写形成死循环。
+    const now = Date.now();
+    if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
+      record.restoreWindowStart = now;
+      record.restoreAttempts = 0;
+    }
+    if (++record.restoreAttempts > 3) return false;
     if (state.settings.displayMode === "bilingual") {
       if (!record.translationEl?.isConnected) {
         record.translationEl ||= createShadowSpan(node, record.translated || "");
@@ -585,6 +592,10 @@
   window.addEventListener("resize", positionPreview, { passive: true });
   window.addEventListener("scroll", positionPreview, { passive: true, capture: true });
   window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
+  window.addEventListener("ft-translation-safety-pause", () => {
+    state.pagePaused = true;
+    removePreview();
+  }, true);
 
   chrome.runtime.onMessage.addListener(message => {
     if (message?.type === "FT_SET_PAUSED") {
