@@ -10,8 +10,8 @@ const html = read("popup/popup.html");
 const floating = read("content/floating-panel.js");
 const manifest = JSON.parse(read("manifest.json"));
 const firefox = JSON.parse(read("compat/firefox/manifest.json"));
-assert.equal(manifest.version, "1.3.13");
-assert.equal(firefox.version, "1.3.13");
+assert.equal(manifest.version, "1.3.14");
+assert.equal(firefox.version, "1.3.14");
 
 for (const id of ["inputAutoReplace", "inputAutoReplaceDelay", "siteInputAutoReplace"]) {
   assert.match(html, new RegExp('id="' + id + '"'));
@@ -74,4 +74,4 @@ delete state.settings.siteInputAutoReplace["example.com"];
 assert.equal(ctx.autoReplaceEnabled(), true, "Global on applies when site follows global");
 state.settings.inputPreview = false;
 assert.equal(ctx.autoReplaceEnabled(), false, "Respect disabled input preview");
-console.log("v1.3.13 opt-in safe input auto-replace tests passed");
+console.log("v1.3.14 opt-in safe input auto-replace tests passed");
