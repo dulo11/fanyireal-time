@@ -15,11 +15,17 @@ for (const m of [manifest, firefox]) {
 }
 
 const panel = read('content/floating-panel.js');
-for (const token of ['ft-floating-panel-host', '自动持续翻译网页', '翻译整页', '补扫遗漏', '恢复原文', '打开完整设置', 'pointermove', 'floatingPanelPositionV1']) {
+for (const token of ['ft-floating-panel-host', '自动持续翻译网页', '翻译整页', '补扫遗漏', '恢复原文', '打开完整设置', 'pointermove', 'touchmove', 'floatingPanelPositionV1', 'floatingPanelVisibleV1', '隐藏网页悬浮按钮']) {
   assert.match(panel, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 }
 assert.match(panel, /attachShadow\(\{ mode: ["']open["'] \}\)/);
 assert.match(panel, /window\.top !== window/);
+
+const popupHtml = read('popup/popup.html');
+const popupJs = read('popup/popup.js');
+assert.match(popupHtml, /floatingPanelVisible/);
+assert.match(popupJs, /floatingPanelVisibleV1/);
+assert.match(panel, /storage\.onChanged/);
 
 const bridge = read('content/floating-panel-bridge.js');
 assert.match(bridge, /FT_FLOATING_PAGE_ACTION/);

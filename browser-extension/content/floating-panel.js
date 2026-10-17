@@ -3,6 +3,7 @@
   window.__FT_FLOATING_PANEL__ = true;
 
   const STORAGE_POS = "floatingPanelPositionV1";
+  const STORAGE_VISIBLE = "floatingPanelVisibleV1";
   const SETTINGS_DEFAULTS = {
     enabled: true,
     autoTranslate: true,
@@ -24,6 +25,7 @@
   let stateRequest = 0;
   let suppressClickUntil = 0;
   let routeBusy = false;
+  let floatingVisible = true;
 
   const host = document.createElement("div");
   host.dataset.ftOwned = "1";
@@ -66,12 +68,25 @@
         <button id="restore" type="button" class="warn">恢复原文</button>
       </div>
       <button id="full" type="button" class="full">打开完整设置</button>
+      <button id="hide" type="button" class="full">隐藏网页悬浮按钮（插件菜单可恢复）</button>
       <button id="route" type="button" class="full route" aria-label="打开翻译引擎设置">翻译引擎：读取中…</button>
     </section>`;
 
   const $ = id => root.getElementById(id);
   const fab = $("fab");
   const panel = $("panel");
+
+  function applyFloatingVisibility() {
+    fab.style.display = floatingVisible ? "grid" : "none";
+    if (!floatingVisible) togglePanel(false);
+  }
+  async function loadFloatingVisibility() {
+    try {
+      const value = await chrome.storage.local.get({ [STORAGE_VISIBLE]: true });
+      floatingVisible = value[STORAGE_VISIBLE] !== false;
+    } catch {}
+    applyFloatingVisibility();
+  }
 
   function fillLanguages() {
     for (const [value, label] of LANGUAGES) {
@@ -225,12 +240,13 @@
   // 这样即使某些 Android Chromium 丢失 pointerup，也不会导致“点一下完全没反应”。
   fab.addEventListener("pointerdown", event => {
     const box = fab.getBoundingClientRect();
-    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: box.left, top: box.top, moved: false };
+    if (drag?.source === "touch") return;
+    drag = { source: "pointer", id: event.pointerId, x: event.clientX, y: event.clientY, left: box.left, top: box.top, moved: false };
     try { fab.setPointerCapture?.(event.pointerId); } catch {}
   });
 
   fab.addEventListener("pointermove", event => {
-    if (!drag || drag.id !== event.pointerId) return;
+    if (!drag || drag.source !== "pointer" || drag.id !== event.pointerId) return;
     const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
     if (Math.hypot(dx, dy) > 6) drag.moved = true;
@@ -240,8 +256,8 @@
     if (opened) positionPanel();
   });
 
-  async function finishDrag(event) {
-    if (!drag || (event?.pointerId !== undefined && drag.id !== event.pointerId)) return;
+  async function finishDrag(event, source = "pointer") {
+    if (!drag || drag.source !== source || (event?.pointerId !== undefined && drag.id !== event.pointerId)) return;
     const moved = drag.moved;
     drag = null;
     if (!moved) return;
@@ -253,6 +269,40 @@
   fab.addEventListener("pointerup", finishDrag);
   fab.addEventListener("pointercancel", finishDrag);
   fab.addEventListener("lostpointercapture", event => { if (drag?.moved) finishDrag(event); });
+
+  // 手机浏览器可能只分发 touchmove 而不可靠分发 pointermove。
+  // TouchEvent 作为真实手指拖动的兜底，不依赖浏览器的 PointerEvent 实现。
+  fab.addEventListener("touchstart", event => {
+    if (event.touches.length !== 1) return;
+    const t = event.changedTouches?.[0] || event.touches?.[0];
+    if (!t) return;
+    const box = fab.getBoundingClientRect();
+    drag = { source: "touch", id: t.identifier, x: t.clientX, y: t.clientY, left: box.left, top: box.top, moved: false };
+  }, { passive: true });
+
+  fab.addEventListener("touchmove", event => {
+    if (drag?.source !== "touch") return;
+    const t = Array.from(event.changedTouches).find(t => t.identifier === drag.id);
+    if (!t) return;
+    const dx = t.clientX - drag.x;
+    const dy = t.clientY - drag.y;
+    if (Math.hypot(dx, dy) > 6) drag.moved = true;
+    if (!drag.moved) return;
+    if (event.cancelable) event.preventDefault();
+    setFabPosition(drag.left + dx, drag.top + dy);
+    if (opened) positionPanel();
+  }, { passive: false });
+
+  fab.addEventListener("touchend", event => {
+    if (drag?.source !== "touch") return;
+    const t = Array.from(event.changedTouches).find(t => t.identifier === drag.id);
+    if (t) void finishDrag(null, "touch");
+  }, { passive: true });
+
+  fab.addEventListener("touchcancel", () => {
+    if (drag?.source === "touch") void finishDrag(null, "touch");
+  }, { passive: true });
+  fab.addEventListener("contextmenu", event => event.preventDefault());
 
   fab.addEventListener("click", event => {
     event.preventDefault();
@@ -291,8 +341,23 @@
   $("restore").addEventListener("click", () => command("restore"));
   $("full").addEventListener("click", openOptionsSafe);
   $("route").addEventListener("click", openOptionsSafe);
+  $("hide").addEventListener("click", async () => {
+    try {
+      await chrome.storage.local.set({ [STORAGE_VISIBLE]: false });
+      floatingVisible = false;
+      applyFloatingVisibility();
+    } catch (error) {
+      pageState.lastError = String(error?.message || error);
+      render();
+    }
+  });
 
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[STORAGE_VISIBLE]) {
+      floatingVisible = changes[STORAGE_VISIBLE].newValue !== false;
+      applyFloatingVisibility();
+      return;
+    }
     if (area !== "sync") return;
     let changed = false;
     for (const key of Object.keys(SETTINGS_DEFAULTS)) {
@@ -321,6 +386,7 @@
   fillLanguages();
   document.documentElement.appendChild(host);
   restorePosition();
+  loadFloatingVisibility();
   load();
   setInterval(() => {
     if (opened) {
