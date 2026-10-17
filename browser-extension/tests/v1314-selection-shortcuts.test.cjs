@@ -18,7 +18,7 @@ assert.match(select, /chrome\.storage\.sync\.set\(\{ selectionTargetLang/);
 assert.match(select, /root\.getElementById\("retranslate"\)/);
 assert.match(select, /root\.getElementById\("copyOriginal"\)/);
 assert.match(select, /root\.getElementById\("copyBoth"\)/);
-assert.match(select, /if \(!lastTranslated\)/); // avoid accidentally copying error or loading state
+assert.match(select, /if \(!value\) return/); // avoid accidentally copying error or loading state
 assert.match(select, /if \(lastTranslated\) void copyResult/);
 assert.match(select, /options\.selectionToolsEnabled === false/);
 assert.match(floating, /id="displayMode"/);
