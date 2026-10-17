@@ -196,7 +196,7 @@
     if (observer || !document.documentElement) return;
     observer = new MutationObserver(mutations => {
       if (!enabled()) return;
-      for (const mutation of mutations) {
+      for (const mutation of mutations.slice(0, 60)) {
         if (mutation.type === "attributes") {
           const element = mutation.target;
           const attr = mutation.attributeName;
@@ -272,6 +272,7 @@
 
   async function init() {
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
     startObserver();
     scan(document);
