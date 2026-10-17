@@ -29,7 +29,7 @@
   const card = root.getElementById("card");
   const result = root.getElementById("result");
   let selected = "";
-  let selectedInput = null;
+  let selectedRect = null;
   let requestSeq = 0;
   let selectionTimer = null;
   let lastInputTap = { el: null, at: 0 };
@@ -56,7 +56,7 @@
     const selection = selectedText();
     if (!selection || card.style.display === "block") { hideTrigger(); return; }
     selected = selection.text;
-    selectedInput = null;
+    selectedRect = selection.rect;
     place(trigger, selection.rect);
     trigger.style.display = "block";
   }
@@ -101,7 +101,7 @@
   trigger.addEventListener("pointerdown", event => event.preventDefault());
   trigger.addEventListener("click", () => {
     if (!selected) return;
-    void translateSelection(selected, options.targetLang || "zh-CN");
+    void translateSelection(selected, options.targetLang || "zh-CN", selectedRect);
   });
   document.addEventListener("selectionchange", () => {
     clearTimeout(selectionTimer);
