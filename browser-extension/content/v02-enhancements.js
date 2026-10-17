@@ -5,6 +5,7 @@
   const DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    performanceSafeMode: true,
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated",
@@ -80,6 +81,8 @@
   }
 
   function translationEnabled() {
+    // 安全模式不翻译 Shadow DOM，以免深度监听导致页面交互/加载卡死。
+    if (state.settings.performanceSafeMode !== false) return false;
     if (!state.settings.enabled || state.pagePaused) return false;
     const rule = currentSiteRule();
     if (rule === "never") return false;
@@ -521,7 +524,7 @@
   async function loadSettings() {
     const previous = state.settings;
     state.settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
-    const shadowChanged = ["targetLang", "sourceLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"]
+    const shadowChanged = ["targetLang", "sourceLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage", "performanceSafeMode"]
       .some(key => previous[key] !== state.settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(state.settings.siteRules);
     if (shadowChanged && state.readyForTranslation) {
       restoreShadowTranslations();
@@ -548,8 +551,8 @@
     setTimeout(() => {
       markAdapterElements(document);
       window.dispatchEvent(new CustomEvent("ft-route-change", { detail: { url: location.href } }));
-      discoverShadowRoots(document);
-      if (!state.pagePaused) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      if (translationEnabled()) discoverShadowRoots(document);
+      if (!state.pagePaused && translationEnabled()) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
     }, 120);
   }
 

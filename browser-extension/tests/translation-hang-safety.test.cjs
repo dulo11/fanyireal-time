@@ -46,7 +46,7 @@ async function testTimeout() {
 function testDomLoopProtection() {
   const state = {
     active: true, paused: false, protectedRestores: 0,
-    settings: { displayMode: 'translated' }
+    settings: { displayMode: 'translated', performanceSafeMode: false }
   };
   const ctx = { state, isExcludedElement: () => false, Date };
   vm.runInNewContext(extract(main, '  function restoreProtectedNode(', '\n  function enqueueNode('), ctx);
@@ -59,6 +59,11 @@ function testDomLoopProtection() {
   }
   assert.equal(ctx.restoreProtectedNode(node, record), false, 'DOM rewrite loop should be broken');
   assert.equal(node.nodeValue, 'original', 'Site must retain control of its own DOM');
+  // Default safe mode does not even attempt the first rewrite after framework restore.
+  state.settings.performanceSafeMode = true;
+  record.restoreAttempts = 0;
+  assert.equal(ctx.restoreProtectedNode(node, record), false);
+  assert.equal(node.nodeValue, 'original');
 }
 
 (async () => {

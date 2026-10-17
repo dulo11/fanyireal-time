@@ -1,6 +1,7 @@
 const DEFAULTS = {
   enabled: true,
   autoTranslate: true,
+  performanceSafeMode: true,
   sourceLang: "auto",
   targetLang: "zh-CN",
   displayMode: "translated",
@@ -155,6 +156,7 @@ function render() {
   $("floatingFabOpacity").value = String(localSettings.floatingFabOpacityV1 ?? 1);
   $("floatingFabSnap").checked = localSettings.floatingFabSnapV1 === true;
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
+  $("performanceSafeMode").checked = settings.performanceSafeMode !== false;
   $("fallbackGoogleQuick").checked = localSettings.fallbackGoogle !== false;
   $("skipTargetLanguage").checked = settings.skipTargetLanguage !== false;
   $("sourceLang").value = settings.sourceLang || "auto";
@@ -232,6 +234,7 @@ async function refreshExclusions() {
 function bindControls() {
   $("enabled").addEventListener("change", event => saveSync({ enabled: event.target.checked }));
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
+  $("performanceSafeMode").addEventListener("change", event => saveSync({ performanceSafeMode: event.target.checked }));
   $("floatingPanelVisible").addEventListener("change", event => saveLocal({ floatingPanelVisibleV1: event.target.checked }));
   $("floatingFabSize").addEventListener("change", event => saveLocal({ floatingFabSizeV1: Number(event.target.value) }));
   $("floatingFabOpacity").addEventListener("change", event => saveLocal({ floatingFabOpacityV1: Number(event.target.value) }));

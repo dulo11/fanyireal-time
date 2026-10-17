@@ -5,6 +5,7 @@
   const DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    performanceSafeMode: true,
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated",
@@ -49,12 +50,16 @@
     protectedRestores: 0,
     lastError: "",
     scanTokens: new Set(),
+    pendingTreeRoots: [],
     safetyScanTimer: null,
     mutationWindowStart: 0,
     mutationWindowCount: 0,
     cooldownUntil: 0,
     recoveryTimer: null,
-    readyForTranslation: false
+    readyForTranslation: false,
+    safeMutationTimer: null,
+    safeMutationRoots: new Set(),
+    safeMutationLastFlush: 0
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -113,6 +118,8 @@
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP_SELECTOR) || isExcludedElement(parent)) return false;
+    if (state.settings.performanceSafeMode !== false &&
+        parent.closest('button,a,nav,form,label,[role="button"],[role="link"],[aria-live],[data-testid*="editor"],[data-testid*="input"]')) return false;
     const { core } = splitWhitespace(node.nodeValue);
     if (!hasLetters(core) || shouldSkipTarget(core)) return false;
     return true;
@@ -141,6 +148,8 @@
   function restoreProtectedNode(node, record) {
     if (!record || !node?.isConnected || !state.active || state.paused || isExcludedElement(node.parentElement)) return false;
     if (node.nodeValue !== record.originalFull) return false;
+    // 安全模式尊重站点框架的 DOM 管理，不会抢写已经被 React/Vue 恢复的文本。
+    if (state.settings.performanceSafeMode !== false) return false;
     // React/Vue 可将译文恢复为原文；反复抢写会与站点 DOM 更新形成死循环。
     const now = Date.now();
     if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
@@ -193,21 +202,31 @@
     if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
     if (root.nodeType === Node.ELEMENT_NODE && (root.matches?.(SKIP_SELECTOR) || isExcludedElement(root))) return;
 
-    if (state.scanTokens.size >= 6) return; // 限制并行整树扫描任务
+    if (state.scanTokens.size >= (state.settings.performanceSafeMode !== false ? 2 : 6)) {
+      // 排队等待空闲，不丢掉 MutationObserver 新增的后续内容。
+      if (state.pendingTreeRoots.length < 16 && !state.pendingTreeRoots.includes(root)) state.pendingTreeRoots.push(root);
+      return;
+    }
     const token = { cancelled: false };
+    const completeScan = () => {
+      state.scanTokens.delete(token);
+      if (!state.active || state.paused || !state.pendingTreeRoots.length) return;
+      const next = state.pendingTreeRoots.shift();
+      setTimeout(() => scheduleTreeScan(next), 50);
+    };
     state.scanTokens.add(token);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 
     const step = deadline => {
       if (token.cancelled || !state.active || state.paused) {
-        state.scanTokens.delete(token);
+        completeScan();
         return;
       }
       let count = 0;
       while (count < 120 && (!deadline || deadline.timeRemaining() > 2)) {
         const node = walker.nextNode();
         if (!node) {
-          state.scanTokens.delete(token);
+          completeScan();
           return;
         }
         if (isEligibleTextNode(node)) enqueueNode(node);
@@ -224,6 +243,7 @@
   function cancelScans() {
     for (const token of state.scanTokens) token.cancelled = true;
     state.scanTokens.clear();
+    state.pendingTreeRoots.length = 0;
   }
 
   function scheduleFlush(delay = 90) {
@@ -389,6 +409,9 @@
     state.retryTimer = null;
     clearTimeout(state.recoveryTimer);
     state.recoveryTimer = null;
+    clearTimeout(state.safeMutationTimer);
+    state.safeMutationTimer = null;
+    state.safeMutationRoots.clear();
     state.queue.clear();
     for (const node of [...state.trackedNodes]) {
       const record = state.nodeState.get(node);
@@ -409,7 +432,7 @@
   async function loadSettings({ rescan = true } = {}) {
     const next = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     const materiallyChanged = [
-      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"
+      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage", "performanceSafeMode"
     ].some(key => state.settings[key] !== next[key]) || JSON.stringify(state.settings.siteRules) !== JSON.stringify(next.siteRules);
 
     if (materiallyChanged) restorePage();
@@ -421,6 +444,36 @@
   function handleMutations(mutations) {
     if (!state.active || state.paused) return;
     const now = Date.now();
+    if (state.settings.performanceSafeMode !== false) {
+      // 安卓轻量模式：绝不在 MutationObserver 回调中遍历整页，也不抢写 characterData。
+      // 只收集新出现的 DOM 子树，合并为低频、延迟的增量扫描。
+      for (const mutation of mutations.slice(0, 24)) {
+        if (mutation.type !== "childList") continue;
+        // 不使用 Array.from(NodeList)：超大 DOM 更新时可能分配数千元素。
+        const addedNodes = mutation.addedNodes || [];
+        for (let i = 0; i < Math.min(addedNodes.length, 16); i++) {
+          const added = addedNodes[i];
+          if (added.nodeType !== Node.ELEMENT_NODE && added.nodeType !== Node.TEXT_NODE) continue;
+          if (added.nodeType === Node.ELEMENT_NODE &&
+              (added.dataset?.ftOwned === "1" || added.matches?.(SKIP_SELECTOR))) continue;
+          if (state.safeMutationRoots.size < 8) state.safeMutationRoots.add(added);
+        }
+      }
+      if (state.safeMutationRoots.size && state.safeMutationTimer === null) {
+        const delay = Math.max(1000, 2000 - (now - state.safeMutationLastFlush));
+        state.safeMutationTimer = setTimeout(() => {
+          state.safeMutationTimer = null;
+          state.safeMutationLastFlush = Date.now();
+          const roots = [...state.safeMutationRoots];
+          state.safeMutationRoots.clear();
+          if (state.active && !state.paused) {
+            // 初始页面扫描已经进行，后续仅扫描新子树，不重扫整个 document。
+            for (const root of roots) scheduleTreeScan(root);
+          }
+        }, delay);
+      }
+      return;
+    }
     if (now < state.cooldownUntil) return;
     if (now - state.mutationWindowStart >= 1000) {
       state.mutationWindowStart = now;
@@ -552,6 +605,9 @@
   function setPaused(paused) {
     state.paused = Boolean(paused);
     if (state.paused) {
+      clearTimeout(state.safeMutationTimer);
+      state.safeMutationTimer = null;
+      state.safeMutationRoots.clear();
       cancelScans();
       clearTimeout(state.flushTimer);
       state.flushTimer = null;
