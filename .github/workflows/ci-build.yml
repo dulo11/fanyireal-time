@@ -60,7 +60,8 @@ jobs:
           test -n "$APKSIGNER" || exit 1
           "$APKSIGNER" verify --verbose --print-certs "$APK_NAME"
 
-      - name: Upload signed APK
+      - name: Upload signed APK (manual test only)
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: FloatingTranslator-CI-signed
