@@ -14,6 +14,8 @@ const DEFAULTS = {
   chatMode: true,
   inputPreview: true,
   inputQuickTranslate: false,
+  selectionToolsEnabled: true,
+  selectionTargetLang: "page",
   inputAutoReplace: false,
   inputAutoReplaceDelay: 1500,
   siteInputAutoReplace: {},
@@ -173,6 +175,8 @@ function render() {
   $("sourceLang").value = settings.sourceLang || "auto";
   $("targetLang").value = settings.targetLang || "zh-CN";
   $("displayMode").value = settings.displayMode || "translated";
+  $("selectionToolsEnabled").checked = settings.selectionToolsEnabled !== false;
+  $("selectionTargetLang").value = settings.selectionTargetLang || "page";
   $("chatMode").checked = Boolean(settings.chatMode);
   $("inputPreview").checked = Boolean(settings.inputPreview);
   $("inputQuickTranslate").checked = Boolean(settings.inputQuickTranslate);
@@ -277,6 +281,8 @@ function bindControls() {
   $("sourceLang").addEventListener("change", event => saveSync({ sourceLang: event.target.value }));
   $("targetLang").addEventListener("change", event => saveSync({ targetLang: event.target.value }));
   $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
+  $("selectionToolsEnabled").addEventListener("change", event => saveSync({ selectionToolsEnabled: event.target.checked }));
+  $("selectionTargetLang").addEventListener("change", event => saveSync({ selectionTargetLang: event.target.value }));
   $("chatMode").addEventListener("change", event => saveSync({ chatMode: event.target.checked }));
   $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
   $("inputQuickTranslate").addEventListener("change", event => saveSync({ inputQuickTranslate: event.target.checked }));
