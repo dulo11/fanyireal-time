@@ -274,7 +274,7 @@
   // TouchEvent 作为真实手指拖动的兜底，不依赖浏览器的 PointerEvent 实现。
   fab.addEventListener("touchstart", event => {
     if (event.touches.length !== 1) return;
-    const t = event.changedTouches[0] || event.touches[0];
+    const t = event.changedTouches?.[0] || event.touches?.[0];
     if (!t) return;
     const box = fab.getBoundingClientRect();
     drag = { source: "touch", id: t.identifier, x: t.clientX, y: t.clientY, left: box.left, top: box.top, moved: false };
