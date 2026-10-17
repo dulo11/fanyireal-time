@@ -36,6 +36,11 @@
       </label>
       <div class="host">关闭后不会再随网页自动翻译，只在你点“重新翻译整页”或“补扫遗漏内容”时运行。</div>
       <label class="check-row">
+        <input id="performanceSafeMode" type="checkbox">
+        <span>网页安全翻译模式（推荐，默认开启）</span>
+      </label>
+      <div class="host">大幅减少动态网页扫描，避免插件反复覆盖网站文字；安全模式暂不翻译按钮属性和 Shadow DOM。关闭后使用完整深度翻译，可能导致安卓动态网页卡顿。</div>
+      <label class="check-row">
         <input id="fallbackGoogleQuick" type="checkbox">
         <span>Azure 失败时自动使用 Google Web 备用</span>
       </label>
