@@ -50,6 +50,7 @@
     protectedRestores: 0,
     lastError: "",
     scanTokens: new Set(),
+    pendingTreeRoots: [],
     safetyScanTimer: null,
     mutationWindowStart: 0,
     mutationWindowCount: 0,
@@ -201,21 +202,31 @@
     if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
     if (root.nodeType === Node.ELEMENT_NODE && (root.matches?.(SKIP_SELECTOR) || isExcludedElement(root))) return;
 
-    if (state.scanTokens.size >= (state.settings.performanceSafeMode !== false ? 2 : 6)) return; // 轻量模式更严格限制同步扫描
+    if (state.scanTokens.size >= (state.settings.performanceSafeMode !== false ? 2 : 6)) {
+      // 排队等待空闲，不丢掉 MutationObserver 新增的后续内容。
+      if (state.pendingTreeRoots.length < 16 && !state.pendingTreeRoots.includes(root)) state.pendingTreeRoots.push(root);
+      return;
+    }
     const token = { cancelled: false };
+    const completeScan = () => {
+      state.scanTokens.delete(token);
+      if (!state.active || state.paused || !state.pendingTreeRoots.length) return;
+      const next = state.pendingTreeRoots.shift();
+      setTimeout(() => scheduleTreeScan(next), 50);
+    };
     state.scanTokens.add(token);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 
     const step = deadline => {
       if (token.cancelled || !state.active || state.paused) {
-        state.scanTokens.delete(token);
+        completeScan();
         return;
       }
       let count = 0;
       while (count < 120 && (!deadline || deadline.timeRemaining() > 2)) {
         const node = walker.nextNode();
         if (!node) {
-          state.scanTokens.delete(token);
+          completeScan();
           return;
         }
         if (isEligibleTextNode(node)) enqueueNode(node);
@@ -232,6 +243,7 @@
   function cancelScans() {
     for (const token of state.scanTokens) token.cancelled = true;
     state.scanTokens.clear();
+    state.pendingTreeRoots.length = 0;
   }
 
   function scheduleFlush(delay = 90) {
