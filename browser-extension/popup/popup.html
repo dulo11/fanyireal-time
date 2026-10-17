@@ -40,6 +40,8 @@
         <span>网页安全翻译模式（推荐，默认开启）</span>
       </label>
       <div class="host">大幅减少动态网页扫描，避免插件反复覆盖网站文字；安全模式暂不翻译按钮属性和 Shadow DOM。关闭后使用完整深度翻译，可能导致安卓动态网页卡顿。</div>
+      <label class="check-row"><input id="visiblePriority" type="checkbox"><span>优先翻译屏幕可见区域，滚动继续翻译</span></label>
+      <div class="host">默认开启：优先处理正在看的文字，减少长网页首屏压力。</div>
       <label class="check-row">
         <input id="fallbackGoogleQuick" type="checkbox">
         <span>Azure 失败时自动使用 Google Web 备用</span>
@@ -56,6 +58,10 @@
       </div>
 
       <label><span>显示方式</span><select id="displayMode"><option value="translated">仅译文</option><option value="bilingual">原文 + 译文</option></select></label>
+      <div class="grid">
+        <label><span>双语译文字体大小</span><select id="bilingualFontScale"><option value="80">80%</option><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="120">120%</option></select></label>
+        <label><span>双语译文颜色</span><input id="bilingualColor" type="color" value="#6750e8"></label>
+      </div>
       <div class="host">固定签名版继续保护已经翻好的文字；网页脚本把译文覆盖回原文时直接恢复，不重复请求。</div>
     </section>
 
@@ -72,6 +78,7 @@
 
     <section class="card">
       <label><span>当前网站规则</span><select id="siteRule"><option value="default">跟随全局设置</option><option value="always">始终翻译此网站</option><option value="never">永不翻译此网站</option></select></label>
+      <label><span>当前网站显示方式（单独记忆）</span><select id="siteDisplayMode"><option value="default">跟随全局</option><option value="translated">仅译文</option><option value="bilingual">原文 + 译文</option></select></label>
       <div id="host" class="host"></div>
       <div id="exclusionCount" class="host">排除区域：正在读取…</div>
       <div id="runtimeRoute" class="host">最近翻译路径：正在读取…</div>
@@ -84,7 +91,15 @@
       <button id="translateNow">重新翻译整页</button>
       <button id="rescanPage">补扫遗漏内容</button>
       <button id="restorePage">恢复原文</button>
+      <button id="clearQueue">停止并清空排队任务</button>
     </div>
+
+    <section class="card">
+      <strong>翻译运行诊断</strong>
+      <pre id="pageDiagnostics" class="host" style="white-space:pre-wrap;word-break:break-word">等待网页状态…</pre>
+      <div class="actions"><button id="refreshDiagnostics">刷新诊断</button><button id="copyDiagnostics">复制诊断信息</button></div>
+      <div id="diagnosticsFeedback" class="host"></div>
+    </section>
 
     <section class="card" id="updateCard">
       <strong>扩展更新</strong>
