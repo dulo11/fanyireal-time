@@ -23,6 +23,7 @@
   let observer = null;
   let flushTimer = null;
   let processing = false;
+  let initialized = false;
   let nextElementId = 1;
   const queue = new Map();
   const records = new WeakMap();
@@ -196,7 +197,7 @@
     if (observer || !document.documentElement) return;
     observer = new MutationObserver(mutations => {
       if (!enabled()) return;
-      for (const mutation of mutations) {
+      for (const mutation of mutations.slice(0, 60)) {
         if (mutation.type === "attributes") {
           const element = mutation.target;
           const attr = mutation.attributeName;
@@ -229,7 +230,7 @@
     const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage"]
       .some(key => previous[key] !== settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(settings.siteRules);
     if (changed) restoreAll();
-    if (enabled()) scan(document);
+    if (initialized && enabled()) scan(document);
   }
 
   function handleExclusionsChanged() {
@@ -272,7 +273,9 @@
 
   async function init() {
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
+    initialized = true;
     startObserver();
     scan(document);
   }

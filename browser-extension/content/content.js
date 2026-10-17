@@ -48,7 +48,12 @@
     protectedRestores: 0,
     lastError: "",
     scanTokens: new Set(),
-    safetyScanTimer: null
+    safetyScanTimer: null,
+    mutationWindowStart: 0,
+    mutationWindowCount: 0,
+    cooldownUntil: 0,
+    recoveryTimer: null,
+    readyForTranslation: false
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -166,6 +171,7 @@
       state.nodeState.delete(node);
       state.trackedNodes.delete(node);
     }
+    if (state.queue.size >= 1000) return; // 有界队列，避免动态网页持续渲染时堆积
     state.queue.add(node);
     scheduleFlush();
   }
@@ -179,6 +185,7 @@
     if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
     if (root.nodeType === Node.ELEMENT_NODE && (root.matches?.(SKIP_SELECTOR) || isExcludedElement(root))) return;
 
+    if (state.scanTokens.size >= 6) return; // 限制并行整树扫描任务
     const token = { cancelled: false };
     state.scanTokens.add(token);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -189,7 +196,7 @@
         return;
       }
       let count = 0;
-      while (count < 700 && (!deadline || deadline.timeRemaining() > 2)) {
+      while (count < 120 && (!deadline || deadline.timeRemaining() > 2)) {
         const node = walker.nextNode();
         if (!node) {
           state.scanTokens.delete(token);
@@ -212,9 +219,12 @@
   }
 
   function scheduleFlush(delay = 90) {
-    if (state.paused) return;
-    clearTimeout(state.flushTimer);
-    state.flushTimer = setTimeout(processQueue, delay);
+    if (state.paused || !state.active || state.flushTimer !== null) return;
+    // 原实现每添加一个文字节点都会重置计时器：长页面可能持续推迟队列。
+    state.flushTimer = setTimeout(() => {
+      state.flushTimer = null;
+      void processQueue();
+    }, delay);
   }
 
   function takeBatch() {
@@ -331,8 +341,11 @@
     state.generation++;
     cancelScans();
     clearTimeout(state.flushTimer);
+    state.flushTimer = null;
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
+    clearTimeout(state.recoveryTimer);
+    state.recoveryTimer = null;
     state.queue.clear();
     for (const node of [...state.trackedNodes]) {
       const record = state.nodeState.get(node);
@@ -358,12 +371,33 @@
     if (materiallyChanged) restorePage();
     state.settings = next;
     state.active = shouldTranslatePage();
-    if (rescan && state.active && !state.paused) scheduleTreeScan(document.body);
+    if (rescan && state.readyForTranslation && state.active && !state.paused) scheduleTreeScan(document.body);
   }
 
   function handleMutations(mutations) {
-    if (!state.active) return;
-    for (const mutation of mutations) {
+    if (!state.active || state.paused) return;
+    const now = Date.now();
+    if (now < state.cooldownUntil) return;
+    if (now - state.mutationWindowStart >= 1000) {
+      state.mutationWindowStart = now;
+      state.mutationWindowCount = 0;
+    }
+    state.mutationWindowCount += mutations.length;
+    // React/Vue 等站点正在批量渲染时，主动让出主线程，不参与 DOM 更新竞争。
+    if (state.mutationWindowCount > 180) {
+      state.cooldownUntil = now + 4000;
+      cancelScans();
+      clearTimeout(state.flushTimer);
+      state.flushTimer = null;
+      state.queue.clear();
+      if (state.recoveryTimer !== null) clearTimeout(state.recoveryTimer);
+      state.recoveryTimer = setTimeout(() => {
+        state.recoveryTimer = null;
+        if (state.active && !state.paused) scheduleTreeScan(document.body);
+      }, 4300);
+      return;
+    }
+    for (const mutation of mutations.slice(0, 80)) {
       if (mutation.type === "characterData") {
         const node = mutation.target;
         const record = state.nodeState.get(node);
@@ -457,6 +491,7 @@
     state.generation++;
     cancelScans();
     clearTimeout(state.flushTimer);
+    state.flushTimer = null;
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
     state.queue.clear();
@@ -475,6 +510,7 @@
     if (state.paused) {
       cancelScans();
       clearTimeout(state.flushTimer);
+      state.flushTimer = null;
       clearTimeout(state.retryTimer);
       state.retryTimer = null;
       return;
@@ -561,9 +597,11 @@
   async function init() {
     if (state.started) return;
     state.started = true;
-    startObserver();
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings({ rescan: false });
+    state.readyForTranslation = true;
+    startObserver();
     if (state.active && !state.paused) scheduleTreeScan(document.body);
   }
 

@@ -61,7 +61,8 @@
     lastUrl: location.href,
     routeTimer: null,
     adapter: null,
-    shadowProtectedRestores: 0
+    shadowProtectedRestores: 0,
+    readyForTranslation: false
   };
 
   const helper = () => globalThis.FTLanguage;
@@ -496,8 +497,11 @@
   function startDocumentObserver() {
     if (state.docObserver || !document.documentElement) return;
     state.docObserver = new MutationObserver(mutations => {
+      if (!translationEnabled()) return;
+      let processed = 0;
       for (const mutation of mutations) {
         for (const added of mutation.addedNodes) {
+          if (++processed > 24) return;
           if (added.nodeType !== Node.ELEMENT_NODE) continue;
           discoverShadowRoots(added);
           markAdapterElements(added);
@@ -512,9 +516,12 @@
     state.settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     const shadowChanged = ["targetLang", "sourceLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"]
       .some(key => previous[key] !== state.settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(state.settings.siteRules);
-    if (shadowChanged) {
+    if (shadowChanged && state.readyForTranslation) {
       restoreShadowTranslations();
-      if (translationEnabled()) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      if (translationEnabled()) {
+        discoverShadowRoots(document);
+        for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      }
     }
     if (!state.settings.inputPreview || !state.settings.chatMode || !state.settings.enabled) removePreview();
   }
@@ -615,10 +622,12 @@
 
   async function init() {
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
+    state.readyForTranslation = true;
     markAdapterElements(document);
     startDocumentObserver();
-    discoverShadowRoots(document);
+    if (translationEnabled()) discoverShadowRoots(document);
     startRouteWatch();
   }
 

@@ -11,9 +11,10 @@ assert.equal(manifest.name, '浮译');
 assert.equal(manifest.background.service_worker, 'background/main.js');
 
 const scripts = manifest.content_scripts?.[0]?.js || [];
-assert.deepEqual(scripts.slice(0, 8), [
+assert.deepEqual(scripts.slice(0, 9), [
   'compat/browser-api.js',
   'shared/language-core.js',
+  'content/load-guard.js',
   'content/site-exclusions.js',
   'content/site-input-profile.js',
   'content/content.js',
