@@ -26,6 +26,12 @@
   let suppressClickUntil = 0;
   let routeBusy = false;
   let floatingVisible = true;
+  const STYLE_SIZE = "floatingFabSizeV1";
+  const STYLE_OPACITY = "floatingFabOpacityV1";
+  const STYLE_SNAP = "floatingFabSnapV1";
+  let fabSize = 52;
+  let fabOpacity = 1;
+  let fabSnap = false;
 
   const host = document.createElement("div");
   host.dataset.ftOwned = "1";
@@ -76,6 +82,31 @@
   const fab = $("fab");
   const panel = $("panel");
 
+  function applyFabAppearance() {
+    fabSize = Math.max(32, Math.min(72, Number(fabSize) || 52));
+    fabOpacity = Math.max(.2, Math.min(1, Number(fabOpacity) || 1));
+    fab.style.width = fabSize + "px";
+    fab.style.height = fabSize + "px";
+    fab.style.opacity = String(fabOpacity);
+    fab.style.borderRadius = Math.round(fabSize * .34) + "px";
+    if (fab.style.left) {
+      const box = fab.getBoundingClientRect();
+      setFabPosition(box.left, box.top);
+    }
+    if (opened) positionPanel();
+  }
+  async function loadFabAppearance() {
+    try {
+      const found = await chrome.storage.local.get({
+        [STYLE_SIZE]: 52, [STYLE_OPACITY]: 1, [STYLE_SNAP]: false
+      });
+      fabSize = found[STYLE_SIZE];
+      fabOpacity = found[STYLE_OPACITY];
+      fabSnap = found[STYLE_SNAP] === true;
+    } catch {}
+    applyFabAppearance();
+  }
+
   function applyFloatingVisibility() {
     // 隐藏/恢复时释放上一次手势，避免隐藏前残留的状态影响再次点击。
     drag = null;
@@ -111,8 +142,8 @@
   function setFabPosition(x, y) {
     fab.style.right = "auto";
     fab.style.bottom = "auto";
-    fab.style.left = `${clamp(x, 6, Math.max(6, innerWidth - 58))}px`;
-    fab.style.top = `${clamp(y, 6, Math.max(6, innerHeight - 58))}px`;
+    fab.style.left = `${clamp(x, 6, Math.max(6, innerWidth - fabSize - 6))}px`;
+    fab.style.top = `${clamp(y, 6, Math.max(6, innerHeight - fabSize - 6))}px`;
   }
 
   function positionPanel() {
@@ -266,7 +297,9 @@
     if (!moved) return;
     suppressClickUntil = Date.now() + 450;
     const r = fab.getBoundingClientRect();
-    try { await chrome.storage.local.set({ [STORAGE_POS]: { x: r.left, y: r.top } }); } catch {}
+    if (fabSnap) setFabPosition(r.left < innerWidth / 2 ? 6 : innerWidth - fabSize - 6, r.top);
+    const finalRect = fab.getBoundingClientRect();
+    try { await chrome.storage.local.set({ [STORAGE_POS]: { x: finalRect.left, y: finalRect.top } }); } catch {}
   }
 
   fab.addEventListener("pointerup", finishDrag);
@@ -345,6 +378,12 @@
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && (changes[STYLE_SIZE] || changes[STYLE_OPACITY] || changes[STYLE_SNAP])) {
+      if (changes[STYLE_SIZE]) fabSize = changes[STYLE_SIZE].newValue;
+      if (changes[STYLE_OPACITY]) fabOpacity = changes[STYLE_OPACITY].newValue;
+      if (changes[STYLE_SNAP]) fabSnap = changes[STYLE_SNAP].newValue === true;
+      applyFabAppearance();
+    }
     if (area === "local" && changes[STORAGE_VISIBLE]) {
       floatingVisible = changes[STORAGE_VISIBLE].newValue !== false;
       applyFloatingVisibility();
@@ -378,6 +417,7 @@
   fillLanguages();
   document.documentElement.appendChild(host);
   restorePosition();
+  loadFabAppearance();
   loadFloatingVisibility();
   load();
   setInterval(() => {
