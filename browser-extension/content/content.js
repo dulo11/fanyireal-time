@@ -5,6 +5,7 @@
   const DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    performanceSafeMode: true,
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated",
@@ -54,7 +55,10 @@
     mutationWindowCount: 0,
     cooldownUntil: 0,
     recoveryTimer: null,
-    readyForTranslation: false
+    readyForTranslation: false,
+    safeMutationTimer: null,
+    safeMutationRoots: new Set(),
+    safeMutationLastFlush: 0
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -113,6 +117,8 @@
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP_SELECTOR) || isExcludedElement(parent)) return false;
+    if (state.settings.performanceSafeMode !== false &&
+        parent.closest('button,a,nav,form,label,[role="button"],[role="link"],[aria-live],[data-testid*="editor"],[data-testid*="input"]')) return false;
     const { core } = splitWhitespace(node.nodeValue);
     if (!hasLetters(core) || shouldSkipTarget(core)) return false;
     return true;
@@ -141,6 +147,8 @@
   function restoreProtectedNode(node, record) {
     if (!record || !node?.isConnected || !state.active || state.paused || isExcludedElement(node.parentElement)) return false;
     if (node.nodeValue !== record.originalFull) return false;
+    // 安全模式尊重站点框架的 DOM 管理，不会抢写已经被 React/Vue 恢复的文本。
+    if (state.settings.performanceSafeMode !== false) return false;
     // React/Vue 可将译文恢复为原文；反复抢写会与站点 DOM 更新形成死循环。
     const now = Date.now();
     if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
@@ -193,7 +201,7 @@
     if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
     if (root.nodeType === Node.ELEMENT_NODE && (root.matches?.(SKIP_SELECTOR) || isExcludedElement(root))) return;
 
-    if (state.scanTokens.size >= 6) return; // 限制并行整树扫描任务
+    if (state.scanTokens.size >= (state.settings.performanceSafeMode !== false ? 2 : 6)) return; // 轻量模式更严格限制同步扫描
     const token = { cancelled: false };
     state.scanTokens.add(token);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -389,6 +397,9 @@
     state.retryTimer = null;
     clearTimeout(state.recoveryTimer);
     state.recoveryTimer = null;
+    clearTimeout(state.safeMutationTimer);
+    state.safeMutationTimer = null;
+    state.safeMutationRoots.clear();
     state.queue.clear();
     for (const node of [...state.trackedNodes]) {
       const record = state.nodeState.get(node);
@@ -409,7 +420,7 @@
   async function loadSettings({ rescan = true } = {}) {
     const next = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     const materiallyChanged = [
-      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"
+      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage", "performanceSafeMode"
     ].some(key => state.settings[key] !== next[key]) || JSON.stringify(state.settings.siteRules) !== JSON.stringify(next.siteRules);
 
     if (materiallyChanged) restorePage();
@@ -421,6 +432,33 @@
   function handleMutations(mutations) {
     if (!state.active || state.paused) return;
     const now = Date.now();
+    if (state.settings.performanceSafeMode !== false) {
+      // 安卓轻量模式：绝不在 MutationObserver 回调中遍历整页，也不抢写 characterData。
+      // 只收集新出现的 DOM 子树，合并为低频、延迟的增量扫描。
+      for (const mutation of mutations.slice(0, 24)) {
+        if (mutation.type !== "childList") continue;
+        for (const added of Array.from(mutation.addedNodes || []).slice(0, 8)) {
+          if (added.nodeType !== Node.ELEMENT_NODE && added.nodeType !== Node.TEXT_NODE) continue;
+          if (added.nodeType === Node.ELEMENT_NODE &&
+              (added.dataset?.ftOwned === "1" || added.matches?.(SKIP_SELECTOR))) continue;
+          if (state.safeMutationRoots.size < 8) state.safeMutationRoots.add(added);
+        }
+      }
+      if (state.safeMutationRoots.size && state.safeMutationTimer === null) {
+        const delay = Math.max(1000, 2000 - (now - state.safeMutationLastFlush));
+        state.safeMutationTimer = setTimeout(() => {
+          state.safeMutationTimer = null;
+          state.safeMutationLastFlush = Date.now();
+          const roots = [...state.safeMutationRoots];
+          state.safeMutationRoots.clear();
+          if (state.active && !state.paused) {
+            // 初始页面扫描已经进行，后续仅扫描新子树，不重扫整个 document。
+            for (const root of roots) scheduleTreeScan(root);
+          }
+        }, delay);
+      }
+      return;
+    }
     if (now < state.cooldownUntil) return;
     if (now - state.mutationWindowStart >= 1000) {
       state.mutationWindowStart = now;
@@ -552,6 +590,9 @@
   function setPaused(paused) {
     state.paused = Boolean(paused);
     if (state.paused) {
+      clearTimeout(state.safeMutationTimer);
+      state.safeMutationTimer = null;
+      state.safeMutationRoots.clear();
       cancelScans();
       clearTimeout(state.flushTimer);
       state.flushTimer = null;
