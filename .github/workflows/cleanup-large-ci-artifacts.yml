@@ -1,11 +1,6 @@
 name: Clean old large CI artifacts
 
 on:
-  # Authorized one-time deletion. Only the exact commit message below runs
-  # the cleanup automatically when this workflow file changes.
-  push:
-    paths:
-      - ".github/workflows/cleanup-large-ci-artifacts.yml"
   workflow_dispatch:
     inputs:
       delete_old:
@@ -20,10 +15,6 @@ permissions:
 
 jobs:
   cleanup:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' &&
-      github.event.head_commit.message == 'Run approved one-time large CI artifact cleanup')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -31,7 +22,7 @@ jobs:
     steps:
       - name: Preview or remove older large CI APK artifacts
         env:
-          DELETE_OLD: ${{ github.event_name == 'push' && github.event.head_commit.message == 'Run approved one-time large CI artifact cleanup' || inputs.delete_old }}
+          DELETE_OLD: ${{ inputs.delete_old }}
         shell: bash
         run: |
           set -euo pipefail
