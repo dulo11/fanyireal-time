@@ -41,6 +41,34 @@ function context() {
   await fab.emit('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
   await fab.emit('touchend', { changedTouches: [{ clientX: 20, clientY: 20 }] });
   await fab.emit('click'); assert.equal(panel.style.display, 'block');
+  // 安卓 Chromium: 隐藏悬浮球 -> 在插件菜单重新显示 -> 再次轻触。
+  // 即使浏览器支持 PointerEvent 但不生成合成 click，也必须打开小面板。
+  const recovery = context();
+  const localData = {};
+  const storageListeners = [];
+  recovery.ctx.window.PointerEvent = class {};
+  recovery.chrome.storage.onChanged.addListener = fn => storageListeners.push(fn);
+  recovery.chrome.storage.local.get = async defaults => ({ ...defaults, ...localData });
+  recovery.chrome.storage.local.set = async patch => {
+    const changes = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { oldValue: localData[k], newValue: v }]));
+    Object.assign(localData, patch);
+    for (const notify of storageListeners) notify(changes, 'local');
+  };
+  vm.runInNewContext(read('content/floating-panel.js'), recovery.ctx);
+  const recoveryRoot = recovery.document.documentElement.children[0].shadowRoot;
+  const recoveryFab = recoveryRoot.getElementById('fab');
+  const recoveryPanel = recoveryRoot.getElementById('panel');
+  await recoveryRoot.getElementById('hide').emit('click');
+  assert.equal(recoveryFab.style.display, 'none', 'hide should hide the floating icon');
+  await recovery.chrome.storage.local.set({ floatingPanelVisibleV1: true });
+  assert.equal(recoveryFab.style.display, 'grid', 'restore should show floating icon');
+  const tap = { identifier: 9, clientX: 30, clientY: 300 };
+  await recoveryFab.emit('touchstart', { touches: [tap], changedTouches: [tap] });
+  await recoveryFab.emit('touchend', { changedTouches: [tap] });
+  assert.equal(recoveryPanel.style.display, 'block', 'tap after restore must open panel without native click');
+  await recoveryFab.emit('click');
+  assert.equal(recoveryPanel.style.display, 'block', 'synthetic click must not instantly close reopened panel');
+
   const p = context();
   p.chrome.storage.sync.get = () => new Promise(() => {});
   vm.runInNewContext(read('popup/popup.js'), p.ctx);
