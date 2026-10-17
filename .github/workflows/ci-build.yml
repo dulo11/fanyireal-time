@@ -4,6 +4,12 @@ on:
   push:
     branches: [main, "fix/**"]
   workflow_dispatch:
+    inputs:
+      upload_signed_apk:
+        description: "Also upload the large signed APK as an Actions artifact? (normally use Releases)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -61,7 +67,7 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK_NAME"
 
       - name: Upload signed APK (manual test only)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.upload_signed_apk == true
         uses: actions/upload-artifact@v4
         with:
           name: FloatingTranslator-CI-signed
