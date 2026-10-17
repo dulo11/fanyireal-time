@@ -23,6 +23,7 @@
   let observer = null;
   let flushTimer = null;
   let processing = false;
+  let initialized = false;
   let nextElementId = 1;
   const queue = new Map();
   const records = new WeakMap();
@@ -229,7 +230,7 @@
     const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage"]
       .some(key => previous[key] !== settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(settings.siteRules);
     if (changed) restoreAll();
-    if (enabled()) scan(document);
+    if (initialized && enabled()) scan(document);
   }
 
   function handleExclusionsChanged() {
@@ -274,6 +275,7 @@
     try { await exclusions()?.ready; } catch {}
     await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
+    initialized = true;
     startObserver();
     scan(document);
   }
