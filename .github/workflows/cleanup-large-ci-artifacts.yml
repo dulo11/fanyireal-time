@@ -1,0 +1,55 @@
+name: Clean old large CI artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete_old:
+        description: "Delete OLD FloatingTranslator-CI-signed artifacts, preserving the newest? (default: preview only)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Preview or remove older large CI APK artifacts
+        env:
+          DELETE_OLD: ${{ inputs.delete_old }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method GET --paginate \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/all-artifacts.jsonl"
+
+          # Keep the most recently created CI APK artifact.
+          jq -s -r \
+            '[.[].artifacts[]? | select(.name == "FloatingTranslator-CI-signed" and .expired == false)] | sort_by(.created_at) | reverse | .[1:] | .[] | [.id, .size_in_bytes, .created_at] | @tsv' \
+            "$RUNNER_TEMP/all-artifacts.jsonl" > "$RUNNER_TEMP/old-ci-artifacts.tsv"
+
+          COUNT=$(wc -l < "$RUNNER_TEMP/old-ci-artifacts.tsv")
+          echo "Matching old CI APK artifacts to remove: $COUNT"
+          awk -F '\t' '{bytes += $2} END {printf "Reclaimable artifact storage (approx.): %.2f MB\n", bytes/1000000}' \
+            "$RUNNER_TEMP/old-ci-artifacts.tsv"
+
+          if [ "$DELETE_OLD" != "true" ]; then
+            echo "Preview mode: nothing has been deleted."
+            cat "$RUNNER_TEMP/old-ci-artifacts.tsv"
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r artifact_id artifact_size created_at; do
+            [ -n "$artifact_id" ] || continue
+            echo "Deleting old CI artifact $artifact_id ($artifact_size bytes, created $created_at)"
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/actions/artifacts/$artifact_id"
+          done < "$RUNNER_TEMP/old-ci-artifacts.tsv"
+
+          echo "Cleanup complete. Latest CI APK artifact and all Releases were preserved."
