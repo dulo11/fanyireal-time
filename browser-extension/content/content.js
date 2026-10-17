@@ -449,7 +449,10 @@
       // 只收集新出现的 DOM 子树，合并为低频、延迟的增量扫描。
       for (const mutation of mutations.slice(0, 24)) {
         if (mutation.type !== "childList") continue;
-        for (const added of Array.from(mutation.addedNodes || []).slice(0, 8)) {
+        // 不使用 Array.from(NodeList)：超大 DOM 更新时可能分配数千元素。
+        const addedNodes = mutation.addedNodes || [];
+        for (let i = 0; i < Math.min(addedNodes.length, 16); i++) {
+          const added = addedNodes[i];
           if (added.nodeType !== Node.ELEMENT_NODE && added.nodeType !== Node.TEXT_NODE) continue;
           if (added.nodeType === Node.ELEMENT_NODE &&
               (added.dataset?.ftOwned === "1" || added.matches?.(SKIP_SELECTOR))) continue;
