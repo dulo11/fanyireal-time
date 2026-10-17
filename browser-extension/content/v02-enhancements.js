@@ -496,8 +496,11 @@
   function startDocumentObserver() {
     if (state.docObserver || !document.documentElement) return;
     state.docObserver = new MutationObserver(mutations => {
+      if (!translationEnabled()) return;
+      let processed = 0;
       for (const mutation of mutations) {
         for (const added of mutation.addedNodes) {
+          if (++processed > 24) return;
           if (added.nodeType !== Node.ELEMENT_NODE) continue;
           discoverShadowRoots(added);
           markAdapterElements(added);
@@ -514,7 +517,10 @@
       .some(key => previous[key] !== state.settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(state.settings.siteRules);
     if (shadowChanged) {
       restoreShadowTranslations();
-      if (translationEnabled()) for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      if (translationEnabled()) {
+        discoverShadowRoots(document);
+        for (const root of state.shadowObservers.keys()) translateShadowRoot(root);
+      }
     }
     if (!state.settings.inputPreview || !state.settings.chatMode || !state.settings.enabled) removePreview();
   }
@@ -615,10 +621,11 @@
 
   async function init() {
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
     markAdapterElements(document);
     startDocumentObserver();
-    discoverShadowRoots(document);
+    if (translationEnabled()) discoverShadowRoots(document);
     startRouteWatch();
   }
 
