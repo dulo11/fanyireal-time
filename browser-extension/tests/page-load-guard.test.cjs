@@ -20,7 +20,7 @@ for (const m of [manifest, firefox]) {
 const core = read('content/content.js');
 assert.match(core, /state\.mutationWindowCount > 180/, 'Mutation storm protection must be present');
 assert.match(core, /state\.queue\.size >= 1000/, 'Text queue must be bounded');
-assert.match(core, /state\.scanTokens\.size >= 6/, 'Concurrent tree scans must be bounded');
+assert.match(core, /state\.scanTokens\.size >= \(state\.settings\.performanceSafeMode/, 'Concurrent tree scans must be bounded');
 assert.match(core, /state\.flushTimer !== null/, 'Queue scheduling must not be delayed by every new node');
 
 async function checkReadiness(initialState) {
