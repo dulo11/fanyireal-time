@@ -52,7 +52,8 @@
     mutationWindowStart: 0,
     mutationWindowCount: 0,
     cooldownUntil: 0,
-    recoveryTimer: null
+    recoveryTimer: null,
+    readyForTranslation: false
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -370,7 +371,7 @@
     if (materiallyChanged) restorePage();
     state.settings = next;
     state.active = shouldTranslatePage();
-    if (rescan && state.active && !state.paused) scheduleTreeScan(document.body);
+    if (rescan && state.readyForTranslation && state.active && !state.paused) scheduleTreeScan(document.body);
   }
 
   function handleMutations(mutations) {
@@ -598,6 +599,7 @@
     try { await exclusions()?.ready; } catch {}
     await globalThis.FTSiteStartup?.wait?.();
     await loadSettings({ rescan: false });
+    state.readyForTranslation = true;
     startObserver();
     if (state.active && !state.paused) scheduleTreeScan(document.body);
   }
