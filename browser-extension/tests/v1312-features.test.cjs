@@ -13,7 +13,7 @@ const pool = read("background/provider-pool.js");
 const select = read("content/selection-tools.js");
 
 for (const m of [manifest, firefox]) {
-  assert.equal(m.version, "1.3.14");
+  assert.equal(m.version, "1.3.15");
   assert.ok(m.content_scripts[0].js.includes("content/selection-tools.js"));
   assert.equal(m.content_scripts[0].all_frames, false, "mobile background-safe injection stays top-level");
 }
@@ -70,4 +70,4 @@ assert.equal(ctx.nearViewport(visible), true);
 assert.equal(ctx.nearViewport(far), false);
 state.settings.visiblePriority = false;
 assert.equal(ctx.nearViewport(far), true, "Users can turn off viewport-only scan");
-console.log("v1.3.14 feature wiring and viewport queue tests passed");
+console.log("v1.3.15 feature wiring and viewport queue tests passed");
