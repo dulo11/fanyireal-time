@@ -238,7 +238,7 @@
 
   function attachNativeLauncher(select) {
     if (!allowed() || !isVisible(select) || select.disabled || select.multiple || select.size > 1) return;
-    if (launchers.has(select)) return;
+    if (launchers.has(select) && launchers.get(select)?.isConnected) return;
     const launcher = document.createElement("button");
     launcher.type = "button";
     launcher.dataset.ftOwned = "1";
