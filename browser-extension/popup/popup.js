@@ -2,6 +2,8 @@ const DEFAULTS = {
   enabled: true,
   autoTranslate: true,
   performanceSafeMode: true,
+  formMenuEnabled: true,
+  formMenuMode: "bilingual",
   visiblePriority: true,
   bilingualFontScale: 100,
   bilingualColor: "#6750e8",
@@ -168,6 +170,8 @@ function render() {
   $("floatingFabSnap").checked = localSettings.floatingFabSnapV1 === true;
   $("autoTranslate").checked = Boolean(settings.autoTranslate);
   $("visiblePriority").checked = settings.visiblePriority !== false;
+  $("formMenuEnabled").checked = settings.formMenuEnabled !== false;
+  $("formMenuMode").value = settings.formMenuMode === "translated" ? "translated" : "bilingual";
   $("bilingualFontScale").value = String(settings.bilingualFontScale || 100);
   $("bilingualColor").value = /^#[0-9a-f]{6}$/i.test(settings.bilingualColor || "") ? settings.bilingualColor : "#6750e8";
   $("performanceSafeMode").checked = settings.performanceSafeMode !== false;
@@ -271,6 +275,8 @@ function bindControls() {
   $("autoTranslate").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
   $("performanceSafeMode").addEventListener("change", event => saveSync({ performanceSafeMode: event.target.checked }));
   $("visiblePriority").addEventListener("change", event => saveSync({ visiblePriority: event.target.checked }));
+  $("formMenuEnabled").addEventListener("change", event => saveSync({ formMenuEnabled: event.target.checked }));
+  $("formMenuMode").addEventListener("change", event => saveSync({ formMenuMode: event.target.value }));
   $("bilingualFontScale").addEventListener("change", event => saveSync({ bilingualFontScale: Number(event.target.value) }));
   $("bilingualColor").addEventListener("change", event => saveSync({ bilingualColor: event.target.value }));
   $("floatingPanelVisible").addEventListener("change", event => saveLocal({ floatingPanelVisibleV1: event.target.checked }));
