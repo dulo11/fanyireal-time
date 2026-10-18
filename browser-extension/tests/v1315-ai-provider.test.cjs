@@ -11,8 +11,8 @@ const html = read("options/options.html");
 const manifest = JSON.parse(read("manifest.json"));
 const firefox = JSON.parse(read("compat/firefox/manifest.json"));
 
-assert.equal(manifest.version, "1.3.15");
-assert.equal(firefox.version, "1.3.15");
+assert.equal(manifest.version, "1.3.16");
+assert.equal(firefox.version, "1.3.16");
 assert.match(ui, /aiCredentials/);
 assert.match(ui, /aiTranslationStyle/);
 assert.match(html, /id="providerOrder5"/);
@@ -107,5 +107,5 @@ async function start(config) {
   const snapshot = await legacy.ctx.FTProviderPool.getPoolConfig();
   assert.deepEqual(Array.from(snapshot.providerOrder), ["azure", "baidu", "aliyun", "google-web", "ai-openai"],
     "Existing users retain unchanged provider priority and AI appends last");
-  console.log("v1.3.15 AI provider security, caching and backward-compatibility tests passed");
+  console.log("v1.3.16 AI provider security, caching and backward-compatibility tests passed");
 })().catch(err => { console.error(err); process.exitCode = 1; });
