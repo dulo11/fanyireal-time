@@ -20,6 +20,7 @@
   let settings = { ...DEFAULTS };
   let lastForcedUrl = "";
   let timer = null;
+  let readyToProbe = false;
 
   const helper = () => globalThis.FTLanguage;
 
@@ -105,7 +106,7 @@
   async function loadSettings() {
     settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     lastForcedUrl = "";
-    scheduleProbe(250);
+    if (readyToProbe) scheduleProbe(250);
   }
 
   window.addEventListener("ft-route-change", () => {
@@ -121,9 +122,14 @@
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
 
+  async function init() {
+    await globalThis.FTSiteStartup?.wait?.();
+    readyToProbe = true;
+    await loadSettings();
+  }
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", loadSettings, { once: true });
+    document.addEventListener("DOMContentLoaded", init, { once: true });
   } else {
-    loadSettings();
+    void init();
   }
 })();

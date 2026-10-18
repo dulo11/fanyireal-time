@@ -5,6 +5,7 @@
   const DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    performanceSafeMode: true,
     sourceLang: "auto",
     targetLang: "zh-CN",
     siteRules: {},
@@ -23,6 +24,7 @@
   let observer = null;
   let flushTimer = null;
   let processing = false;
+  let initialized = false;
   let nextElementId = 1;
   const queue = new Map();
   const records = new WeakMap();
@@ -44,6 +46,8 @@
   }
 
   function enabled() {
+    // 默认在移动端关闭属性翻译，避免修改 React/Vue 的 aria-label / value 导致重绘循环。
+    if (settings.performanceSafeMode !== false) return false;
     if (!settings.enabled || paused) return false;
     const rule = siteRule();
     if (rule === "never") return false;
@@ -142,7 +146,7 @@
   async function flush() {
     if (processing || !enabled() || !queue.size) return;
     processing = true;
-    const items = [...queue.values()].slice(0, 40);
+    const items = [...queue.values()].slice(0, 8);
     for (const item of items) queue.delete(queueKey(item.element, item.attr));
 
     try {
@@ -196,7 +200,7 @@
     if (observer || !document.documentElement) return;
     observer = new MutationObserver(mutations => {
       if (!enabled()) return;
-      for (const mutation of mutations) {
+      for (const mutation of mutations.slice(0, 60)) {
         if (mutation.type === "attributes") {
           const element = mutation.target;
           const attr = mutation.attributeName;
@@ -205,7 +209,13 @@
           const current = element.getAttribute(attr) || "";
           if (record && current === record.rendered) continue;
           if (record && current === record.original) {
-            element.setAttribute(attr, record.rendered);
+            // 网站框架反复覆盖属性时不要无限抢写，避免网页冻结。
+            const now = Date.now();
+            if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
+              record.restoreWindowStart = now;
+              record.restoreAttempts = 0;
+            }
+            if (++record.restoreAttempts <= 3) element.setAttribute(attr, record.rendered);
             continue;
           }
           if (record && current !== record.original) records.get(element)?.delete(attr);
@@ -226,10 +236,10 @@
   async function loadSettings() {
     const previous = settings;
     settings = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
-    const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage"]
+    const changed = ["enabled", "autoTranslate", "sourceLang", "targetLang", "skipTargetLanguage", "performanceSafeMode"]
       .some(key => previous[key] !== settings[key]) || JSON.stringify(previous.siteRules) !== JSON.stringify(settings.siteRules);
     if (changed) restoreAll();
-    if (enabled()) scan(document);
+    if (initialized && enabled()) scan(document);
   }
 
   function handleExclusionsChanged() {
@@ -269,10 +279,18 @@
     if (area === "sync" && Object.keys(changes).some(key => key in DEFAULTS)) loadSettings();
   });
   window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
+  window.addEventListener("ft-translation-safety-pause", () => {
+    paused = true;
+    queue.clear();
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }, true);
 
   async function init() {
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings();
+    initialized = true;
     startObserver();
     scan(document);
   }

@@ -5,6 +5,11 @@
   const DEFAULTS = {
     enabled: true,
     autoTranslate: true,
+    performanceSafeMode: true,
+    visiblePriority: true,
+    bilingualFontScale: 100,
+    bilingualColor: "#6750e8",
+    siteDisplayModes: {},
     sourceLang: "auto",
     targetLang: "zh-CN",
     displayMode: "translated",
@@ -38,6 +43,7 @@
     retryTimer: null,
     nodeState: new WeakMap(),
     nodeRetries: new WeakMap(),
+    consecutiveBatchErrors: 0,
     trackedNodes: new Set(),
     generation: 0,
     observer: null,
@@ -48,7 +54,24 @@
     protectedRestores: 0,
     lastError: "",
     scanTokens: new Set(),
-    safetyScanTimer: null
+    pendingTreeRoots: [],
+    safetyScanTimer: null,
+    mutationWindowStart: 0,
+    mutationWindowCount: 0,
+    cooldownUntil: 0,
+    recoveryTimer: null,
+    readyForTranslation: false,
+    safeMutationTimer: null,
+    safeMutationRoots: new Set(),
+    safeMutationLastFlush: 0,
+    deferredNodes: new Set(),
+    viewportRefreshTimer: null,
+    currentRequestId: "",
+    lastRequestMs: 0,
+    lastRequestAt: 0,
+    safetyPauseReason: "",
+    longTaskCount: 0,
+    longTaskWindowStart: 0
   };
 
   const lang = () => globalThis.FTLanguage;
@@ -66,6 +89,47 @@
   function siteRule() {
     try { return state.settings.siteRules?.[location.hostname] || "default"; }
     catch { return "default"; }
+  }
+
+  function effectiveDisplayMode() {
+    const override = state.settings.siteDisplayModes?.[location.hostname];
+    return ["translated", "bilingual"].includes(override) ? override : state.settings.displayMode;
+  }
+
+  function nearViewport(node) {
+    if (state.settings.visiblePriority === false) return true;
+    try {
+      const rect = node?.parentElement?.getBoundingClientRect?.();
+      return !rect || (rect.bottom >= -200 && rect.top <= innerHeight + 550);
+    } catch { return true; }
+  }
+
+  function applyBilingualStyle() {
+    try {
+      const scale = Math.max(75, Math.min(140, Number(state.settings.bilingualFontScale) || 100));
+      const color = /^#[0-9a-f]{6}$/i.test(String(state.settings.bilingualColor))
+        ? state.settings.bilingualColor : "#6750e8";
+      document.documentElement.style.setProperty("--ft-bilingual-color", color);
+      document.documentElement.style.setProperty("--ft-bilingual-scale", String(scale / 100));
+    } catch {}
+  }
+
+  function installPerformanceSafety() {
+    if (typeof PerformanceObserver !== "function") return;
+    try {
+      const observer = new PerformanceObserver(list => {
+        if (!state.active || state.paused || state.settings.performanceSafeMode === false) return;
+        if (!state.processing && !state.queue.size) return;
+        const now = Date.now();
+        if (now - state.longTaskWindowStart > 10000) {
+          state.longTaskWindowStart = now;
+          state.longTaskCount = 0;
+        }
+        for (const entry of list.getEntries()) if (entry.duration >= 180) state.longTaskCount++;
+        if (state.longTaskCount >= 6) pauseForSafety("检测到多次长任务导致页面响应迟缓，已自动暂停翻译");
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {} // 部分安卓内核不支持 longtask。
   }
 
   function shouldTranslatePage() {
@@ -107,6 +171,8 @@
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP_SELECTOR) || isExcludedElement(parent)) return false;
+    if (state.settings.performanceSafeMode !== false &&
+        parent.closest('button,a,nav,form,label,[role="button"],[role="link"],[aria-live],[data-testid*="editor"],[data-testid*="input"]')) return false;
     const { core } = splitWhitespace(node.nodeValue);
     if (!hasLetters(core) || shouldSkipTarget(core)) return false;
     return true;
@@ -135,8 +201,17 @@
   function restoreProtectedNode(node, record) {
     if (!record || !node?.isConnected || !state.active || state.paused || isExcludedElement(node.parentElement)) return false;
     if (node.nodeValue !== record.originalFull) return false;
+    // 安全模式尊重站点框架的 DOM 管理，不会抢写已经被 React/Vue 恢复的文本。
+    if (state.settings.performanceSafeMode !== false) return false;
+    // React/Vue 可将译文恢复为原文；反复抢写会与站点 DOM 更新形成死循环。
+    const now = Date.now();
+    if (!record.restoreWindowStart || now - record.restoreWindowStart > 30000) {
+      record.restoreWindowStart = now;
+      record.restoreAttempts = 0;
+    }
+    if (++record.restoreAttempts > 3) return false;
 
-    if (state.settings.displayMode === "bilingual") {
+    if (effectiveDisplayMode() === "bilingual") {
       if (!record.translationEl?.isConnected) {
         const span = record.translationEl || createTranslationSpan(node, record.translatedCore);
         record.translationEl = span;
@@ -154,6 +229,11 @@
 
   function enqueueNode(node) {
     if (!state.active || state.paused || !isEligibleTextNode(node)) return;
+    if (!nearViewport(node)) {
+      if (state.deferredNodes.size < 2400) state.deferredNodes.add(node);
+      return;
+    }
+    state.deferredNodes.delete(node);
     const previous = state.nodeState.get(node);
     if (previous) {
       const current = node.nodeValue;
@@ -166,6 +246,7 @@
       state.nodeState.delete(node);
       state.trackedNodes.delete(node);
     }
+    if (state.queue.size >= 1000) return; // 有界队列，避免动态网页持续渲染时堆积
     state.queue.add(node);
     scheduleFlush();
   }
@@ -179,20 +260,31 @@
     if (![Node.ELEMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE].includes(root.nodeType)) return;
     if (root.nodeType === Node.ELEMENT_NODE && (root.matches?.(SKIP_SELECTOR) || isExcludedElement(root))) return;
 
+    if (state.scanTokens.size >= (state.settings.performanceSafeMode !== false ? 2 : 6)) {
+      // 排队等待空闲，不丢掉 MutationObserver 新增的后续内容。
+      if (state.pendingTreeRoots.length < 16 && !state.pendingTreeRoots.includes(root)) state.pendingTreeRoots.push(root);
+      return;
+    }
     const token = { cancelled: false };
+    const completeScan = () => {
+      state.scanTokens.delete(token);
+      if (!state.active || state.paused || !state.pendingTreeRoots.length) return;
+      const next = state.pendingTreeRoots.shift();
+      setTimeout(() => scheduleTreeScan(next), 50);
+    };
     state.scanTokens.add(token);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 
     const step = deadline => {
       if (token.cancelled || !state.active || state.paused) {
-        state.scanTokens.delete(token);
+        completeScan();
         return;
       }
       let count = 0;
-      while (count < 700 && (!deadline || deadline.timeRemaining() > 2)) {
+      while (count < 120 && (!deadline || deadline.timeRemaining() > 2)) {
         const node = walker.nextNode();
         if (!node) {
-          state.scanTokens.delete(token);
+          completeScan();
           return;
         }
         if (isEligibleTextNode(node)) enqueueNode(node);
@@ -209,12 +301,16 @@
   function cancelScans() {
     for (const token of state.scanTokens) token.cancelled = true;
     state.scanTokens.clear();
+    state.pendingTreeRoots.length = 0;
   }
 
-  function scheduleFlush(delay = 90) {
-    if (state.paused) return;
-    clearTimeout(state.flushTimer);
-    state.flushTimer = setTimeout(processQueue, delay);
+  function scheduleFlush(delay = 180) {
+    if (state.paused || !state.active || state.flushTimer !== null) return;
+    // 原实现每添加一个文字节点都会重置计时器：长页面可能持续推迟队列。
+    state.flushTimer = setTimeout(() => {
+      state.flushTimer = null;
+      void processQueue();
+    }, state.settings.performanceSafeMode !== false ? Math.max(200, delay) : delay);
   }
 
   function takeBatch() {
@@ -223,7 +319,7 @@
     let chars = 0;
     for (const node of candidates) {
       const core = splitWhitespace(node.nodeValue).core;
-      if (batch.length >= 40 || (batch.length && chars + core.length > 16000)) break;
+      if (batch.length >= 8 || (batch.length && chars + core.length > 2400)) break;
       batch.push(node);
       chars += core.length;
     }
@@ -237,7 +333,7 @@
       if (!entry.node?.isConnected || !isEligibleTextNode(entry.node)) continue;
       const retries = (state.nodeRetries.get(entry.node) || 0) + 1;
       state.nodeRetries.set(entry.node, retries);
-      if (retries <= 4) {
+      if (retries <= 1) {
         state.queue.add(entry.node);
         state.retried++;
         maxRetry = Math.max(maxRetry, retries);
@@ -249,6 +345,37 @@
       state.retryTimer = null;
       scheduleFlush(0);
     }, Math.min(8000, 650 * (2 ** Math.max(0, maxRetry - 1))));
+  }
+
+  function pauseForSafety(reason) {
+    state.lastError = reason;
+    state.safetyPauseReason = reason;
+    setPaused(true);
+    try {
+      window.dispatchEvent(new CustomEvent("ft-translation-safety-pause", { detail: { reason } }));
+    } catch {}
+  }
+
+  function cancelCurrentRequest() {
+    const id = state.currentRequestId;
+    if (!id) return;
+    state.currentRequestId = "";
+    try { Promise.resolve(chrome.runtime.sendMessage({ type: "FT_CANCEL_TRANSLATION", requestId: id })).catch(() => {}); }
+    catch {}
+  }
+
+  async function sendTranslationWithDeadline(message, timeoutMs = 18000) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        chrome.runtime.sendMessage(message),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("翻译请求超过18秒，已自动暂停本页；请检查引擎或网络后再继续")), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   }
 
   async function processQueue() {
@@ -266,12 +393,18 @@
       }).filter(entry => hasLetters(entry.parts.core));
       if (!entries.length) return;
 
-      const response = await chrome.runtime.sendMessage({
+      const requestId = `ft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      state.currentRequestId = requestId;
+      const requestStarted = Date.now();
+      const response = await sendTranslationWithDeadline({
         type: "FT_TRANSLATE_DETAILED",
+        requestId,
         texts: entries.map(entry => entry.parts.core),
         options: { sourceLang: state.settings.sourceLang, targetLang: state.settings.targetLang }
       });
 
+      state.lastRequestMs = Date.now() - requestStarted;
+      state.lastRequestAt = Date.now();
       if (generation !== state.generation || !state.active) return;
       if (state.paused) {
         for (const entry of entries) if (entry.node?.isConnected) state.queue.add(entry.node);
@@ -284,7 +417,8 @@
       entries.forEach((entry, index) => {
         const translated = response.translations?.[index];
         const itemError = response.errors?.[index];
-        if (typeof translated === "string" && entry.node.isConnected && !isExcludedElement(entry.node.parentElement)) {
+        if (typeof translated === "string" && entry.node.isConnected &&
+            entry.node.nodeValue === entry.originalFull && !isExcludedElement(entry.node.parentElement)) {
           applyTranslation(entry.node, entry.parts, entry.originalFull, translated);
           state.nodeRetries.delete(entry.node);
           state.processed++;
@@ -298,25 +432,39 @@
       if (failedEntries.length) {
         state.failed += failedEntries.length;
         state.lastError = firstError;
-        retryFailedEntries(failedEntries);
+        state.consecutiveBatchErrors++;
+        if (state.consecutiveBatchErrors >= 2) {
+          pauseForSafety(`连续翻译失败，已暂停本页：${firstError}`);
+        } else {
+          retryFailedEntries(failedEntries);
+        }
       } else {
+        state.consecutiveBatchErrors = 0;
         state.lastError = "";
       }
     } catch (error) {
+      if (generation !== state.generation || state.paused) return;
       state.failed += Math.max(1, entries.length);
-      state.lastError = String(error?.message || error);
-      retryFailedEntries(entries);
+      const reason = String(error?.message || error);
+      state.lastError = reason;
+      state.consecutiveBatchErrors++;
+      if (reason.includes("超过18秒") || state.consecutiveBatchErrors >= 2) {
+        pauseForSafety(reason);
+      } else {
+        retryFailedEntries(entries);
+      }
       console.warn("[FloatingTranslator]", error);
     } finally {
+      state.currentRequestId = "";
       state.processing = false;
-      if (state.active && !state.paused && state.queue.size && !state.retryTimer) scheduleFlush(50);
+      if (state.active && !state.paused && state.queue.size && !state.retryTimer) scheduleFlush(150);
     }
   }
 
   function applyTranslation(node, parts, originalFull, translatedCore) {
     const renderedFull = `${parts.prefix}${translatedCore}${parts.suffix}`;
     const record = { originalFull, translatedCore, renderedFull, translationEl: null };
-    if (state.settings.displayMode === "bilingual") {
+    if (effectiveDisplayMode() === "bilingual") {
       const span = createTranslationSpan(node, translatedCore);
       node.parentNode?.insertBefore(span, node.nextSibling);
       record.translationEl = span;
@@ -329,10 +477,20 @@
 
   function restorePage() {
     state.generation++;
+    cancelCurrentRequest();
     cancelScans();
+    state.deferredNodes.clear();
+    clearTimeout(state.viewportRefreshTimer);
+    state.viewportRefreshTimer = null;
     clearTimeout(state.flushTimer);
+    state.flushTimer = null;
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
+    clearTimeout(state.recoveryTimer);
+    state.recoveryTimer = null;
+    clearTimeout(state.safeMutationTimer);
+    state.safeMutationTimer = null;
+    state.safeMutationRoots.clear();
     state.queue.clear();
     for (const node of [...state.trackedNodes]) {
       const record = state.nodeState.get(node);
@@ -347,23 +505,76 @@
     state.retried = 0;
     state.protectedRestores = 0;
     state.lastError = "";
+    state.consecutiveBatchErrors = 0;
   }
 
   async function loadSettings({ rescan = true } = {}) {
     const next = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
     const materiallyChanged = [
-      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage"
+      "sourceLang", "targetLang", "displayMode", "enabled", "autoTranslate", "skipTargetLanguage", "performanceSafeMode", "visiblePriority", "bilingualFontScale", "bilingualColor", "siteDisplayModes"
     ].some(key => state.settings[key] !== next[key]) || JSON.stringify(state.settings.siteRules) !== JSON.stringify(next.siteRules);
 
     if (materiallyChanged) restorePage();
     state.settings = next;
+    applyBilingualStyle();
     state.active = shouldTranslatePage();
-    if (rescan && state.active && !state.paused) scheduleTreeScan(document.body);
+    if (rescan && state.readyForTranslation && state.active && !state.paused) scheduleTreeScan(document.body);
   }
 
   function handleMutations(mutations) {
-    if (!state.active) return;
-    for (const mutation of mutations) {
+    if (!state.active || state.paused) return;
+    const now = Date.now();
+    if (state.settings.performanceSafeMode !== false) {
+      // 安卓轻量模式：绝不在 MutationObserver 回调中遍历整页，也不抢写 characterData。
+      // 只收集新出现的 DOM 子树，合并为低频、延迟的增量扫描。
+      for (const mutation of mutations.slice(0, 24)) {
+        if (mutation.type !== "childList") continue;
+        // 不使用 Array.from(NodeList)：超大 DOM 更新时可能分配数千元素。
+        const addedNodes = mutation.addedNodes || [];
+        for (let i = 0; i < Math.min(addedNodes.length, 16); i++) {
+          const added = addedNodes[i];
+          if (added.nodeType !== Node.ELEMENT_NODE && added.nodeType !== Node.TEXT_NODE) continue;
+          if (added.nodeType === Node.ELEMENT_NODE &&
+              (added.dataset?.ftOwned === "1" || added.matches?.(SKIP_SELECTOR))) continue;
+          if (state.safeMutationRoots.size < 8) state.safeMutationRoots.add(added);
+        }
+      }
+      if (state.safeMutationRoots.size && state.safeMutationTimer === null) {
+        const delay = Math.max(1000, 2000 - (now - state.safeMutationLastFlush));
+        state.safeMutationTimer = setTimeout(() => {
+          state.safeMutationTimer = null;
+          state.safeMutationLastFlush = Date.now();
+          const roots = [...state.safeMutationRoots];
+          state.safeMutationRoots.clear();
+          if (state.active && !state.paused) {
+            // 初始页面扫描已经进行，后续仅扫描新子树，不重扫整个 document。
+            for (const root of roots) scheduleTreeScan(root);
+          }
+        }, delay);
+      }
+      return;
+    }
+    if (now < state.cooldownUntil) return;
+    if (now - state.mutationWindowStart >= 1000) {
+      state.mutationWindowStart = now;
+      state.mutationWindowCount = 0;
+    }
+    state.mutationWindowCount += mutations.length;
+    // React/Vue 等站点正在批量渲染时，主动让出主线程，不参与 DOM 更新竞争。
+    if (state.mutationWindowCount > 180) {
+      state.cooldownUntil = now + 4000;
+      cancelScans();
+      clearTimeout(state.flushTimer);
+      state.flushTimer = null;
+      state.queue.clear();
+      if (state.recoveryTimer !== null) clearTimeout(state.recoveryTimer);
+      state.recoveryTimer = setTimeout(() => {
+        state.recoveryTimer = null;
+        if (state.active && !state.paused) scheduleTreeScan(document.body);
+      }, 4300);
+      return;
+    }
+    for (const mutation of mutations.slice(0, 80)) {
       if (mutation.type === "characterData") {
         const node = mutation.target;
         const record = state.nodeState.get(node);
@@ -455,8 +666,13 @@
   function handleRouteRescan() {
     if (!state.active || state.paused) return;
     state.generation++;
+    cancelCurrentRequest();
     cancelScans();
+    state.deferredNodes.clear();
+    clearTimeout(state.viewportRefreshTimer);
+    state.viewportRefreshTimer = null;
     clearTimeout(state.flushTimer);
+    state.flushTimer = null;
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
     state.queue.clear();
@@ -473,12 +689,23 @@
   function setPaused(paused) {
     state.paused = Boolean(paused);
     if (state.paused) {
+      state.generation++;
+      cancelCurrentRequest();
+      state.queue.clear();
+      state.deferredNodes.clear();
+      clearTimeout(state.safeMutationTimer);
+      state.safeMutationTimer = null;
+      state.safeMutationRoots.clear();
       cancelScans();
       clearTimeout(state.flushTimer);
+      state.flushTimer = null;
       clearTimeout(state.retryTimer);
       state.retryTimer = null;
       return;
     }
+    state.consecutiveBatchErrors = 0;
+    state.lastError = "";
+    state.safetyPauseReason = "";
     if (state.active) {
       scheduleTreeScan(document.body);
       if (state.queue.size) scheduleFlush(0);
@@ -504,6 +731,19 @@
       state.active = true;
       scheduleTreeScan(document.body);
       sendResponse({ ok: true });
+      return false;
+    }
+    if (message?.type === "FT_CLEAR_QUEUE") {
+      state.generation++;
+      cancelCurrentRequest();
+      cancelScans();
+      state.queue.clear();
+      state.deferredNodes.clear();
+      clearTimeout(state.flushTimer);
+      state.flushTimer = null;
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+      sendResponse({ ok: true, cleared: true });
       return false;
     }
     if (message?.type === "FT_RESCAN_PAGE") {
@@ -540,7 +780,13 @@
         failed: state.failed,
         retried: state.retried,
         protectedRestores: state.protectedRestores,
-        lastError: state.lastError
+        lastError: state.lastError,
+        lastRequestMs: state.lastRequestMs,
+        lastRequestAt: state.lastRequestAt,
+        safetyPauseReason: state.safetyPauseReason,
+        deferred: state.deferredNodes.size,
+        runningRequest: Boolean(state.currentRequestId),
+        visiblePriority: state.settings.visiblePriority !== false
       });
       return false;
     }
@@ -553,6 +799,26 @@
   document.addEventListener("keydown", translateFocusedInput, true);
   window.addEventListener("ft-route-change", handleRouteRescan, true);
   window.addEventListener("ft-exclusions-changed", handleExclusionsChanged, true);
+  function updateVisibleQueue() {
+    if (!state.active || state.paused || !state.deferredNodes.size) return;
+    let checked = 0;
+    for (const node of state.deferredNodes) {
+      if (++checked > 1800) break;
+      if (!node.isConnected) { state.deferredNodes.delete(node); continue; }
+      if (nearViewport(node)) {
+        state.deferredNodes.delete(node);
+        enqueueNode(node);
+      }
+    }
+  }
+
+  window.addEventListener("scroll", () => {
+    if (state.viewportRefreshTimer !== null) return;
+    state.viewportRefreshTimer = setTimeout(() => {
+      state.viewportRefreshTimer = null;
+      updateVisibleQueue();
+    }, 250);
+  }, { passive: true, capture: true });
   window.addEventListener("focus", () => scheduleSafetyScan(350), { passive: true });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") scheduleSafetyScan(350);
@@ -561,9 +827,12 @@
   async function init() {
     if (state.started) return;
     state.started = true;
-    startObserver();
     try { await exclusions()?.ready; } catch {}
+    await globalThis.FTSiteStartup?.wait?.();
     await loadSettings({ rescan: false });
+    state.readyForTranslation = true;
+    startObserver();
+    installPerformanceSafety();
     if (state.active && !state.paused) scheduleTreeScan(document.body);
   }
 

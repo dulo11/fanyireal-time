@@ -80,6 +80,7 @@ function toggleProviderSections() {
 }
 
 function routeLabel(route) {
+  if (route === "ai-openai") return "AI 大模型";
   if (route === "azure") return "Azure";
   if (route === "google-web") return "Google Web";
   if (route === "google-fallback") return "Google 回退";

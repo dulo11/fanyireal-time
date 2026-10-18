@@ -7,7 +7,9 @@
   font: inherit !important;
   line-height: inherit !important;
   text-decoration: none !important;
-  opacity: 0.78 !important;
+  opacity: 0.9 !important;
+  color: var(--ft-bilingual-color, #6750e8) !important;
+  font-size: calc(1em * var(--ft-bilingual-scale, 1)) !important;
 }
 
 .ft-translation-inline[data-ft-block="1"] {

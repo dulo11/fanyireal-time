@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>FloatingTranslator</title>
+  <title>浮译</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="panel">
     <header>
       <div>
-        <h1>FloatingTranslator</h1>
+        <h1>浮译</h1>
         <p id="pageState">正在读取当前网页…</p>
       </div>
       <label class="switch" title="总开关">
@@ -21,82 +21,90 @@
 
     <section class="card">
       <label class="check-row">
+        <input id="floatingPanelVisible" type="checkbox">
+        <span>显示网页悬浮「译」按钮</span>
+      </label>
+      <div class="host">关闭后只隐藏小按钮，翻译仍正常工作；随时从这里恢复。</div>
+      <div class="grid">
+        <label><span>悬浮按钮大小</span><select id="floatingFabSize"><option value="36">小</option><option value="44">中</option><option value="52">标准</option><option value="64">大</option></select></label>
+        <label><span>悬浮按钮透明度</span><select id="floatingFabOpacity"><option value="0.35">35%</option><option value="0.6">60%</option><option value="0.8">80%</option><option value="1">100%</option></select></label>
+      </div>
+      <label class="check-row"><input id="floatingFabSnap" type="checkbox"><span>拖动后自动贴边</span></label>
+      <label class="check-row">
         <input id="autoTranslate" type="checkbox">
         <span>自动持续翻译网页</span>
       </label>
       <div class="host">关闭后不会再随网页自动翻译，只在你点“重新翻译整页”或“补扫遗漏内容”时运行。</div>
       <label class="check-row">
+        <input id="performanceSafeMode" type="checkbox">
+        <span>网页安全翻译模式（推荐，默认开启）</span>
+      </label>
+      <div class="host">大幅减少动态网页扫描，避免插件反复覆盖网站文字；安全模式暂不翻译按钮属性和 Shadow DOM。关闭后使用完整深度翻译，可能导致安卓动态网页卡顿。</div>
+      <label class="check-row"><input id="formMenuEnabled" type="checkbox"><span>表单与动态下拉菜单翻译</span></label>
+      <label><span>点击弹出选项的译文显示方式</span><select id="formMenuMode">
+        <option value="translated">仅中文</option><option value="bilingual">英文＋中文</option>
+      </select></label>
+      <div class="host">原生下拉框会出现「中译选项」辅助按钮：不修改真实选项和值；弹出式自定义菜单会在点击后自动显示翻译。系统级选择弹窗不一定能直接覆盖。</div>
+      <label class="check-row"><input id="visiblePriority" type="checkbox"><span>优先翻译屏幕可见区域，滚动继续翻译</span></label>
+      <div class="host">默认开启：优先处理正在看的文字，减少长网页首屏压力。</div>
+      <label class="check-row">
         <input id="fallbackGoogleQuick" type="checkbox">
         <span>Azure 失败时自动使用 Google Web 备用</span>
       </label>
-      <div class="host">Google Web 在本扩展里无需 API Key、不会走付费账号；它属于非正式 Web 接口，可能被限流或失效。关闭后 Azure 失败就直接报错，不再自动调用 Google。</div>
+      <div class="host">Google Web 在本扩展里无需 API Key、不会走付费账号；它属于非正式 Web 接口，可能被限流或失效。</div>
       <label class="check-row">
         <input id="skipTargetLanguage" type="checkbox">
         <span>自动跳过已经是目标语言的文本</span>
       </label>
 
       <div class="grid">
-        <label>
-          <span>网页源语言</span>
-          <select id="sourceLang"></select>
-        </label>
-        <label>
-          <span>网页翻译为</span>
-          <select id="targetLang"></select>
-        </label>
+        <label><span>网页源语言</span><select id="sourceLang"></select></label>
+        <label><span>网页翻译为</span><select id="targetLang"></select></label>
       </div>
 
-      <label>
-        <span>显示方式</span>
-        <select id="displayMode">
-          <option value="translated">仅译文</option>
-          <option value="bilingual">原文 + 译文</option>
-        </select>
-      </label>
-      <div class="host">v1.1 跨浏览器版继续保护已经翻好的文字；网页脚本把译文覆盖回原文时直接恢复，不重复请求。</div>
-    </section>
-
-    <section class="card">
-      <label class="check-row">
-        <input id="chatMode" type="checkbox">
-        <span>网页聊天连续翻译</span>
-      </label>
-      <label class="check-row">
-        <input id="inputPreview" type="checkbox">
-        <span>输入时实时预览译文</span>
-      </label>
+      <label><span>显示方式</span><select id="displayMode"><option value="translated">仅译文</option><option value="bilingual">原文 + 译文</option></select></label>
+      <label class="check-row"><input id="selectionToolsEnabled" type="checkbox"><span>选中文字后显示「译」按钮（可关闭）</span></label>
+      <label><span>划词翻译默认目标语言</span><select id="selectionTargetLang">
+        <option value="page">跟随网页翻译目标语言</option>
+        <option value="zh-CN">中文简体</option><option value="zh-TW">中文繁体</option>
+        <option value="en">英语</option><option value="ja">日语</option><option value="vi">越南语</option>
+        <option value="fil">菲律宾语</option><option value="ms">马来语</option><option value="th">泰语</option>
+        <option value="de">德语</option><option value="fr">法语</option><option value="es">西班牙语</option>
+      </select></label>
+      <div class="host">选词弹窗也能直接切换语言、重新翻译、复制原文/译文/双语。不会自动上传选中文字。</div>
       <div class="grid">
-        <label>
-          <span>我输入的语言</span>
-          <select id="inputSourceLang"></select>
-        </label>
-        <label>
-          <span>我发送为</span>
-          <select id="inputTargetLang"></select>
-        </label>
+        <label><span>双语译文字体大小</span><select id="bilingualFontScale"><option value="80">80%</option><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="120">120%</option></select></label>
+        <label><span>双语译文颜色</span><input id="bilingualColor" type="color" value="#6750e8"></label>
       </div>
-      <div class="actions">
-        <button id="swapInputLang">交换输入语言</button>
-      </div>
-      <div class="host">按网站记住最后一次“输入语言 → 发送语言”。输入预览仍支持仅复制、交换和本次输入暂停预览。</div>
+      <div class="host">固定签名版继续保护已经翻好的文字；网页脚本把译文覆盖回原文时直接恢复，不重复请求。</div>
     </section>
 
     <section class="card">
-      <label>
-        <span>当前网站规则</span>
-        <select id="siteRule">
-          <option value="default">跟随全局设置</option>
-          <option value="always">始终翻译此网站</option>
-          <option value="never">永不翻译此网站</option>
-        </select>
-      </label>
+      <label class="check-row"><input id="chatMode" type="checkbox"><span>网页聊天连续翻译</span></label>
+      <label class="check-row"><input id="inputPreview" type="checkbox"><span>输入时实时预览译文</span></label>
+      <label class="check-row"><input id="inputQuickTranslate" type="checkbox"><span>输入框快捷翻译（双击或连续三个空格）</span></label>
+      <div class="host">默认关闭，开启后仅弹出译文供你复制，不擅自修改输入内容。</div>
+      <label class="check-row"><input id="inputAutoReplace" type="checkbox"><span>停止输入后自动替换为译文（默认关闭）</span></label>
+      <div class="host">主动开启后才生效：会自动修改正在编辑的文字，但不会点击发送；替换后提供12秒撤销按钮。聊天中请确认译文再发送。</div>
+      <div class="grid">
+        <label><span>停止输入多久后翻译并替换</span><select id="inputAutoReplaceDelay"><option value="800">0.8 秒</option><option value="1500">1.5 秒</option><option value="2500">2.5 秒</option><option value="4000">4 秒</option></select></label>
+        <label><span>当前网站的自动替换</span><select id="siteInputAutoReplace"><option value="default">跟随全局</option><option value="on">只在此网站开启</option><option value="off">只在此网站关闭</option></select></label>
+      </div>
+      <div class="grid">
+        <label><span>我输入的语言</span><select id="inputSourceLang"></select></label>
+        <label><span>我发送为</span><select id="inputTargetLang"></select></label>
+      </div>
+      <div class="actions"><button id="swapInputLang">交换输入语言</button></div>
+      <div class="host">按网站记住“输入语言 → 发送语言”及自动替换模式。原有的实时预览、手动替换、仅复制和交换语言功能继续保留。</div>
+    </section>
+
+    <section class="card">
+      <label><span>当前网站规则</span><select id="siteRule"><option value="default">跟随全局设置</option><option value="always">始终翻译此网站</option><option value="never">永不翻译此网站</option></select></label>
+      <label><span>当前网站显示方式（单独记忆）</span><select id="siteDisplayMode"><option value="default">跟随全局</option><option value="translated">仅译文</option><option value="bilingual">原文 + 译文</option></select></label>
       <div id="host" class="host"></div>
       <div id="exclusionCount" class="host">排除区域：正在读取…</div>
       <div id="runtimeRoute" class="host">最近翻译路径：正在读取…</div>
-      <div class="actions">
-        <button id="pickExclusion">选择不翻译区域</button>
-        <button id="clearExclusions">清除此网站排除</button>
-      </div>
+      <div class="actions"><button id="pickExclusion">选择不翻译区域</button><button id="clearExclusions">清除此网站排除</button></div>
       <div class="host">点“选择不翻译区域”后回到网页，再点要排除的区域。代码块、编辑器、用户名区等以后不会自动翻译；Esc 可取消选择。</div>
     </section>
 
@@ -105,12 +113,32 @@
       <button id="translateNow">重新翻译整页</button>
       <button id="rescanPage">补扫遗漏内容</button>
       <button id="restorePage">恢复原文</button>
+      <button id="clearQueue">停止并清空排队任务</button>
     </div>
+
+    <section class="card">
+      <strong>翻译运行诊断</strong>
+      <pre id="pageDiagnostics" class="host" style="white-space:pre-wrap;word-break:break-word">等待网页状态…</pre>
+      <div class="actions"><button id="refreshDiagnostics">刷新诊断</button><button id="copyDiagnostics">复制诊断信息</button></div>
+      <div id="diagnosticsFeedback" class="host"></div>
+    </section>
+
+    <section class="card" id="updateCard">
+      <strong>扩展更新</strong>
+      <div id="extensionVersion" class="host">当前版本：读取中…</div>
+      <div id="updateStatus" class="host">固定扩展 ID：hlfnagdelcpfdbpdeackdjelemaaoban</div>
+      <div class="actions">
+        <button id="checkExtensionUpdate">检查更新</button>
+        <button id="applyExtensionUpdate" hidden>应用已下载更新</button>
+      </div>
+      <div class="host">安装固定签名 CRX 后，支持标准 Chromium 更新机制的浏览器会按 update_url 自动检查；这里也可以手动请求检查。</div>
+    </section>
 
     <div class="tip">暂停后保留当前译文和剩余队列；继续后接着跑。高级设置里可以导出/恢复配置和复制诊断信息。</div>
     <button id="openOptions" class="link-button">翻译引擎、术语表、诊断与备份 ›</button>
   </main>
   <script src="../compat/browser-api.js"></script>
   <script src="popup.js"></script>
+  <script src="update-controls.js"></script>
 </body>
 </html>

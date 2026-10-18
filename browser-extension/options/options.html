@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>FloatingTranslator 设置</title>
+  <title>浮译设置</title>
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <main>
-    <h1>FloatingTranslator Browser</h1>
-    <p class="sub">v1.2 Multi-Provider · Chromium / Firefox 多引擎主线</p>
+    <h1>浮译 · 浏览器版</h1>
+    <p class="sub">v1.3 · Chromium / Firefox 多引擎主线</p>
 
     <section>
       <h2>基础翻译引擎</h2>
@@ -32,6 +32,7 @@
         <label><span>优先级 2</span><select id="providerOrder2"></select></label>
         <label><span>优先级 3</span><select id="providerOrder3"></select></label>
         <label><span>优先级 4</span><select id="providerOrder4"></select></label>
+        <label><span>优先级 5</span><select id="providerOrder5"></select></label>
       </div>
 
       <h3>Azure Key 池</h3>
@@ -47,6 +48,13 @@
       <div id="aliyunCredentials"></div>
       <div class="actions"><button id="addAliyunCredential" type="button">+ 添加阿里云凭据</button></div>
       <p class="note">阿里云使用 AccessKey ID + Secret，扩展在本机按官方 ROA HMAC-SHA1 规则生成签名。Secret 仅保存在浏览器本地设置中，不会提交到 GitHub。</p>
+
+      <h3>AI 大模型翻译（可选）</h3>
+      <p class="note">兼容 OpenAI Chat Completions 接口，可配置 DeepSeek、OpenAI、OpenRouter 或支持同一协议的其他服务。默认没有 AI 凭据，仍按原有 Azure/百度/阿里云/Google Web 工作。AI 服务商可能收费，原文会发送到你选择的模型提供方。</p>
+      <div id="ai-openaiCredentials"></div>
+      <div class="actions"><button id="addAi-openaiCredential" type="button">+ 添加 AI API 凭据</button></div>
+      <label><span>AI 翻译风格指令（可选）</span><textarea id="aiTranslationStyle" rows="3" maxlength="1000" placeholder="例如：保留技术名词、翻译简洁自然。"></textarea></label>
+      <p class="note">需填写 HTTPS 的完整 /chat/completions 地址、模型名称和 API Key。保存后将「AI 翻译」调至前面即可优先使用；如保持第五位，其他翻译引擎正常时不会调用 AI。密钥只存放浏览器本地，不写入 GitHub，也不会出现在诊断或普通设置备份中。翻译费用和模型输出取决于服务商。</p>
 
       <div class="actions">
         <button id="saveProviderPool" class="primary" type="button">保存多引擎配置</button>
@@ -66,7 +74,7 @@
       <label class="check-row"><input id="clearAzureKey" type="checkbox"><span>清除本机已保存的旧版 Key</span></label>
       <label><span>单次请求超时（毫秒）</span><input id="requestTimeoutMs" type="number" min="3000" max="45000" step="1000" value="15000"></label>
       <label><span>失败自动重试次数</span><input id="maxRetries" type="number" min="0" max="5" step="1" value="3"></label>
-      <p class="note">如果多 Key 池里还没有 Azure 凭据，v1.2 会自动把这里已有的 Key 当作“Azure 原有 Key”继续使用。</p>
+      <p class="note">如果多 Key 池里还没有 Azure 凭据，会自动把这里已有的 Key 当作“Azure 原有 Key”继续使用。</p>
     </section>
 
     <section>
