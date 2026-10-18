@@ -18,13 +18,17 @@
   const MENU_CHOICES = [
     '[role="option"]', '[role="menuitem"]', '[role="menuitemradio"]',
     '[role="menuitemcheckbox"]', '.dropdown-item', '.ant-select-item-option',
-    '.el-select-dropdown__item', '.v-list-item[role="option"]'
+    '.el-select-dropdown__item', '.v-list-item[role="option"]',
+    '.select2-results__option', '.ng-option', '.choices__item--selectable',
+    '[role="treeitem"]'
   ].join(",");
   const MENU_CONTAINERS = [
     '[role="listbox"]', '[role="menu"]', '[role="dialog"]',
     '.dropdown-menu.show', '.dropdown-menu[style*="display: block"]',
     '.ant-select-dropdown:not([style*="display: none"])',
-    '.el-select-dropdown:not([style*="display: none"])'
+    '.el-select-dropdown:not([style*="display: none"])',
+    '.select2-container--open', '.ng-dropdown-panel', '.choices__list--dropdown.is-active',
+    '[role="tree"]'
   ].join(",");
 
   const host = document.createElement("div");
@@ -258,7 +262,10 @@
 
   function customChoices(root) {
     const items = [...root.querySelectorAll(MENU_CHOICES)];
-    if (!items.length && root.matches('[role="listbox"],[role="menu"]')) return [];
+    if (!items.length && root.matches('[role="menu"]')) {
+      // 某些框架把菜单项直接写成 button 而非 role=menuitem。
+      items.push(...root.querySelectorAll("button:not([disabled])"));
+    }
     return normalizeOptions(items, "custom");
   }
 
@@ -285,6 +292,8 @@
       attachNativeLauncher(select);
       return; // 仍允许浏览器默认原生选择器；旁边按钮提供中文对照。
     }
+    // 仅在用户确实点击交互入口时检查新增菜单，避免在普通正文上每次点击都扫描。
+    if (!target.closest('button,[role="button"],[role="option"],[aria-haspopup],[aria-expanded],[role="combobox"],[data-bs-toggle],[data-toggle],a')) return;
     clearTimeout(timer);
     timer = setTimeout(() => {
       if (!allowed() || Date.now() < quietUntil) return;
