@@ -40,6 +40,11 @@
         <span>网页安全翻译模式（推荐，默认开启）</span>
       </label>
       <div class="host">大幅减少动态网页扫描，避免插件反复覆盖网站文字；安全模式暂不翻译按钮属性和 Shadow DOM。关闭后使用完整深度翻译，可能导致安卓动态网页卡顿。</div>
+      <label class="check-row"><input id="formMenuEnabled" type="checkbox"><span>表单与动态下拉菜单翻译</span></label>
+      <label><span>点击弹出选项的译文显示方式</span><select id="formMenuMode">
+        <option value="translated">仅中文</option><option value="bilingual">英文＋中文</option>
+      </select></label>
+      <div class="host">原生下拉框会出现「中译选项」辅助按钮：不修改真实选项和值；弹出式自定义菜单会在点击后自动显示翻译。系统级选择弹窗不一定能直接覆盖。</div>
       <label class="check-row"><input id="visiblePriority" type="checkbox"><span>优先翻译屏幕可见区域，滚动继续翻译</span></label>
       <div class="host">默认开启：优先处理正在看的文字，减少长网页首屏压力。</div>
       <label class="check-row">

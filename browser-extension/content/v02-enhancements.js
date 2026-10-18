@@ -463,6 +463,10 @@
     if (!node || node.nodeType !== Node.TEXT_NODE || !node.isConnected) return false;
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP) || isExcluded(parent)) return false;
+    // Shadow DOM 的 closest() 无法穿透到 host。必须单独排除浮译自己的悬浮面板，
+    // 否则关闭安全模式时插件会把自己的菜单翻译成“浮译浮译”。
+    const shadowHost = node.getRootNode?.()?.host;
+    if (shadowHost?.closest?.('[data-ft-owned="1"],#ft-form-menu-host,#ft-floating-panel-host,#ft-selection-action-host')) return false;
     const text = node.nodeValue?.trim();
     if (!text || text.length < 2 || !/[\p{L}\p{M}]/u.test(text)) return false;
     if (/^(https?:\/\/|www\.)\S+$/i.test(text)) return false;

@@ -9,6 +9,8 @@
     autoTranslate: true,
     inputPreview: true,
     inputAutoReplace: false,
+    formMenuEnabled: true,
+    formMenuMode: "bilingual",
     inputTargetLang: "en",
     selectionToolsEnabled: true,
     displayMode: "translated",
@@ -70,6 +72,10 @@
       <label class="toggle"><input id="inputPreview" type="checkbox"><span>输入时实时预览译文</span></label>
       <label class="toggle"><input id="inputAutoReplace" type="checkbox"><span>停止输入后自动替换（默认关闭）</span></label>
       <label class="toggle"><input id="selectionToolsEnabled" type="checkbox"><span>网页选中文字后显示「译」按钮</span></label>
+      <label class="toggle"><input id="formMenuEnabled" type="checkbox"><span>表单下拉与点击弹出菜单自动翻译</span></label>
+      <div class="row"><label class="field"><span>表单选项显示方式</span><select id="formMenuMode">
+        <option value="translated">仅中文</option><option value="bilingual">英文＋中文</option>
+      </select></label></div>
       <div class="row">
         <label class="field"><span>源语言</span><select id="source"></select></label>
         <label class="field"><span>翻译为</span><select id="target"></select></label>
@@ -180,6 +186,8 @@
     $("auto").checked = settings.autoTranslate !== false;
     $("inputPreview").checked = settings.inputPreview !== false;
     $("inputAutoReplace").checked = settings.inputAutoReplace === true;
+    $("formMenuEnabled").checked = settings.formMenuEnabled !== false;
+    $("formMenuMode").value = settings.formMenuMode === "translated" ? "translated" : "bilingual";
     $("selectionToolsEnabled").checked = settings.selectionToolsEnabled !== false;
     $("displayMode").value = settings.displayMode || "translated";
     $("inputTarget").value = settings.inputTargetLang || "en";
@@ -380,6 +388,8 @@
   $("auto").addEventListener("change", event => saveSync({ autoTranslate: event.target.checked }));
   $("inputPreview").addEventListener("change", event => saveSync({ inputPreview: event.target.checked }));
   $("inputAutoReplace").addEventListener("change", event => saveSync({ inputAutoReplace: event.target.checked }));
+  $("formMenuEnabled").addEventListener("change", event => saveSync({ formMenuEnabled: event.target.checked }));
+  $("formMenuMode").addEventListener("change", event => saveSync({ formMenuMode: event.target.value }));
   $("selectionToolsEnabled").addEventListener("change", event => saveSync({ selectionToolsEnabled: event.target.checked }));
   $("displayMode").addEventListener("change", event => saveSync({ displayMode: event.target.value }));
   $("inputTarget").addEventListener("change", event => saveSync({ inputTargetLang: event.target.value }));
