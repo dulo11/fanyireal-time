@@ -42,8 +42,8 @@ public final class AsrPrecisionActivity extends Activity {
         root.addView(title);
 
         TextView intro = text(
-            "目标是快速聊天也尽量听完整：高精度模式优先使用 Silero 神经网络 VAD 切句，保留前文音频上下文，" +
-            "长句或可疑结果会自动再识别一次。普通直播和 ROOT 通话共用这些设置。",
+            "目标是快速聊天也尽量听完整：高精度模式优先使用 Silero 神经网络 VAD 切句，每段语音独立识别，保留重复说话，" +
+            "不按文字相同或前后缀重叠删减结果。普通直播和 ROOT 通话共用这些设置。",
             14, Color.rgb(205, 195, 222));
         intro.setPadding(0, dp(7), 0, dp(14));
         root.addView(intro);
@@ -54,11 +54,11 @@ public final class AsrPrecisionActivity extends Activity {
         conversationCurrent.setPadding(0, dp(6), 0, dp(8));
         conversationCard.addView(conversationCurrent);
 
-        Button accuracy = button("👑 高精度·快语速｜默认｜Silero VAD + 上下文 + 二次校正");
+        Button accuracy = button("👑 高精度·快语速｜默认｜Silero VAD + 较长语音段");
         accuracy.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_ACCURACY));
         conversationCard.addView(accuracy, params());
 
-        Button balanced = button("⚖ 均衡对话｜Silero VAD + 较短上下文");
+        Button balanced = button("⚖ 均衡对话｜Silero VAD + 均衡切句");
         balanced.setOnClickListener(v -> saveConversation(SherpaSpeechEngine.PROFILE_BALANCED));
         conversationCard.addView(balanced, params());
 
@@ -133,7 +133,7 @@ public final class AsrPrecisionActivity extends Activity {
             for (String line : raw.split("\\r?\\n")) if (!line.trim().isEmpty()) count++;
             advancedStatus.setText(
                 "Silero VAD：" + (VadModelStore.isReady(this) ? "✅ 已准备" : "○ 首次高精度识别时自动下载") +
-                "\n热词：" + count + " 个 · 高精度长句会按需要自动二次上下文校正");
+                "\n热词：" + count + " 个 · 不按文字去重；每次识别结果独立提交");
         }
         if (models == null) return;
         OfflineModelStore store = new OfflineModelStore(this);

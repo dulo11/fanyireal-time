@@ -85,13 +85,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private volatile boolean neuralVad;
     private volatile String loadedPrecision = "";
     private boolean inSpeech;
-    private boolean currentSegmentHasOverlap;
     private long segmentMs;
     private long silenceMs;
     private int vadWindowFill;
-    private String lastRawText = "";
-    private float[] contextTail = new float[0];
-    private float[] reviewTail = new float[0];
 
     public SherpaSpeechEngine(Context context, String modelId, String languageMode,
                               String sourceLanguage, Callback callback) {
@@ -199,16 +195,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             SpeechSegment segment = localVad.front();
             float[] raw = segment == null ? null : segment.getSamples();
             if (raw != null && raw.length >= SAMPLE_RATE / 2) {
-                float[] primaryPrefix = contextTail;
-                float[] reviewPrefix = reviewTail;
-                float[] primary = merge(primaryPrefix, raw);
-                float[] review = merge(reviewPrefix, raw);
-                boolean dedupe = primaryPrefix.length > 0;
-                long rawMs = sampleDurationMs(raw.length);
-                boolean forceReview = PROFILE_ACCURACY.equals(conversationProfile) && rawMs >= 4200L;
-                queueDecode(primary, dedupe, review, forceReview, rawMs);
-                contextTail = tailSamples(raw, contextMs());
-                reviewTail = tailSamples(raw, reviewContextMs());
+                queueDecode(raw);
             }
             localVad.pop();
         }
@@ -220,7 +207,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         if (voiced) {
             if (!inSpeech) {
                 inSpeech = true;
-                currentSegmentHasOverlap = false;
                 segmentMs = 0L;
                 silenceMs = 0L;
                 speech.reset();
@@ -238,27 +224,13 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         if (!naturalEnd && !forcedEnd) return;
 
         byte[] segment = speech.toByteArray();
-        long completedSegmentMs = segmentMs;
-        boolean dedupe = currentSegmentHasOverlap;
-        boolean keepOverlap = forcedEnd && !naturalEnd && voiced && overlapMs() > 0L;
-        byte[] overlap = keepOverlap ? tailPcm(segment, overlapMs()) : new byte[0];
-        float[] reviewPrefix = reviewTail;
-
+        // Each PCM sample belongs to one segment. Replaying old audio would require
+        // text trimming, which can erase an intentional repetition from a new utterance.
         speech.reset();
-        if (overlap.length > 0) speech.write(overlap, 0, overlap.length);
-        currentSegmentHasOverlap = overlap.length > 0;
-        segmentMs = pcmDurationMs(overlap.length);
+        segmentMs = 0L;
         silenceMs = 0L;
-        inSpeech = keepOverlap;
-
-        if (segment.length >= SAMPLE_RATE) {
-            float[] raw = pcm16ToFloat(segment);
-            float[] review = merge(reviewPrefix, raw);
-            queueDecode(raw, dedupe, review,
-                PROFILE_ACCURACY.equals(conversationProfile) && (forcedEnd || completedSegmentMs >= 4200L),
-                pcmDurationMs(segment.length));
-            reviewTail = tailSamples(raw, reviewContextMs());
-        }
+        inSpeech = false;
+        if (segment.length >= SAMPLE_RATE) queueDecode(pcm16ToFloat(segment));
     }
 
     public synchronized void flush() {
@@ -277,53 +249,23 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         if (speech.size() >= SAMPLE_RATE) {
             byte[] segment = speech.toByteArray();
-            boolean dedupe = currentSegmentHasOverlap;
             speech.reset();
             segmentMs = 0L;
             silenceMs = 0L;
             inSpeech = false;
-            currentSegmentHasOverlap = false;
             float[] raw = pcm16ToFloat(segment);
-            queueDecode(raw, dedupe, merge(reviewTail, raw), false, pcmDurationMs(segment.length));
-            reviewTail = tailSamples(raw, reviewContextMs());
+            queueDecode(raw);
         }
     }
 
-    private void queueDecode(float[] primarySamples, boolean dedupeOverlap,
-                             float[] reviewSamples, boolean forceReview, long rawDurationMs) {
+    private void queueDecode(float[] primarySamples) {
         worker.execute(() -> {
             OfflineRecognizer r = recognizer;
             if (closed || r == null || primarySamples == null || primarySamples.length == 0) return;
             try {
-                Decoded first = decodeOnce(r, primarySamples);
-                String firstVisible = dedupeOverlap
-                    ? stripRepeatedOverlap(lastRawText, first.text) : first.text;
-                Decoded chosen = first;
-                String chosenVisible = firstVisible;
-
-                boolean shouldReview = LANG_SINGLE.equals(languageMode)
-                    && PROFILE_ACCURACY.equals(conversationProfile)
-                    && reviewSamples != null
-                    && reviewSamples.length > primarySamples.length
-                    && (forceReview || lowQuality(firstVisible, rawDurationMs));
-                if (shouldReview) {
-                    Decoded second = decodeOnce(r, reviewSamples);
-                    String secondVisible = stripRepeatedOverlap(lastRawText, second.text);
-                    double firstScore = qualityScore(firstVisible, rawDurationMs);
-                    double secondScore = qualityScore(secondVisible, rawDurationMs);
-                    if (!secondVisible.isEmpty() && secondScore > firstScore + 0.6d) {
-                        chosen = second;
-                        chosenVisible = secondVisible;
-                        postStatus("低质量/长句已完成二次上下文校正");
-                    }
-                }
-
-                if (chosen.text == null || chosen.text.isEmpty()) return;
-                lastRawText = chosen.text;
-                String out = chosenVisible == null ? "" : chosenVisible.trim();
-                if (!out.isEmpty()) {
-                    String lang = chosen.lang == null ? "" : chosen.lang;
-                    main.post(() -> { if (!closed) callback.onText(out, lang); });
+                Decoded result = decodeOnce(r, primarySamples);
+                if (!result.text.isEmpty()) {
+                    main.post(() -> { if (!closed) callback.onText(result.text, result.lang); });
                 }
             } catch (Throwable e) {
                 postError("识别失败：" + safe(e));
@@ -353,44 +295,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 try { stream.release(); } catch (Throwable ignored) {}
             }
         }
-    }
-
-    private boolean lowQuality(String text, long durationMs) {
-        String compact = compactText(text);
-        if (compact.isEmpty()) return true;
-        if (durationMs >= 1800L && compact.length() <= 2) return true;
-        if (durationMs >= 3500L && compact.length() < 5) return true;
-        return maxRepeatedRun(compact) >= 5;
-    }
-
-    private double qualityScore(String text, long durationMs) {
-        String compact = compactText(text);
-        if (compact.isEmpty()) return -100d;
-        double score = Math.min(60, compact.length());
-        if (durationMs >= 2500L && compact.length() <= 3) score -= 18d;
-        int run = maxRepeatedRun(compact);
-        if (run >= 4) score -= run * 2.5d;
-        for (String word : hotwords) {
-            if (!word.isEmpty() && text.contains(word)) score += 5d;
-        }
-        return score;
-    }
-
-    private static String compactText(String value) {
-        if (value == null) return "";
-        return value.replaceAll("[\\s\\p{Punct}。！？、，．・…]+", "");
-    }
-
-    private static int maxRepeatedRun(String value) {
-        if (value == null || value.isEmpty()) return 0;
-        int best = 1;
-        int run = 1;
-        for (int i = 1; i < value.length(); i++) {
-            if (value.charAt(i) == value.charAt(i - 1)) run++;
-            else run = 1;
-            if (run > best) best = run;
-        }
-        return best;
     }
 
     private OfflineRecognizer buildRecognizer(OfflineAsrModelCatalog.Model meta, File installedDir,
@@ -555,81 +459,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         return 10000L;
     }
 
-    private long overlapMs() {
-        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 0L;
-        if (PROFILE_BALANCED.equals(conversationProfile)) return 450L;
-        return 900L;
-    }
-
-    private long contextMs() {
-        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 0L;
-        if (PROFILE_BALANCED.equals(conversationProfile)) return 320L;
-        return 700L;
-    }
-
-    private long reviewContextMs() {
-        if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return 0L;
-        if (PROFILE_BALANCED.equals(conversationProfile)) return 700L;
-        return 1700L;
-    }
-
     private String profileLabel() {
         if (PROFILE_LOW_LATENCY.equals(conversationProfile)) return "低延迟";
         if (PROFILE_BALANCED.equals(conversationProfile)) return "均衡对话";
         return "高精度·快语速";
-    }
-
-    private static long pcmDurationMs(int bytes) {
-        if (bytes <= 0) return 0L;
-        return Math.round((bytes / 2.0) * 1000.0 / SAMPLE_RATE);
-    }
-
-    private static long sampleDurationMs(int samples) {
-        if (samples <= 0) return 0L;
-        return Math.round(samples * 1000.0 / SAMPLE_RATE);
-    }
-
-    private static byte[] tailPcm(byte[] pcm, long durationMs) {
-        if (pcm == null || pcm.length == 0 || durationMs <= 0L) return new byte[0];
-        long wanted = Math.round(SAMPLE_RATE * 2.0 * durationMs / 1000.0);
-        int count = (int) Math.min((long) pcm.length, Math.max(0L, wanted));
-        count -= count % 2;
-        if (count <= 0) return new byte[0];
-        byte[] out = new byte[count];
-        System.arraycopy(pcm, pcm.length - count, out, 0, count);
-        return out;
-    }
-
-    private static float[] tailSamples(float[] samples, long durationMs) {
-        if (samples == null || samples.length == 0 || durationMs <= 0L) return new float[0];
-        int wanted = (int) Math.min(samples.length,
-            Math.max(0L, Math.round(SAMPLE_RATE * durationMs / 1000.0)));
-        if (wanted <= 0) return new float[0];
-        float[] out = new float[wanted];
-        System.arraycopy(samples, samples.length - wanted, out, 0, wanted);
-        return out;
-    }
-
-    private static float[] merge(float[] prefix, float[] samples) {
-        if (prefix == null || prefix.length == 0) return samples == null ? new float[0] : samples.clone();
-        if (samples == null || samples.length == 0) return prefix.clone();
-        float[] out = new float[prefix.length + samples.length];
-        System.arraycopy(prefix, 0, out, 0, prefix.length);
-        System.arraycopy(samples, 0, out, prefix.length, samples.length);
-        return out;
-    }
-
-    /** Removes exact text duplicated by preserved audio context/overlap. */
-    private static String stripRepeatedOverlap(String previous, String current) {
-        if (previous == null || current == null) return current == null ? "" : current.trim();
-        String a = previous.trim();
-        String b = current.trim();
-        if (a.isEmpty() || b.isEmpty()) return b;
-        int max = Math.min(48, Math.min(a.length(), b.length()));
-        for (int n = max; n >= 2; n--) {
-            if (a.regionMatches(a.length() - n, b, 0, n)) return b.substring(n).trim();
-        }
-        return b;
     }
 
     private String requestedPrecisionLabel(OfflineAsrModelCatalog.Model meta) {
@@ -812,10 +645,6 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         closed = true;
         ready = false;
         speech.reset();
-        lastRawText = "";
-        contextTail = new float[0];
-        reviewTail = new float[0];
-        currentSegmentHasOverlap = false;
         Vad localVad = vad;
         vad = null;
         neuralVad = false;

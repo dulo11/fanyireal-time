@@ -62,7 +62,6 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private long silenceMs;
     private boolean requestBusy;
     private int consecutiveFailures;
-    private String lastText = "";
     private String detectedLanguage = "";
     private ParcelFileDescriptor readFd;
     private ParcelFileDescriptor writeFd;
@@ -220,13 +219,10 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
             return;
         }
         consecutiveFailures = 0;
-        if (!text.equals(lastText)) {
-            lastText = text;
-            String lang = normalizeLanguage(detectedLanguage);
-            main.post(() -> {
-                if (!closed) callback.onText(text, lang);
-            });
-        }
+        String lang = normalizeLanguage(detectedLanguage);
+        main.post(() -> {
+            if (!closed) callback.onText(text, lang);
+        });
         finishCurrent(false);
     }
 

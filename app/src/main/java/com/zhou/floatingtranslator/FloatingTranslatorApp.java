@@ -6,12 +6,11 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
-/** Prevents translation overlays from covering the app UI, records history, and attaches global nav. */
+/** Prevents translation overlays from covering the app UI and attaches global nav. */
 public final class FloatingTranslatorApp extends Application implements Application.ActivityLifecycleCallbacks {
     private static final String PREFS = "floating_translator";
     private static final String PREF_DEV5_SMART_LANGUAGE_MIGRATED = "dev5_smart_language_migrated";
     private static final String PREF_071_SCREEN_QUALITY_MIGRATED = "v071_screen_quality_migrated";
-    private SharedPreferences.OnSharedPreferenceChangeListener historyListener;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -41,13 +40,7 @@ public final class FloatingTranslatorApp extends Application implements Applicat
                 .apply();
         }
 
-        historyListener = (preferences, key) -> {
-            if (!"last_translation".equals(key)) return;
-            String translated = preferences.getString("last_translation", "");
-            String original = preferences.getString("last_original", "");
-            HistoryStore.append(this, original, translated);
-        };
-        prefs.registerOnSharedPreferenceChangeListener(historyListener);
+
     }
 
     private void signal(Activity activity, String action) {

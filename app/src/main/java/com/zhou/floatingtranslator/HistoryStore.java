@@ -24,8 +24,6 @@ public final class HistoryStore {
     private static final String FILE_NAME = "translation-history.jsonl";
     private static final int MAX_ENTRIES = 5000;
     private static final Object LOCK = new Object();
-    private static long lastSavedAt;
-    private static String lastSavedKey = "";
 
     public static final class Entry {
         public final long time;
@@ -51,12 +49,7 @@ public final class HistoryStore {
         String t = translated.trim();
         if (t.isEmpty()) return;
         long now = System.currentTimeMillis();
-        String key = o + "\u0000" + t;
         synchronized (LOCK) {
-            // Streaming ASR can save the same text more than once in a short interval.
-            if (key.equals(lastSavedKey) && now - lastSavedAt < 2500L) return;
-            lastSavedKey = key;
-            lastSavedAt = now;
             try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(
                     new FileOutputStream(file(context), true), StandardCharsets.UTF_8))) {
                 JSONObject json = new JSONObject();
@@ -106,8 +99,6 @@ public final class HistoryStore {
 
     public static boolean clear(Context context) {
         synchronized (LOCK) {
-            lastSavedAt = 0L;
-            lastSavedKey = "";
             File f = file(context);
             return !f.exists() || f.delete();
         }

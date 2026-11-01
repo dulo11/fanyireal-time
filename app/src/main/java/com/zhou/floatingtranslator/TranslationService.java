@@ -1181,6 +1181,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void saveHistory(String original, String translated) {
+        HistoryStore.append(this, original, translated);
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putString("last_original", original)
             .putString("last_translation", translated).apply();
