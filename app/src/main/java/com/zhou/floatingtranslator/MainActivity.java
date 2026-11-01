@@ -403,6 +403,7 @@ public final class MainActivity extends Activity {
     }
 
     private void downloadCurrentModel(Button button) {
+        if(RunPolicy.offline(this)){toast("请先退出完全离线模式再下载模型");return;}
         LanguageOption source = (LanguageOption) sourceSpinner.getSelectedItem();
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         if (source.mlKitTag.equals(target.mlKitTag)) { toast("请选择不同语言"); return; }

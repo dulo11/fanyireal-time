@@ -87,6 +87,7 @@ public final class TranslationRouter implements AutoCloseable {
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final SecureConfig secure;
     private final SharedPreferences prefs;
+    private final Context context;
     private final String source;
     private final String target;
     private final String selectedEngine;
@@ -95,6 +96,7 @@ public final class TranslationRouter implements AutoCloseable {
     private volatile int lastAzureSlot = 1;
 
     public TranslationRouter(Context context, String source, String target, String selectedEngine) {
+        this.context=context.getApplicationContext();
         this.secure = new SecureConfig(context);
         this.prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         this.source = source;
@@ -149,7 +151,8 @@ public final class TranslationRouter implements AutoCloseable {
             callback.onError("没有可翻译文字");
             return;
         }
-        if (AUTO.equals(selectedEngine)) {
+        if (AUTO.equals(selectedEngine) && !RunPolicy.cloud(context)) { translateMlKit(cleaned, callback);
+        } else if (AUTO.equals(selectedEngine)) {
             translateAuto(cleaned, autoOrder(), 0, callback, new ArrayList<>());
         } else {
             translateSingle(selectedEngine, cleaned, callback);
@@ -210,8 +213,10 @@ public final class TranslationRouter implements AutoCloseable {
             translateMlKit(text, callback);
             return;
         }
+        if (!RunPolicy.cloud(context)) { callback.onError(RunPolicy.blocked()); return; }
         network.execute(() -> {
             try {
+                RunPolicy.requireCloud(context);
                 String result;
                 switch (engine) {
                     case BAIDU: result = translateBaidu(text); break;
@@ -236,14 +241,9 @@ public final class TranslationRouter implements AutoCloseable {
     }
 
     private void translateMlKit(String text, Callback callback) {
-        mlKit.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-            .continueWithTask(task -> {
-                if (closed) throw new IllegalStateException("翻译已取消");
-                if (!task.isSuccessful()) throw task.getException();
-                return mlKit.translate(text);
-            })
+        mlKit.translate(text)
             .addOnSuccessListener(value -> { if (!closed) callback.onSuccess(value, engineLabel(MLKIT)); })
-            .addOnFailureListener(e -> { if (!closed) callback.onError(safe(e)); });
+            .addOnFailureListener(e -> { if (!closed) callback.onError("本地翻译失败，请准备 " + source + "/" + target + " 模型：" + safe(e)); });
     }
 
     private String translateBaidu(String text) throws Exception {
@@ -427,6 +427,7 @@ public final class TranslationRouter implements AutoCloseable {
      * Accepts 16 kHz, 16-bit, mono little-endian PCM and uses Youdao speech translation.
      */
     public void translateYoudaoSpeech(byte[] pcm16le, SpeechCallback callback) {
+        if (!RunPolicy.cloud(context)) { callback.onError(RunPolicy.blocked()); return; }
         if (!hasYoudaoCredentials()) {
             callback.onError("未配置有道 AppKey/AppSecret");
             return;
@@ -437,6 +438,7 @@ public final class TranslationRouter implements AutoCloseable {
         }
         network.execute(() -> {
             try {
+                RunPolicy.requireCloud(context);
                 byte[] wav = pcmToWav(pcm16le, 16000, 1, 16);
                 String q = Base64.encodeToString(wav, Base64.NO_WRAP);
                 String appKey = secure.get(SecureConfig.YOUDAO_APP_KEY);

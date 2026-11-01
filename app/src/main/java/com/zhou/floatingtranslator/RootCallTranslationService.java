@@ -54,6 +54,7 @@ public final class RootCallTranslationService extends Service {
     private volatile boolean running;
     private volatile boolean paused;
     private boolean cloudSpeechMode;
+    private boolean triedAutoOnline;
     private boolean cloudRequestBusy;
     private boolean allowYoudaoSpeech;
     private String asrMode = TranslationService.ASR_AUTO;
@@ -141,6 +142,7 @@ public final class RootCallTranslationService extends Service {
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoModels.clear();
+        triedAutoOnline=false;
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
@@ -157,6 +159,7 @@ public final class RootCallTranslationService extends Service {
 
     private void prepareAsr(RootCallProfileStore.Profile profile) {
         if (!running) return;
+        if (!TranslationService.ASR_AUTO.equals(asrMode) && !RunPolicy.localAsr(asrMode) && !RunPolicy.cloud(this)) { showStatus(RunPolicy.blocked()); return; }
         if (TranslationService.ASR_SYSTEM.equals(asrMode)) {
             startSystemPcm(profile, false);
             return;
@@ -180,6 +183,7 @@ public final class RootCallTranslationService extends Service {
             return;
         }
         if (TranslationService.ASR_AUTO.equals(asrMode)) {
+            if (RunPolicy.localFirst(this)) { prepareAutoLocal(profile); return; }
             if (SpeechRecognizer.isRecognitionAvailable(this)) {
                 startSystemPcm(profile, true);
                 return;
@@ -254,10 +258,13 @@ public final class RootCallTranslationService extends Service {
     private void prepareAutoLocal(RootCallProfileStore.Profile profile) {
         String selected = bestInstalledSherpa();
         if (selected != null) startSherpa(selected, profile, true);
-        else startVosk(profile, true);
+        else if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && OfflineSpeechEngine.isLanguageInstalled(this,sourceMlTag)) startVosk(profile,true);
+        else if(!triedAutoOnline && RunPolicy.cloud(this) && FreeOnlineSpeechEngine.hasAnyConfigured(this)) startFreeOnline(TranslationService.ASR_FREE_ONLINE,profile,true);
+        else showStatus("没有可用语音模型，请在离线中心准备模型；"+RunPolicy.blocked());
     }
 
     private void startFreeOnline(String mode, RootCallProfileStore.Profile profile, boolean autoFallback) {
+        triedAutoOnline=true;
         closeSystemPcm();
         closeOnline();
         closeOnline();
@@ -300,24 +307,7 @@ public final class RootCallTranslationService extends Service {
         onlineSpeech.prepare();
     }
 
-    private String bestInstalledSherpa() {
-        OfflineModelStore store = new OfflineModelStore(this);
-        try {
-            String[] order;
-            boolean mixed = !SherpaSpeechEngine.LANG_SINGLE.equals(languageMode);
-            if (mixed) order = new String[]{TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL};
-            else if ("ja".equals(sourceMlTag)) order = new String[]{TranslationService.ASR_REAZON,
-                TranslationService.ASR_PARAKEET, TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL};
-            else order = new String[]{TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL};
-            for (String id : order) if (!failedAutoModels.contains(id) && store.isInstalled(id)) return id;
-            return null;
-        } finally {
-            store.close();
-        }
-    }
+    private String bestInstalledSherpa() { return ModelAdvisor.installed(this,sourceMlTag,targetMlTag,!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode),failedAutoModels); }
 
     private void startSherpa(String modelId, RootCallProfileStore.Profile profile, boolean autoFallback) {
         OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
@@ -355,7 +345,7 @@ public final class RootCallTranslationService extends Service {
                         failedAutoModels.add(modelId);
                         closeSherpa();
                         String next = bestInstalledSherpa();
-                        if (next != null) startSherpa(next, profile, true); else startVosk(profile, true);
+                        if (next != null) startSherpa(next, profile, true); else prepareAutoLocal(profile);
                     } else showStatus(meta.name + " 失败：" + message);
                 }
             });
@@ -556,6 +546,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private boolean canUseYoudaoSpeech() {
+        if (!RunPolicy.cloud(this)) return false;
         return allowYoudaoSpeech && translator != null && translator.hasYoudaoCredentials();
     }
 

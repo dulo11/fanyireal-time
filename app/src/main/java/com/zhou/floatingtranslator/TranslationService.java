@@ -341,6 +341,7 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void prepareSpeechEngine() {
         if (!running) return;
+        if (!ASR_AUTO.equals(asrMode) && !RunPolicy.localAsr(asrMode) && !RunPolicy.cloud(this)) { showStatus(RunPolicy.blocked()); return; }
         switch (asrMode) {
             case ASR_VOSK: startVosk(false); break;
             case ASR_SYSTEM:
@@ -364,6 +365,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private void prepareAutoAsr() {
         if (!running || !ASR_AUTO.equals(asrMode)) return;
 
+        if (RunPolicy.localFirst(this)) { prepareAutoLocalAsr(); return; }
         // User preference: Android's built-in recognizer is first when the source is a microphone.
         // Android SpeechRecognizer cannot consume MediaProjection/ROOT PCM, so internal-audio modes skip it.
         if (!failedAutoSystem && SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -398,7 +400,7 @@ public class TranslationService extends Service implements RecognitionListener {
             startSherpa(selected, true);
             return;
         }
-        if (!failedAutoVosk && OfflineSpeechEngine.supports(sourceMlTag)) {
+        if (!failedAutoVosk && SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && OfflineSpeechEngine.isLanguageInstalled(this, sourceMlTag)) {
             startVosk(true);
             return;
         }
@@ -406,29 +408,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private String bestInstalledSherpaForCurrentMode() {
-        OfflineModelStore store = new OfflineModelStore(this);
-        try {
-            String[] order;
-            boolean mixed = !SherpaSpeechEngine.LANG_SINGLE.equals(languageMode);
-            if (mixed) {
-                order = new String[]{ASR_QWEN3, ASR_WHISPER_SMALL, ASR_WHISPER_MEDIUM,
-                    ASR_SENSEVOICE, ASR_OMNILINGUAL};
-            } else if ("ja".equals(sourceMlTag)) {
-                order = new String[]{ASR_REAZON, ASR_PARAKEET, ASR_SENSEVOICE,
-                    ASR_WHISPER_SMALL, ASR_QWEN3, ASR_WHISPER_MEDIUM, ASR_OMNILINGUAL};
-            } else if ("zh".equals(sourceMlTag) || "ko".equals(sourceMlTag) || "en".equals(sourceMlTag)) {
-                order = new String[]{ASR_SENSEVOICE, ASR_WHISPER_SMALL, ASR_QWEN3,
-                    ASR_WHISPER_MEDIUM, ASR_OMNILINGUAL};
-            } else {
-                order = new String[]{ASR_QWEN3, ASR_WHISPER_SMALL, ASR_WHISPER_MEDIUM, ASR_OMNILINGUAL};
-            }
-            for (String id : order) {
-                if (!failedAutoModels.contains(id) && store.isInstalled(id)) return id;
-            }
-            return null;
-        } finally {
-            store.close();
-        }
+        return ModelAdvisor.installed(this, sourceMlTag, targetMlTag, !SherpaSpeechEngine.LANG_SINGLE.equals(languageMode), failedAutoModels);
     }
 
     private void startSherpa(String modelId, boolean allowAutoFallback) {
@@ -625,6 +605,8 @@ public class TranslationService extends Service implements RecognitionListener {
     private void fallbackAutoSystemOrCloud(String reason) {
         if (!running || !ASR_AUTO.equals(asrMode)) return;
 
+        if (!RunPolicy.cloud(this)) { showStatus(reason + "\n" + RunPolicy.blocked()); return; }
+        if (!failedAutoOnline && FreeOnlineSpeechEngine.hasAnyConfigured(this)) { startFreeOnline(ASR_FREE_ONLINE, true); return; }
         // Paid/legacy speech is deliberately the last fallback and is opt-in only.
         if (canUseYoudaoSpeech()) {
             activeAsrMode = ASR_YOUDAO;
@@ -666,6 +648,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private boolean canUseYoudaoSpeech() {
+        if (!RunPolicy.cloud(this)) return false;
         return allowYoudaoSpeech && translator != null && translator.hasYoudaoCredentials();
     }
 
@@ -891,6 +874,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void startSystemRecognizer() {
+        if (!RunPolicy.cloud(this)) { showStatus(RunPolicy.blocked()); return; }
         if (!running || !INPUT_MICROPHONE.equals(inputMode)) {
             setDiagSpeech("ASR：系统识别器要求麦克风来源");
             return;

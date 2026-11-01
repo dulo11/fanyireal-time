@@ -135,6 +135,7 @@ public final class OfflineSpeechEngine implements AutoCloseable {
                 }
                 File modelDir = new File(base, info.modelName);
                 if (!isInstalled(modelDir)) {
+                    RunPolicy.requireDownload(context);
                     postStatus("首次使用正在下载离线语音模型（" + info.sizeLabel + "），以后无需联网……");
                     downloadAndExtract(info, base, modelDir);
                 } else {

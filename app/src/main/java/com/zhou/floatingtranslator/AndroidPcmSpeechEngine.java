@@ -80,6 +80,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     }
 
     public void prepare() {
+        if(!RunPolicy.cloud(context)){postError(RunPolicy.blocked(),true);return;}
         main.post(() -> {
             if (closed) return;
             if (!SpeechRecognizer.isRecognitionAvailable(context)) {

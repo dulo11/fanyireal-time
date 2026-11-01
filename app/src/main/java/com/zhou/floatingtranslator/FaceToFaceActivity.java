@@ -376,6 +376,7 @@ public final class FaceToFaceActivity extends Activity {
 
     private void startSystemRecognition(int session, boolean continuous, boolean partnerManual,
                                         String fallbackSpeechTag) {
+        if(!RunPolicy.cloud(this)){cancelTurn();status.setText(RunPolicy.blocked());return;}
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             listening = false;
             if (continuous) {
@@ -651,17 +652,14 @@ public final class FaceToFaceActivity extends Activity {
         }
         OfflineModelStore store = new OfflineModelStore(this);
         try {
-            String[] ids = fixed
-                ? new String[]{TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_WHISPER_SMALL, TranslationService.ASR_SENSEVOICE}
-                : new String[]{TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_MEDIUM,
-                    TranslationService.ASR_WHISPER_SMALL, TranslationService.ASR_SENSEVOICE, TranslationService.ASR_OMNILINGUAL};
+            java.util.List<String> ids=ModelAdvisor.order(this,input,mine,!fixed);
             for (String id : ids) {
                 boolean compatible = fixed ? ConversationLanguagePolicy.supportsFixed(id, input)
                     : ConversationLanguagePolicy.supportsAutomatic(id, mine, input);
                 if (compatible && store.isInstalled(id)) return id;
             }
             if (fixed && OfflineSpeechEngine.isLanguageInstalled(this, input)) return "vosk";
-            return SpeechRecognizer.isRecognitionAvailable(this) ? "system" : null;
+            return RunPolicy.cloud(this) && SpeechRecognizer.isRecognitionAvailable(this) ? "system" : null;
         } finally { store.close(); }
     }
 
@@ -669,19 +667,17 @@ public final class FaceToFaceActivity extends Activity {
         String selected = asrIds.get(asrSpinner.getSelectedItemPosition());
         OfflineModelStore store = new OfflineModelStore(this);
         try {
-            if ("system".equals(selected)) return selected;
+            if ("system".equals(selected)) return RunPolicy.cloud(this)?selected:null;
             if ("vosk".equals(selected)) return OfflineSpeechEngine.isLanguageInstalled(this, language) ? selected : null;
             if (!"auto".equals(selected)) return store.isInstalled(selected) ? selected : null;
-            String[] candidates = {TranslationService.ASR_WHISPER_SMALL, TranslationService.ASR_QWEN3,
-                TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL,
-                TranslationService.ASR_SENSEVOICE};
+            java.util.List<String> candidates=ModelAdvisor.order(this,language,language,false);
             for (String id : candidates) {
                 if (TranslationService.ASR_SENSEVOICE.equals(id)
                     && !("zh".equals(language) || "en".equals(language) || "ja".equals(language)
                         || "ko".equals(language) || "yue".equals(language))) continue;
                 if (store.isInstalled(id)) return id;
             }
-            if (SpeechRecognizer.isRecognitionAvailable(this)) return "system";
+            if (RunPolicy.cloud(this) && SpeechRecognizer.isRecognitionAvailable(this)) return "system";
             if (OfflineSpeechEngine.isLanguageInstalled(this, language)) return "vosk";
             return null;
         } finally { store.close(); }

@@ -34,6 +34,7 @@ public final class VadModelStore {
     public static File ensure(Context context, StatusCallback callback) {
         File target = modelFile(context);
         if (target.isFile() && target.length() >= MIN_VALID_BYTES) return target;
+        if(RunPolicy.offline(context))return null;
         File dir = target.getParentFile();
         if (dir == null || (!dir.exists() && !dir.mkdirs())) return null;
         File part = new File(dir, "silero_vad.onnx.part");

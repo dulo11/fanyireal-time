@@ -32,10 +32,12 @@ public final class UpdateChecker implements AutoCloseable {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private volatile boolean closed;
 
-    public UpdateChecker(Context context) {}
+    private final Context context;
+    public UpdateChecker(Context context){this.context=context.getApplicationContext();}
 
     public void check(String currentVersion, Callback callback) {
-        if (closed) return;
+        if(closed)return;
+        if(RunPolicy.offline(context)){callback.onError("完全离线模式不联网检查更新");return;}
         worker.execute(() -> {
             Exception webError = null;
             Exception apiError = null;
