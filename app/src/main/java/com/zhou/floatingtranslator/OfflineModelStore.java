@@ -32,6 +32,7 @@ public final class OfflineModelStore implements AutoCloseable {
         void onError(String message);
     }
 
+    public static final java.util.concurrent.locks.ReentrantLock MUTATION=new java.util.concurrent.locks.ReentrantLock();
     private static final int MAX_DOWNLOAD_ATTEMPTS = 3;
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -60,7 +61,7 @@ public final class OfflineModelStore implements AutoCloseable {
 
     public boolean isInstalled(String modelId) {
         File dir = modelDir(modelId);
-        return dir.isDirectory() && new File(dir, ".ready").isFile();
+        return dir.isDirectory() && new File(dir, ".ready").isFile() && ModelIntegrity.structure(dir,modelId);
     }
 
     public long installedBytes(String modelId) {
@@ -126,6 +127,8 @@ public final class OfflineModelStore implements AutoCloseable {
 
     /** Backward-compatible: removes incomplete network/extraction .part entries only. */
     public boolean clearPartialDownloads() {
+        if(!MUTATION.tryLock())return false;
+        try {
         File[] files = baseDir().listFiles();
         if (files == null) return true;
         boolean ok = true;
@@ -133,10 +136,13 @@ public final class OfflineModelStore implements AutoCloseable {
             if (file.getName().endsWith(".part")) ok &= deleteRecursively(file);
         }
         return ok;
+        } finally { MUTATION.unlock(); }
     }
 
     /** Explicit cache cleanup: removes resumable partial downloads and complete-but-uninstalled archives. */
     public boolean clearDownloadCaches() {
+        if(!MUTATION.tryLock())return false;
+        try {
         File[] files = baseDir().listFiles();
         if (files == null) return true;
         boolean ok = true;
@@ -147,6 +153,7 @@ public final class OfflineModelStore implements AutoCloseable {
             }
         }
         return ok;
+        } finally { MUTATION.unlock(); }
     }
 
     public void download(OfflineAsrModelCatalog.Model model, Callback callback) {
@@ -155,7 +162,9 @@ public final class OfflineModelStore implements AutoCloseable {
             return;
         }
         worker.execute(() -> {
-            if (closed) return;
+            if(closed)return;
+            if(!MUTATION.tryLock()){postError(callback,"另一个模型操作正在进行");return;}
+            try {
             File base = baseDir();
             if (!base.exists() && !base.mkdirs()) {
                 postError(callback, "无法创建模型目录");
@@ -179,6 +188,7 @@ public final class OfflineModelStore implements AutoCloseable {
                         ? "发现未完成下载 " + human(existing) + "，正在断点续传 " + model.name + "……"
                         : "正在下载 " + model.name + "（" + model.approximateSize + "，支持断点续传）……");
 
+                    RunPolicy.requireDownload(context);
                     downloadFileWithRetry(model.url, partial, callback);
                     if (closed) return;
                     if (!partial.isFile() || partial.length() <= 0L) {
@@ -203,7 +213,9 @@ public final class OfflineModelStore implements AutoCloseable {
 
                 extractTarBz2(ready, staging);
                 File payload = choosePayloadRoot(staging, model.archiveRootHint);
-                if (!containsOnnx(payload)) throw new IllegalStateException("模型包里没有找到 ONNX 文件");
+                if(!ModelIntegrity.structure(payload,model.id))throw new IllegalStateException("模型缺少网络或词表文件");
+                postStatus(callback,"正在建立 SHA-256 完整性校验清单……");
+                ModelIntegrity.inventory(staging,model.id);
                 if (closed) throw new IllegalStateException("安装已取消");
 
                 // Publish .ready only after the complete extracted directory has been moved.
@@ -234,6 +246,7 @@ public final class OfflineModelStore implements AutoCloseable {
                     postStatus(callback, "模型已安装；完整下载缓存未能自动删除，可在模型中心手动清理");
                 }
                 if (partial.exists()) partial.delete();
+                new File(partial.getPath()+".validator").delete();
                 main.post(() -> { if (!closed) callback.onSuccess(target); });
             } catch (Exception e) {
                 deleteRecursively(staging);
@@ -248,15 +261,20 @@ public final class OfflineModelStore implements AutoCloseable {
                 }
                 postError(callback, safe(e) + tail);
             }
+            } finally { MUTATION.unlock(); }
         });
     }
 
     public boolean delete(String modelId) {
-        return deleteRecursively(modelDir(modelId));
+        if(!MUTATION.tryLock())return false;
+        try{return deleteRecursively(modelDir(modelId));}finally{MUTATION.unlock();}
     }
 
     public boolean deleteAll() {
+        if(!MUTATION.tryLock())return false;
+        try {
         return deleteRecursively(baseDir());
+        } finally { MUTATION.unlock(); }
     }
 
     private void downloadFileWithRetry(String address, File output, Callback callback) throws Exception {
@@ -284,15 +302,19 @@ public final class OfflineModelStore implements AutoCloseable {
 
     private void downloadFile(String address, File output, Callback callback) throws Exception {
         long existing = output.isFile() ? output.length() : 0L;
+        File validatorFile=new File(output.getPath()+".validator");
+        String validator=validatorFile.isFile()?java.nio.file.Files.readString(validatorFile.toPath()).trim():"";
+        if(existing>0&&validator.isEmpty()){if(!output.delete())throw new java.io.IOException("无法重置旧断点");existing=0;}
         HttpURLConnection connection = null;
         try {
+            RunPolicy.requireDownload(context);
             connection = (HttpURLConnection) new URL(address).openConnection();
             connection.setInstanceFollowRedirects(true);
             connection.setConnectTimeout(20000);
             connection.setReadTimeout(45000);
             connection.setRequestProperty("User-Agent", "FloatingTranslator/" + BuildConfig.VERSION_NAME + " Android");
             connection.setRequestProperty("Accept-Encoding", "identity");
-            if (existing > 0) connection.setRequestProperty("Range", "bytes=" + existing + "-");
+            if(existing>0){connection.setRequestProperty("Range","bytes="+existing+"-");connection.setRequestProperty("If-Range",validator);}
 
             int code = connection.getResponseCode();
             if (code == 416 && existing > 0) {
@@ -309,8 +331,16 @@ public final class OfflineModelStore implements AutoCloseable {
                     throw new IllegalStateException("下载源返回了错误的断点位置，请清理下载缓存后重试");
                 }
             }
+            String current=connection.getHeaderField("ETag");
+            if(current==null||current.startsWith("W/"))current=connection.getHeaderField("Last-Modified");
+            if(append&&current!=null&&!current.equals(validator)){output.delete();validatorFile.delete();throw new java.io.IOException("下载源更新，重置断点后重试");}
+            if(current!=null)java.nio.file.Files.writeString(validatorFile.toPath(),current);
             long done = append ? existing : 0L;
             long responseLength = connection.getContentLengthLong();
+            if(code==HttpURLConnection.HTTP_PARTIAL){
+                java.util.regex.Matcher m=java.util.regex.Pattern.compile("bytes (\\d+)-(\\d+)/(\\d+)").matcher(connection.getHeaderField("Content-Range"));
+                if(!m.matches()||Long.parseLong(m.group(2))+1!=Long.parseLong(m.group(3)))throw new IllegalStateException("下载源返回不完整范围，请重试");
+            }
             long total = responseLength > 0 ? done + responseLength : -1L;
             if (!append && existing > 0) {
                 postStatus(callback, "下载源不支持断点续传，本次从头重新下载");
