@@ -35,7 +35,7 @@ import java.util.concurrent.Executors;
 /**
  * Non-streaming high-accuracy sherpa-onnx ASR.
  * High-accuracy/balanced modes prefer Silero neural VAD and preserve short audio context.
- * Suspicious or long segments receive a second decode with a larger context window.
+ * Each captured segment is decoded once; final utterances are never text-deduplicated.
  * Audio source is owned by the normal/ROOT capture service and is never changed here.
  */
 public final class SherpaSpeechEngine implements AutoCloseable {
@@ -266,7 +266,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             OfflineRecognizer r = recognizer;
             if (closed || r == null || primarySamples == null || primarySamples.length == 0) return;
             try {
+                long inferenceAt=android.os.SystemClock.elapsedRealtime();
                 Decoded result = decodeOnce(r, primarySamples);
+                SessionHealth.inference(android.os.SystemClock.elapsedRealtime()-inferenceAt);
                 if (!result.text.isEmpty()) {
                     main.post(() -> { if (!closed) callback.onText(result.text, result.lang); });
                 }

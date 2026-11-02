@@ -74,6 +74,8 @@ public final class RootCallTranslationService extends Service {
     private String lastStreamTranslated = "";
     private boolean translateBusy;
     private final SpeechQueue speechQueue = new SpeechQueue();
+    private SessionHealth health;
+    private SpeechQueue.Item inFlight;
     private final SmartSentenceAssembler sentenceAssembler = new SmartSentenceAssembler();
 
     private WindowManager windowManager;
@@ -151,6 +153,11 @@ public final class RootCallTranslationService extends Service {
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
+        health=new SessionHealth(this,"通话",()->speechQueue.size()+(translateBusy?1:0),(held,reason)->{
+            if(held){if(vosk!=null)vosk.finishCurrentUtterance();if(sherpa!=null)sherpa.flush();if(onlineSpeech!=null)onlineSpeech.flush();if(pcmSystemSpeech!=null)pcmSystemSpeech.flush();}
+            showStatus(reason.isEmpty()?"采音已恢复":reason);updateNotification(reason.isEmpty()?"采音已恢复":reason);
+        });
+        health.direction(sourceMlTag+" → "+targetMlTag);
         createOverlay(fontSize);
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
         diagTranslation = translator.selectedEngineName();
@@ -231,6 +238,7 @@ public final class RootCallTranslationService extends Service {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = TranslationService.ASR_SYSTEM;
                     diagAsr = "ASR：" + engineName + " · " + profile.sourceLabel() + " PCM";
@@ -285,6 +293,7 @@ public final class RootCallTranslationService extends Service {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = mode;
                     diagAsr = "ASR：" + engineName + " · 内部 PCM";
@@ -329,6 +338,7 @@ public final class RootCallTranslationService extends Service {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = modelId;
                     diagAsr = "ASR：" + engineName + " · 内部 PCM";
@@ -376,6 +386,7 @@ public final class RootCallTranslationService extends Service {
                 renderDiag();
             }
             @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                 if (!running) return;
                 activeAsrMode = TranslationService.ASR_VOSK;
                 diagAsr = "ASR：" + engineName + " · 内部 PCM";
@@ -422,6 +433,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void consumePcm(byte[] pcm, int length, int peak) {
+        if(health!=null){health.audio(peak);if(health.held())return;}
         long now = SystemClock.elapsedRealtime();
         updateLevel(peak, now);
         AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
@@ -481,12 +493,14 @@ public final class RootCallTranslationService extends Service {
         String cleaned = next.text;
         OfflineFirstTranslationRouter current = translator;
         if (current == null) return;
-        translateBusy = true;
+        translateBusy = true;inFlight=next;
+        if(health!=null)health.beginTranslation();
         diagTranslation = "翻译中";
         renderDiag();
         current.translate(cleaned, next.language, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
                 if (!running || translator != current) return;
+                if(health!=null)health.translated(engineName);
                 diagTranslation = engineName;
                 renderDiag();
                 if (translated != null) translated.setText(translationOnlyOverlay ? out : "译文：" + out);
@@ -500,6 +514,7 @@ public final class RootCallTranslationService extends Service {
             }
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
+                if(next.complete)FailureStore.add(RootCallTranslationService.this,cleaned,sourceMlTag,targetMlTag,engineId,"call",message);
                 diagTranslation = "翻译失败：" + message;
                 renderDiag();
                 if (!translationOnlyOverlay && translated != null) translated.setText(getString(R.string.face_to_face_16, message));
@@ -509,6 +524,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void finishTranslate() {
+        inFlight=null;
         translateBusy = false;
         drainTranslateQueue();
     }
@@ -759,6 +775,10 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void stopPipeline() {
+        if(health!=null){health.close();health=null;}
+        if(inFlight!=null&&inFlight.complete)FailureStore.add(this,inFlight.text,sourceMlTag,targetMlTag,engineId,"call","会话停止，译文尚未完成");
+        inFlight=null;SpeechQueue.Item pending;
+        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,sourceMlTag,targetMlTag,engineId,"call","会话停止，等待重试");
         running = false;
         RootPcmSource r = rootSource;
         rootSource = null;

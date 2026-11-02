@@ -24,7 +24,10 @@ final class FaceOfflineSession implements AutoCloseable {
     private final ExecutorService capture = Executors.newSingleThreadExecutor();
     private final Callback callback;
     private final String myLanguage;
-    private volatile boolean closed;
+    private volatile boolean closed, captureHeld;
+    private SessionHealth health;
+    void setHealth(SessionHealth value){health=value;}
+    void holdCapture(boolean value){captureHeld=value;if(value)flush();}
     private volatile AudioRecord record;
     private SherpaSpeechEngine sherpa;
     private OfflineSpeechEngine vosk;
@@ -103,6 +106,8 @@ final class FaceOfflineSession implements AutoCloseable {
                         int sample = (short) ((data[i] & 255) | (data[i + 1] << 8));
                         peak = Math.max(peak, Math.abs(sample));
                     }
+                    if(health!=null)health.audio(peak);
+                    if(captureHeld)continue;
                     if (vosk != null) vosk.acceptPcm(data, n);
                     else if (sherpa != null) sherpa.acceptPcm(data, n, peak);
                 }

@@ -30,11 +30,14 @@ public final class HistoryStore {
         public final String original;
         public final String translated;
         public final String category;
+        public final String eventId;
 
         Entry(long time, String original, String translated) {
             this(time,original,translated,"legacy");
         }
-        Entry(long time,String original,String translated,String category){
+        Entry(long time,String original,String translated,String category){this(time,original,translated,category,"");}
+        Entry(long time,String original,String translated,String category,String eventId){
+            this.eventId=eventId;
             this.category=category;
             this.time = time;
             this.original = original;
@@ -71,13 +74,34 @@ public final class HistoryStore {
         }
     }
 
+    public static void appendRecovered(Context context,JSONObject source,String translation)throws Exception {
+        synchronized(LOCK) {
+            String id=source.getString("id");
+            for(Entry e:readAll(context))if(id.equals(e.eventId))return;
+            JSONObject row=new JSONObject().put("eventId",id).put("time",source.getLong("time"))
+                .put("original",source.getString("text")).put("translated",translation).put("category",source.getString("category"));
+            try(FileOutputStream out=new FileOutputStream(file(context),true)){
+                out.write((row.toString()+"\n").getBytes(StandardCharsets.UTF_8));out.getFD().sync();
+            }
+            trimIfNeeded(context);
+        }
+    }
+
+    public static void replace(Context context, org.json.JSONArray rows) throws Exception {
+        synchronized(LOCK) {
+            android.util.AtomicFile target=new android.util.AtomicFile(file(context));FileOutputStream stream=null;
+            try {stream=target.startWrite();for(int i=0;i<rows.length();i++){stream.write(rows.getJSONObject(i).toString().getBytes(StandardCharsets.UTF_8));stream.write('\n');}target.finishWrite(stream);}
+            catch(Exception e){if(stream!=null)target.failWrite(stream);throw e;}
+        }
+    }
+
     public static List<Entry> readAll(Context context) {
         synchronized (LOCK) {
             ArrayList<Entry> entries = new ArrayList<>();
             File f = file(context);
-            if (!f.isFile()) return entries;
+            if (!f.isFile() && !new File(f+".bak").isFile()) return entries;
             try (BufferedReader in = new BufferedReader(new InputStreamReader(
-                    new FileInputStream(f), StandardCharsets.UTF_8))) {
+                    new android.util.AtomicFile(f).openRead(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = in.readLine()) != null) {
                     try {
@@ -87,7 +111,7 @@ public final class HistoryStore {
                         entries.add(new Entry(
                             json.optLong("time", 0L),
                             json.optString("original", ""),
-                            translated,json.optString("category","legacy")));
+                            translated,json.optString("category","legacy"),json.optString("eventId","")));
                     } catch (Exception ignored) {}
                 }
             } catch (Exception ignored) {}
@@ -177,16 +201,10 @@ public final class HistoryStore {
     }
 
     private static void rewrite(Context context, List<Entry> entries) {
-        try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(
-                new FileOutputStream(file(context), false), StandardCharsets.UTF_8))) {
-            for (Entry entry : entries) {
-                JSONObject json = new JSONObject();
-                json.put("time", entry.time);json.put("category",entry.category);
-                json.put("original", entry.original);
-                json.put("translated", entry.translated);
-                out.write(json.toString());
-                out.newLine();
-            }
-        } catch (Exception ignored) {}
+        try {
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(Entry e:entries)rows.put(new JSONObject().put("time",e.time).put("category",e.category).put("eventId",e.eventId).put("original",e.original).put("translated",e.translated));
+            replace(context,rows);
+        }catch(Exception e){RunPolicy.prefs(context).edit().putString("recovery_error","历史整理失败："+e.getMessage()).apply();}
     }
 }

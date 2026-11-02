@@ -160,6 +160,9 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private boolean speechTranslationBusy;
     private final SpeechQueue speechQueue = new SpeechQueue();
+    private SessionHealth health;
+    private String inFlightOriginal;
+    private boolean inFlightFinal;
     private final SmartSentenceAssembler sentenceAssembler = new SmartSentenceAssembler();
     private String segmentLanguage = "";
 
@@ -264,6 +267,18 @@ public class TranslationService extends Service implements RecognitionListener {
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
+        health=new SessionHealth(this,"实时翻译",()->speechQueue.size()+(speechTranslationBusy?1:0),(held,reason)->{
+            if(held){
+                if(offlineSpeech!=null)offlineSpeech.finishCurrentUtterance();
+                if(sherpaSpeech!=null)sherpaSpeech.flush();
+                if(onlineSpeech!=null)onlineSpeech.flush();
+                if(pcmSystemSpeech!=null)pcmSystemSpeech.flush();
+                if(systemRecognizer!=null)try{systemRecognizer.stopListening();}catch(Exception ignored){}
+            }else if(ASR_SYSTEM.equals(activeAsrMode)&&!paused)startSystemRecognizer();
+            showStatus(reason.isEmpty()?"采音已恢复":reason);
+            updateNotification(reason.isEmpty()?"采音已恢复":reason);
+        });
+        health.direction(sourceMlTag+" → "+targetMlTag);
         createOverlay(fontSize);
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
         setDiagTranslation(translator.selectedEngineName());
@@ -436,6 +451,7 @@ public class TranslationService extends Service implements RecognitionListener {
                 }
 
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = modelId;
                     setDiagSpeech("ASR：" + engineName + " · " + languageModeLabel() + " · 离线");
@@ -477,6 +493,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = ASR_SYSTEM;
                     setDiagSpeech("ASR：" + engineName + " · " + languageModeLabel());
@@ -516,6 +533,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = mode;
                     setDiagSpeech("ASR：" + engineName + " · 在线免费");
@@ -569,6 +587,7 @@ public class TranslationService extends Service implements RecognitionListener {
             }
 
             @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                 if (!running) return;
                 activeAsrMode = ASR_VOSK;
                 setDiagSpeech("ASR：" + engineName + " · " + sourceMlTag + " · 流式");
@@ -732,6 +751,7 @@ public class TranslationService extends Service implements RecognitionListener {
             if (count <= 0 || paused) continue;
             int peak = shortsToBytes(shorts, count, bytes);
             long now = SystemClock.elapsedRealtime();
+            if(health!=null){health.audio(peak);if(health.held())continue;}
             updateAudioLevel(peak, now);
 
             AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
@@ -777,6 +797,8 @@ public class TranslationService extends Service implements RecognitionListener {
         SpeechQueue.Item next = speechQueue.poll();
         if (next == null) return;
         speechTranslationBusy = true;
+        inFlightOriginal=next.text;inFlightFinal=next.complete;
+        if(health!=null)health.beginTranslation();
         segmentLanguage = next.language;
         translateSpeechSegmented(next.text, next.complete);
     }
@@ -805,12 +827,14 @@ public class TranslationService extends Service implements RecognitionListener {
                 if (!running || translator != current) return;
                 if (out.length() > 0) out.append('\n');
                 out.append(translated);
+                if(health!=null)health.translated(engineName);
                 setDiagTranslation((finalResult ? "最终" : "流式") + " · " + engineName
                     + (parts.size() > 1 ? " · 分段 " + (index + 1) + "/" + parts.size() : ""));
                 translatePart(parts, index + 1, out, original, finalResult);
             }
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
+                if(finalResult)FailureStore.add(TranslationService.this,original,sourceMlTag,targetMlTag,engineId,"realtime",message);
                 setDiagTranslation("翻译失败：" + message);
                 if (!translationOnlyOverlay && translatedText != null) translatedText.setText(getString(R.string.face_to_face_16, message));
                 finishSpeechTranslation();
@@ -819,6 +843,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void finishSpeechTranslation() {
+        inFlightOriginal=null;inFlightFinal=false;
         speechTranslationBusy = false;
         drainSpeechQueue();
     }
@@ -883,7 +908,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void startSystemRecognizer() {
-        if(LocalNarrator.muted())return;
+        if(LocalNarrator.muted()||(health!=null&&health.held()))return;
         if (!RunPolicy.cloud(this)) { showStatus(RunPolicy.blocked()); return; }
         if (!running || !INPUT_MICROPHONE.equals(inputMode)) {
             setDiagSpeech("ASR：系统识别器要求麦克风来源");
@@ -1251,6 +1276,11 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void stopPipelineOnly() {
+        if(health!=null){health.close();health=null;}
+        if(inFlightFinal&&inFlightOriginal!=null)FailureStore.add(this,inFlightOriginal,sourceMlTag,targetMlTag,engineId,"realtime","会话停止，译文尚未完成");
+        inFlightOriginal=null;inFlightFinal=false;
+        SpeechQueue.Item pending;
+        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,sourceMlTag,targetMlTag,engineId,"realtime","会话停止，等待重试");
         running = false;
         stopAudioCapture();
         destroySystemRecognizer();

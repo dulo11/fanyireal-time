@@ -43,6 +43,7 @@ public final class OfflineCenterActivity extends Activity {
   button("停止正在运行的翻译",()->{
    startService(new Intent(this,TranslationService.class).setAction(TranslationService.ACTION_STOP));
    startService(new Intent(this,RootCallTranslationService.class).setAction(TranslationService.ACTION_STOP));show("已发送停止请求；稍后可切换模式");});
+  button("运行状态 / 下载队列 / 失败重试 / 场景与备份",()->open(ReliabilityActivity.class));
   label("双方语言与模型推荐",21);
   source=spinner(ModelAdvisor.NAMES,RunPolicy.prefs(this).getInt("source_index",2));target=spinner(ModelAdvisor.NAMES,RunPolicy.prefs(this).getInt("target_index",0));
   button("应用双方语言与自动引擎",()->{
@@ -83,7 +84,7 @@ public final class OfflineCenterActivity extends Activity {
   button("字幕字体与原文 / 译文显示",()->open(MainActivity.class));button("历史搜索、分类和 TXT / SRT 导出",()->open(HistoryActivity.class));
   help();refresh();
  }
- private boolean active(){if(busy||session!=null||probe!=null||RunPolicy.prefs(this).getBoolean("service_running",false)){show("请先停止翻译/测试，并等待当前模型操作结束。");return true;}return false;}
+ private boolean active(){if(busy||ModelDownloadService.active||session!=null||probe!=null||RunPolicy.prefs(this).getBoolean("service_running",false)){show("请先停止翻译/测试，并等待当前模型操作结束。");return true;}return false;}
  private String from(){return ModelAdvisor.LANGS[source.getSelectedItemPosition()];}private String to(){return ModelAdvisor.LANGS[target.getSelectedItemPosition()];}private String model(){return ids.get(models.getSelectedItemPosition());}
  private void open(Class<?> c){startActivity(new Intent(this,c));}
  private TextView label(String s,int size){TextView v=new TextView(this);v.setText(s);v.setTextColor(Color.WHITE);v.setTextSize(size);v.setPadding(0,12,0,10);root.addView(v);return v;}
@@ -109,7 +110,10 @@ public final class OfflineCenterActivity extends Activity {
   String a=from(),b=to();List<String> list=ModelAdvisor.order(this,a,b,true);if(list.isEmpty()){show("暂无经过语言覆盖确认的推荐模型，请在详细模型中心选择后测试。");return;}
   String installed=ModelAdvisor.installed(this,a,b,true,Collections.emptySet());String id=installed==null?list.get(0):installed;OfflineAsrModelCatalog.Model m=OfflineAsrModelCatalog.find(id);
   new AlertDialog.Builder(this).setTitle("准备 "+a+" ↔ "+b).setMessage("语音："+m.name+"\n"+m.approximateSize+"\n文字：ML Kit "+a+"、"+b+"\n下载需额外解压空间；已安装模型不重复下载。")
-   .setNegativeButton("取消",null).setPositiveButton("开始",(d,i)->{busy=true;if(store.isInstalled(id))prepareText(a,b);else store.download(m,downloadCallback(()->prepareText(a,b)));}).show();
+   .setNegativeButton("取消",null).setPositiveButton("开始",(d,i)->{
+    try{java.util.List<String> tasks=new java.util.ArrayList<>();tasks.add(id);if(!a.equals("en"))tasks.add("text:"+a);if(!b.equals("en"))tasks.add("text:"+b);tasks.add("vad");
+    DownloadTasks.enqueue(this,tasks.toArray(new String[0]));ModelDownloadService.start(this);open(ReliabilityActivity.class);}catch(Exception e){show(e.getMessage());}
+   }).show();
  }
  private OfflineModelStore.Callback downloadCallback(Runnable done){return new OfflineModelStore.Callback(){public void onStatus(String s){show(s);}public void onProgress(int p,long d,long t){show("下载 "+(p<0?"":p+"% ")+OfflineModelStore.human(d));}public void onSuccess(File f){done.run();}public void onError(String e){busy=false;show(e);}};}
  private void prepareText(String a,String b){

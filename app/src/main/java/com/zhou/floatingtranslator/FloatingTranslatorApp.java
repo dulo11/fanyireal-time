@@ -18,6 +18,10 @@ public final class FloatingTranslatorApp extends Application implements Applicat
         registerActivityLifecycleCallbacks(this);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
+        prefs.edit().putBoolean("service_running",false).commit();
+        UserArchive.checkpointUpgrade(this);
+        try{DownloadTasks.recover(this);}catch(Exception ignored){}
+
         // dev5: make automatic multilingual recognition/routing the default for existing installs too.
         // The configured source language is retained as the fallback language for ASR/very short text.
         if (!prefs.getBoolean(PREF_DEV5_SMART_LANGUAGE_MIGRATED, false)) {

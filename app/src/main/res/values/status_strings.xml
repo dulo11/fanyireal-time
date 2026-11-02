@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+  <!-- Diagnostic/status translations use Android base-language fallback. UI language packs remain partial. -->
   <string name="api_settings_01">"允许付费/旧兼容有道云 ASR 在 Android 内置、免费在线、本地模型都失败后最后兜底（默认关闭）"</string>
   <string name="api_settings_02">"显示 API 密钥内容（默认隐藏）"</string>
   <string name="api_settings_03">"轮番使用"</string>
   <string name="api_settings_04">"额度/限流后切换"</string>
-  <string name="api_settings_05">"✅ 已保存到本机。Azure 账号池：%1$s 套；策略：%2$s。"</string>
+  <string name="api_settings_05">"✅ 已保存到本机。Azure 账号池：%1$d 套；策略：%2$s。"</string>
   <string name="api_settings_06">"❌ 保存失败：%1$s"</string>
   <string name="api_settings_07">"✅ 已清空全部 API 配置"</string>
   <string name="api_settings_08">"✅ %1$s 正常\n%2$s"</string>
@@ -12,34 +13,34 @@
   <string name="app_language_01">"✓  "</string>
   <string name="app_language_02">""</string>
   <string name="app_language_03">"%1$s%2$s"</string>
-  <string name="asr_hotword_01">"当前：%1$s 个热词 · 偏置强度 %2$s\n修改后，下次重新启动 ASR 时生效。"</string>
+  <string name="asr_hotword_01">"当前：%1$d 个热词 · 偏置强度 %2$d\n修改后，下次重新启动 ASR 时生效。"</string>
   <string name="asr_precision_01">"当前：%1$s"</string>
   <string name="asr_precision_02">"✅ 已准备"</string>
   <string name="asr_precision_03">"○ 首次高精度识别时自动下载"</string>
-  <string name="asr_precision_04">"Silero VAD：%1$s\n热词：%2$s 个 · 不按文字去重；每次识别结果独立提交"</string>
+  <string name="asr_precision_04">"Silero VAD：%1$s\n热词：%2$d 个 · 不按文字去重；每次识别结果独立提交"</string>
   <string name="face_to_face_01">"没有适合当前模式的已下载模型：自动双向需多语言模型；固定输入请用 Whisper、SenseVoice、Vosk 或系统识别"</string>
   <string name="face_to_face_02">"持续监听 · %1$s"</string>
   <string name="face_to_face_03">"连续识别失败：%1$s · 将重启"</string>
-  <string name="face_to_face_04">"本句未识别（%1$s），继续监听…"</string>
-  <string name="face_to_face_05">"语音识别未完成（%1$s），可重试或换离线模型"</string>
+  <string name="face_to_face_04">"本句未识别（%1$d），继续监听…"</string>
+  <string name="face_to_face_05">"语音识别未完成（%1$d），可重试或换离线模型"</string>
   <string name="face_to_face_06">"启动语音识别失败：%1$s · 将重试"</string>
   <string name="face_to_face_07">"启动语音识别失败：%1$s"</string>
   <string name="face_to_face_08">"翻译积压，请暂停讲话；已识别内容全部保留 · "</string>
   <string name="face_to_face_09">"持续监听 · "</string>
-  <string name="face_to_face_10">"%1$s待处理 %2$s 句"</string>
+  <string name="face_to_face_10">"%1$s待处理 %2$d 句"</string>
   <string name="face_to_face_11">"未提供标签"</string>
   <string name="face_to_face_12">"识别原文：%1$s\nASR：%2$s · 确认方向：%3$s → %4$s"</string>
   <string name="face_to_face_13">"%1$s · 麦克风仍在持续监听"</string>
   <string name="face_to_face_14">"未翻译原文：%1$s\nASR：%2$s\n%3$s"</string>
   <string name="face_to_face_15">"翻译失败：%1$s · 麦克风仍在监听"</string>
   <string name="face_to_face_16">"翻译失败：%1$s"</string>
-  <string name="history_01">"共 %1$s 条；匹配 %2$s 条；当前页面显示最近 %3$s 条"</string>
+  <string name="history_01">"共 %1$d 条；匹配 %2$d 条；当前页面显示最近 %3$d 条"</string>
   <string name="home_01">"✅ 已授权"</string>
   <string name="home_02">"⚠ 未授权"</string>
   <string name="home_03">"✅ 已开启 · 连续"</string>
   <string name="home_04">"✅ 已开启 · 点按"</string>
   <string name="home_05">"⚠ 无障碍未开启"</string>
-  <string name="home_06">"声音：%1$s\n语言：%2$s → %3$s\nASR：%4$s\n对话模式：%5$s\nASR 精度：%6$s\n翻译：%7$s\n%8$s\n语音悬浮窗：%9$s\n全屏翻译：%10$s\n历史：%11$s 条"</string>
+  <string name="home_06">"声音：%1$s\n语言：%2$s → %3$s\nASR：%4$s\n对话模式：%5$s\nASR 精度：%6$s\n翻译：%7$s\n%8$s\n语音悬浮窗：%9$s\n全屏翻译：%10$s\n历史：%11$d 条"</string>
   <string name="main_01">"内部"</string>
   <string name="main_02">"正在启动 %1$s 通话翻译；保持目标 App 通话即可。"</string>
   <string name="main_03">"正在准备固定麦克风来源 + %1$s"</string>
@@ -50,7 +51,7 @@
   <string name="main_08">"✅ %1$s\n原文：%2$s\n译文：%3$s"</string>
   <string name="main_09">"✅ 当前已是最新版 v%1$s"</string>
   <string name="main_10">"检查更新失败：%1$s"</string>
-  <string name="main_12">"声音：%1$s\nASR：%2$s\n历史：%3$s 条%4$s%5$s"</string>
+  <string name="main_12">"声音：%1$s\nASR：%2$s\n历史：%3$d 条%4$s%5$s"</string>
   <string name="model_manager_01">"Vosk：轻量流式 ASR。选择下方语言后点击下载，准备后可完全离线。适合省电，纯日语快语速/长句不是强项。"</string>
   <string name="model_manager_02">"%1$s\n%2$s\n下载/模型大小：%3$s\n状态：%4$s"</string>
   <string name="model_manager_03">"Vosk 不支持当前语言，请选择多语言模型"</string>
@@ -59,7 +60,7 @@
   <string name="model_manager_06">"正在清理下载/安装缓存 %1$s……"</string>
   <string name="model_manager_07">"正在删除 %1$s……"</string>
   <string name="model_manager_08">"✅ 已保存默认 ASR：%1$s"</string>
-  <string name="model_manager_09">"Vosk：%1$s 个 · sherpa：%2$s 个\n完整下载待安装缓存：%3$s\n未完成下载/解压缓存：%4$s\n手机当前可用空间：%5$s"</string>
+  <string name="model_manager_09">"Vosk：%1$d 个 · sherpa：%2$d 个\n完整下载待安装缓存：%3$s\n未完成下载/解压缓存：%4$s\n手机当前可用空间：%5$s"</string>
   <string name="model_manager_10">"ML Kit 模型列表读取失败：%1$s"</string>
   <string name="model_manager_11">"正在删除 %1$s 的 Vosk 模型……"</string>
   <string name="model_manager_12">"正在删除全部 Vosk 语音模型……"</string>
@@ -75,12 +76,12 @@
   <string name="root_call_03">"❌ %1$s"</string>
   <string name="root_call_04">"测试中：请保持目标 App 通话，并让对方持续说话约 5 秒……"</string>
   <string name="root_call_05">"%1$s\n请保持通话有声音……"</string>
-  <string name="root_call_06">"%1$s\n峰值=%2$s · 已转换 16k PCM=%3$s\n有信号不保证来自对方，请人工确认后保存配置。"</string>
+  <string name="root_call_06">"%1$s\n峰值=%2$d · 已转换 16k PCM=%3$s\n有信号不保证来自对方，请人工确认后保存配置。"</string>
   <string name="root_call_07">"✅ 已保存并设为当前固定通话来源\n%1$s"</string>
   <string name="root_call_translation_01">"原文：%1$s"</string>
   <string name="root_call_translation_02">"声音：%1$s\n%2$s\n翻译：%3$s"</string>
   <string name="screen_translation_accessibility_01">" · 失败"</string>
-  <string name="screen_translation_accessibility_02">"全文 %1$s/%2$s%3$s"</string>
+  <string name="screen_translation_accessibility_02">"全文 %1$d/%2$d%3$s"</string>
   <string name="screen_translation_01">"✅ 已开启"</string>
   <string name="screen_translation_02">"⚠ 未开启"</string>
   <string name="screen_translation_03">"状态：%1$s\n最近：%2$s"</string>
@@ -92,7 +93,7 @@
   <string name="screen_translation_09">"跳过已经是目标语言的文字：%1$s"</string>
   <string name="screen_translation_10">"网页 / 聊天增量缓存：%1$s"</string>
   <string name="screen_translation_11">"双击悬浮球发送前反向翻译：%1$s"</string>
-  <string name="screen_translation_12">"对方 / 原语言：%1$s\n我的 / 目标语言：%2$s\n当前引擎：%3$s\nAzure 账号：%4$s 个\n\n整屏翻译：原语言 → 目标语言。\n聊天输入框双击反向翻译：目标语言 → 原语言。"</string>
+  <string name="screen_translation_12">"对方 / 原语言：%1$s\n我的 / 目标语言：%2$s\n当前引擎：%3$s\nAzure 账号：%4$d 个\n\n整屏翻译：原语言 → 目标语言。\n聊天输入框双击反向翻译：目标语言 → 原语言。"</string>
   <string name="translation_01">"屏幕原文：%1$s"</string>
   <string name="translation_02">"屏幕译文：%1$s"</string>
   <string name="translation_03">"翻译：%1$s\n声音：%2$s\n%3$s\n屏幕：%4$s"</string>

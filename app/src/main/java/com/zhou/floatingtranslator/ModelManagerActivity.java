@@ -222,70 +222,15 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void prepareVosk() {
-        if (downloadInProgress) return;
-        LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
-        if (!OfflineSpeechEngine.supports(option.mlKitTag)) { status.setText(getString(R.string.model_manager_03)); return; }
-        try { RunPolicy.requireDownload(this); } catch (Exception e) { status.setText(e.getMessage()); return; }
-        downloadInProgress = true;
-        updateSelectedInfo();
-        preparingVosk = new OfflineSpeechEngine(this, option.mlKitTag, new OfflineSpeechEngine.Callback() {
-            public void onStatus(String value) { status.setText(value); }
-            public void onReady(String name) { finish(name + " 已准备并加载成功"); }
-            public void onError(String value) { finish(value); }
-            public void onPartial(String value) {}
-            public void onFinal(String value) {}
-            private void finish(String value) {
-                downloadInProgress = false;
-                if (preparingVosk != null) { preparingVosk.close(); preparingVosk = null; }
-                if (!isDestroyed()) { status.setText(value); updateSelectedInfo(); }
-            }
-        });
-        preparingVosk.prepare();
+        LanguageOption option=(LanguageOption)languageSpinner.getSelectedItem();
+        queueDownload("vosk:"+option.mlKitTag);
     }
-
-    private void downloadSelected() {
-        String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
-        if (model == null) {
-            prepareVosk();
-            return;
-        }
-        if (downloadInProgress) {
-            status.setText("已有模型正在下载或安装，请等待完成后再操作缓存。");
-            return;
-        }
-
-        downloadInProgress = true;
-        downloadButton.setEnabled(false);
-        deleteButton.setEnabled(false);
-        if (clearPartialButton != null) clearPartialButton.setEnabled(false);
-        modelStore.download(model, new OfflineModelStore.Callback() {
-            @Override public void onStatus(String message) {
-                status.setText(message);
-                updateSelectedInfo();
-            }
-
-            @Override public void onProgress(int percent, long downloaded, long total) {
-                status.setText(percent >= 0
-                    ? "⬇ " + model.name + "：" + percent + "% · " + OfflineModelStore.human(downloaded)
-                        + (total > 0 ? " / " + OfflineModelStore.human(total) : "")
-                    : "⬇ " + model.name + "：已下载 " + OfflineModelStore.human(downloaded));
-            }
-
-            @Override public void onSuccess(File modelDir) {
-                downloadInProgress = false;
-                status.setText(getString(R.string.model_manager_04, model.name));
-                updateSelectedInfo();
-                refresh(false);
-            }
-
-            @Override public void onError(String message) {
-                downloadInProgress = false;
-                status.setText(getString(R.string.model_manager_05, model.name, message));
-                updateSelectedInfo();
-                refresh(false);
-            }
-        });
+    private void queueDownload(String id){
+        try{DownloadTasks.enqueue(this,id);ModelDownloadService.start(this);startActivity(new android.content.Intent(this,ReliabilityActivity.class));}
+        catch(Exception e){status.setText(e.getMessage());}
+    }
+    private void downloadSelected(){
+        if(TranslationService.ASR_VOSK.equals(selectedModelId()))prepareVosk();else queueDownload(selectedModelId());
     }
 
     private void clearDownloadCaches() {
