@@ -597,7 +597,7 @@ public final class RootCallTranslationService extends Service {
         original.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translated = overlayText(fontSize, Color.WHITE);
         translated.setTypeface(null, android.graphics.Typeface.BOLD);
-        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text")))translated.setVisibility(View.GONE);
+        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text"))){translated.setVisibility(View.GONE);original.setVisibility(View.GONE);}
         box.addView(original, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translated, new LinearLayout.LayoutParams(-1, -2));
 

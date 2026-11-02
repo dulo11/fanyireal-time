@@ -1071,7 +1071,7 @@ public class TranslationService extends Service implements RecognitionListener {
         originalText.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translatedText = overlayText(fontSize, Color.WHITE);
         translatedText.setTypeface(null, android.graphics.Typeface.BOLD);
-        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text")))translatedText.setVisibility(View.GONE);
+        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text"))){translatedText.setVisibility(View.GONE);originalText.setVisibility(View.GONE);}
         box.addView(originalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translatedText, new LinearLayout.LayoutParams(-1, -2));
 
