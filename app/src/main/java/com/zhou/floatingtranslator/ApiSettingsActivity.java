@@ -100,13 +100,13 @@ public class ApiSettingsActivity extends Activity {
         root.addView(engineSpinner, matchWrap());
 
         youdaoSpeechFallback = new CheckBox(this);
-        youdaoSpeechFallback.setText("允许付费/旧兼容有道云 ASR 在 Android 内置、免费在线、本地模型都失败后最后兜底（默认关闭）");
+        youdaoSpeechFallback.setText(getString(R.string.api_settings_01));
         youdaoSpeechFallback.setTextColor(Color.WHITE);
         youdaoSpeechFallback.setChecked(prefs.getBoolean("youdao_speech_fallback", false));
         root.addView(youdaoSpeechFallback);
 
         showSecrets = new CheckBox(this);
-        showSecrets.setText("显示 API 密钥内容（默认隐藏）");
+        showSecrets.setText(getString(R.string.api_settings_02));
         showSecrets.setTextColor(Color.WHITE);
         showSecrets.setChecked(false);
         showSecrets.setOnCheckedChangeListener((button, checked) -> applySecretVisibility(checked));
@@ -369,13 +369,12 @@ public class ApiSettingsActivity extends Activity {
             secure.put(SecureConfig.CLOUDFLARE_ACCOUNT_ID, cloudflareAccountId.getText().toString());
             secure.put(SecureConfig.CLOUDFLARE_AI_TOKEN, cloudflareAiToken.getText().toString());
             refreshConfiguredSummary();
-            status.setText("✅ 已保存到本机。Azure 账号池：" + secure.configuredAzureProfileCount()
-                + " 套；策略：" + (TranslationRouter.AZURE_ROUND_ROBIN.equals(azureMode)
-                ? "轮番使用" : "额度/限流后切换") + "。");
+            status.setText(getString(R.string.api_settings_05, secure.configuredAzureProfileCount(), (TranslationRouter.AZURE_ROUND_ROBIN.equals(azureMode)
+                ? getString(R.string.api_settings_03) : getString(R.string.api_settings_04))));
             toast("已保存");
             if (finishAfter) finish();
         } catch (Exception e) {
-            status.setText("❌ 保存失败：" + safe(e));
+            status.setText(getString(R.string.api_settings_06, safe(e)));
         }
     }
 
@@ -412,7 +411,7 @@ public class ApiSettingsActivity extends Activity {
                 clearFields();
                 prefs.edit().remove(TranslationRouter.PREF_AZURE_ACTIVE_SLOT).apply();
                 refreshConfiguredSummary();
-                if (status != null) status.setText("✅ 已清空全部 API 配置");
+                if (status != null) status.setText(getString(R.string.api_settings_07));
                 toast("API 密钥已清空");
             })
             .show();
@@ -448,13 +447,13 @@ public class ApiSettingsActivity extends Activity {
         status.setText("正在测试……");
         router.translate("Hello, nice to meet you.", new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
-                status.setText("✅ " + engineName + " 正常\n" + translated);
+                status.setText(getString(R.string.api_settings_08, engineName, translated));
                 button.setEnabled(true);
                 router.close();
             }
 
             @Override public void onError(String message) {
-                status.setText("❌ 测试失败：" + message);
+                status.setText(getString(R.string.api_settings_09, message));
                 button.setEnabled(true);
                 router.close();
             }

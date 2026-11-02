@@ -320,14 +320,14 @@ public final class MainActivity extends Activity {
             if (enableOcr.isChecked()) toast("ROOT / Shizuku 通话模式暂不使用 OCR，已只启动通话声音翻译");
             startRootTranslationService();
             RootCallProfileStore.Profile p = RootCallProfileStore.loadSelected(this);
-            status.setText("正在启动 " + (p == null ? "内部" : p.sourceLabel()) + " 通话翻译；保持目标 App 通话即可。");
+            status.setText(getString(R.string.main_02, (p == null ? getString(R.string.main_01) : p.sourceLabel())));
             return;
         }
 
         boolean needsProjection = !mic || enableOcr.isChecked();
         if (!needsProjection) {
             startNormalTranslationService(0, null);
-            status.setText("正在准备固定麦克风来源 + " + asrLabel(asr));
+            status.setText(getString(R.string.main_03, asrLabel(asr)));
             return;
         }
 
@@ -335,7 +335,7 @@ public final class MainActivity extends Activity {
         Intent captureIntent = Build.VERSION.SDK_INT >= 34
             ? manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
             : manager.createScreenCaptureIntent();
-        status.setText("请允许共享整个屏幕；系统内部声音/OCR 需要此授权。");
+        status.setText(getString(R.string.main_04));
         startActivityForResult(captureIntent, REQUEST_CAPTURE);
     }
 
@@ -408,14 +408,14 @@ public final class MainActivity extends Activity {
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
         if (source.mlKitTag.equals(target.mlKitTag)) { toast("请选择不同语言"); return; }
         button.setEnabled(false);
-        status.setText("正在下载 ML Kit 离线翻译模型……");
+        status.setText(getString(R.string.main_05));
         Translator translator = Translation.getClient(new TranslatorOptions.Builder()
             .setSourceLanguage(source.mlKitTag)
             .setTargetLanguage(target.mlKitTag)
             .build());
         translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-            .addOnSuccessListener(x -> status.setText("✅ ML Kit 离线翻译模型已就绪"))
-            .addOnFailureListener(e -> status.setText("❌ 模型下载失败：" + safe(e)))
+            .addOnSuccessListener(x -> status.setText(getString(R.string.main_06)))
+            .addOnFailureListener(e -> status.setText(getString(R.string.main_07, safe(e))))
             .addOnCompleteListener(x -> { button.setEnabled(true); translator.close(); });
     }
 
@@ -431,7 +431,7 @@ public final class MainActivity extends Activity {
         status.setText("正在测试翻译引擎……");
         router.translate(sample, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
-                status.setText("✅ " + engineName + "\n原文：" + sample + "\n译文：" + out);
+                status.setText(getString(R.string.main_08, engineName, sample, out));
                 HistoryStore.append(MainActivity.this, sample, out,"sample");
                 preferences.edit().putString("last_original", sample).putString("last_translation", out).apply();
                 button.setEnabled(true);
@@ -439,7 +439,7 @@ public final class MainActivity extends Activity {
                 router.close();
             }
             @Override public void onError(String message) {
-                status.setText("❌ 测试失败：" + message);
+                status.setText(getString(R.string.api_settings_09, message));
                 button.setEnabled(true);
                 router.close();
             }
@@ -466,7 +466,7 @@ public final class MainActivity extends Activity {
         updateChecker.check(BuildConfig.VERSION_NAME, new UpdateChecker.Callback() {
             @Override public void onResult(String latestVersion, String pageUrl, String apkUrl, boolean newer) {
                 button.setEnabled(true);
-                if (!newer) { status.setText("✅ 当前已是最新版 v" + BuildConfig.VERSION_NAME); return; }
+                if (!newer) { status.setText(getString(R.string.main_09, BuildConfig.VERSION_NAME)); return; }
                 new AlertDialog.Builder(MainActivity.this)
                     .setTitle("发现浮译 v" + latestVersion)
                     .setMessage("当前版本：v" + BuildConfig.VERSION_NAME + "\n仅发布通用 APK。")
@@ -477,7 +477,7 @@ public final class MainActivity extends Activity {
             }
             @Override public void onError(String message) {
                 button.setEnabled(true);
-                status.setText("检查更新失败：" + message);
+                status.setText(getString(R.string.main_10, message));
             }
         });
     }
@@ -513,8 +513,7 @@ public final class MainActivity extends Activity {
         String internal = profile == null ? "" : "\n内部 App：" + profile.packageName + " · " + profile.sourceLabel();
         String mic = mode == 1 ? "\n麦克风处理：" + micProcessingLabel(preferences.getString(
             "mic_processing", MicAudioEffects.MODE_REMOTE)) : "";
-        summary.setText("声音：" + source + "\nASR：" + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO))
-            + "\n历史：" + HistoryStore.count(this) + " 条" + internal + mic);
+        summary.setText(getString(R.string.main_12, source, asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO)), HistoryStore.count(this), internal, mic));
     }
 
     private void updateRecent() {
@@ -710,10 +709,8 @@ public final class MainActivity extends Activity {
     }
 
     private void requestRuntimePermissions() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS},
-                REQUEST_PERMISSIONS);
-        } else requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_PERMISSIONS);
+        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS},
+            REQUEST_PERMISSIONS);
     }
 
     @Override protected void onResume() {

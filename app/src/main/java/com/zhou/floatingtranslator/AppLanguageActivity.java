@@ -53,8 +53,8 @@ public final class AppLanguageActivity extends Activity {
             String tag = TAGS[i];
             Button b = new Button(this);
             boolean active = tag.isEmpty() ? current.isEmpty() : current.equalsIgnoreCase(tag)
-                || current.toLowerCase().startsWith(tag.toLowerCase() + "-");
-            b.setText((active ? "✓  " : "") + LABELS[i]);
+                || current.toLowerCase(java.util.Locale.ROOT).startsWith(tag.toLowerCase(java.util.Locale.ROOT) + "-");
+            b.setText(getString(R.string.app_language_03, (active ? getString(R.string.app_language_01) : getString(R.string.app_language_02)), LABELS[i]));
             b.setTextColor(Color.WHITE);
             b.setAllCaps(false);
             b.setBackgroundResource(active ? R.drawable.button_primary : R.drawable.button_secondary);

@@ -27,7 +27,9 @@ public final class ModelBackup {
      if(OfflineAsrModelCatalog.find(key)==null||(id!=null&&!id.equals(key)))throw new IOException("备份模型标识错误");id=key;File out=ModelIntegrity.safeChild(stage,name);
      if(e.isDirectory()){if(!out.exists()&&!out.mkdirs())throw new IOException("无法创建目录");continue;}
      if(!out.getParentFile().exists()&&!out.getParentFile().mkdirs())throw new IOException("无法创建目录");
-     long limit=Math.min(12L*1024*1024*1024-bytes,stage.getUsableSpace()-128L*1024*1024);
+     android.os.storage.StorageManager storage=c.getSystemService(android.os.storage.StorageManager.class);
+     long available=Math.min(storage.getAllocatableBytes(storage.getUuidForPath(stage)),new android.os.StatFs(stage.getAbsolutePath()).getAvailableBytes());
+     long limit=Math.min(12L*1024*1024*1024-bytes,available-128L*1024*1024);
      try(OutputStream os=new FileOutputStream(out)){bytes+=copy(zip,os,limit);}zip.closeEntry();
     }
    }

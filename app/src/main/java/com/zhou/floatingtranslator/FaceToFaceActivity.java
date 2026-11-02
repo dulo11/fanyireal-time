@@ -287,7 +287,7 @@ public final class FaceToFaceActivity extends Activity {
         String asr = selectConversationAsr(input.mlKitTag);
         if (asr == null) {
             cancelTurn();
-            status.setText("没有适合当前模式的已下载模型：自动双向需多语言模型；固定输入请用 Whisper、SenseVoice、Vosk 或系统识别");
+            status.setText(getString(R.string.face_to_face_01));
             languageStatus.setText("请核对语言模式、输入语言和语音识别引擎");
             return;
         }
@@ -300,7 +300,7 @@ public final class FaceToFaceActivity extends Activity {
                 new FaceOfflineSession.Callback() {
                     @Override public void status(String value) {
                         if (generation == session && continuousMode && !translating) {
-                            status.setText("持续监听 · " + value);
+                            status.setText(getString(R.string.face_to_face_02, value));
                         }
                     }
                     @Override public void result(String text, String language) {
@@ -311,7 +311,7 @@ public final class FaceToFaceActivity extends Activity {
                         if (generation != session || !continuousMode) return;
                         stopRecognition();
                         persistentOfflineCapture = false;
-                        status.setText("连续识别失败：" + text + " · 将重启");
+                        status.setText(getString(R.string.face_to_face_03, text));
                         updateButtons();
                         scheduleContinuousNext(900L);
                     }
@@ -413,12 +413,12 @@ public final class FaceToFaceActivity extends Activity {
                 listening = false;
                 destroySystemRecognizer();
                 if (continuousMode && continuous) {
-                    status.setText("本句未识别（" + error + "），继续监听…");
+                    status.setText(getString(R.string.face_to_face_04, error));
                     updateButtons();
                     scheduleContinuousNext(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 1000L : 220L);
                 } else {
                     cancelTurn();
-                    status.setText("语音识别未完成（" + error + "），可重试或换离线模型");
+                    status.setText(getString(R.string.face_to_face_05, error));
                 }
             }
             @Override public void onResults(Bundle b) {
@@ -477,11 +477,11 @@ public final class FaceToFaceActivity extends Activity {
             listening = false;
             destroySystemRecognizer();
             if (continuousMode && continuous) {
-                status.setText("启动语音识别失败：" + safe(e) + " · 将重试");
+                status.setText(getString(R.string.face_to_face_06, safe(e)));
                 scheduleContinuousNext(900L);
             } else {
                 cancelTurn();
-                status.setText("启动语音识别失败：" + safe(e));
+                status.setText(getString(R.string.face_to_face_07, safe(e)));
             }
         }
     }
@@ -491,7 +491,7 @@ public final class FaceToFaceActivity extends Activity {
         String cleaned = text.trim();
         if (cleaned.isEmpty()) return;
         pendingUtterances.addLast(new ContinuousUtterance(cleaned, language == null ? "" : language));
-        status.setText((pendingUtterances.size() >= MAX_PENDING_UTTERANCES ? "翻译积压，请暂停讲话；已识别内容全部保留 · " : "持续监听 · ") + "待处理 " + pendingUtterances.size() + " 句");
+        status.setText(getString(R.string.face_to_face_10, (pendingUtterances.size() >= MAX_PENDING_UTTERANCES ? getString(R.string.face_to_face_08) : getString(R.string.face_to_face_09)), pendingUtterances.size()));
         drainContinuousQueue(session);
     }
 
@@ -514,9 +514,7 @@ public final class FaceToFaceActivity extends Activity {
                 LanguageOption my = (LanguageOption) myLanguage.getSelectedItem();
                 boolean mySpoke = !ConversationLanguagePolicy.FIXED.equals(languageMode())
                     && OfflineFirstTranslationRouter.sameLanguage(detected, my.mlKitTag);
-                languageStatus.setText("识别原文：" + item.text + "\nASR："
-                    + (item.language.isEmpty() ? "未提供标签" : item.language)
-                    + " · 确认方向：" + detected + " → " + translator.lastTargetLanguage());
+                languageStatus.setText(getString(R.string.face_to_face_12, item.text, (item.language.isEmpty() ? getString(R.string.face_to_face_11) : item.language), detected, translator.lastTargetLanguage()));
                 boolean spokePartner = !mySpoke;
                 if (mySpoke) {
                     myOriginal.setText(item.text);
@@ -527,7 +525,7 @@ public final class FaceToFaceActivity extends Activity {
                 }
                 saveRecent(item.text, translated);
                 appendConversation(mySpoke ? "我" : "对方", item.text, translated, detected);
-                status.setText(engineName + " · 麦克风仍在持续监听");
+                status.setText(getString(R.string.face_to_face_13, engineName));
                 updateButtons();
                 if (continuousSpeak.isChecked() || !"text".equals(RunPolicy.prefs(FaceToFaceActivity.this).getString("output_mode","text"))) speakResult(translated, spokePartner, true);
                 drainContinuousQueue(session);
@@ -536,9 +534,9 @@ public final class FaceToFaceActivity extends Activity {
             @Override public void onError(String message) {
                 if (destroyed || !continuousMode || generation != session) return;
                 translating = false;
-                languageStatus.setText("未翻译原文：" + item.text + "\nASR：" + item.language + "\n" + message);
+                languageStatus.setText(getString(R.string.face_to_face_14, item.text, item.language, message));
                 appendConversation("待确认", item.text, "未翻译：" + message, item.language);
-                status.setText("翻译失败：" + message + " · 麦克风仍在监听");
+                status.setText(getString(R.string.face_to_face_15, message));
                 updateButtons();
                 drainContinuousQueue(session);
             }
@@ -567,7 +565,7 @@ public final class FaceToFaceActivity extends Activity {
                 if (destroyed || generation != session) return;
                 translating = false;
                 updateButtons();
-                status.setText("翻译失败：" + message);
+                status.setText(getString(R.string.face_to_face_16, message));
             }
         });
     }

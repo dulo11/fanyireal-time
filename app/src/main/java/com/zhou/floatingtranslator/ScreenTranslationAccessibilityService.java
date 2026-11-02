@@ -228,8 +228,8 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
             if (isTranslatableText(text)) {
                 Rect bounds = new Rect();
                 node.getBoundsInScreen(bounds);
-                if (isUsefulBounds(bounds)) {
-                    bounds.intersect(windowManager.getMaximumWindowMetrics().getBounds());
+                if (isUsefulBounds(bounds) && bounds.intersect(windowManager.getMaximumWindowMetrics().getBounds())
+                    && isUsefulBounds(bounds)) {
                     String key = text + "@" + bounds.flattenToString();
                     if (dedupe.add(key)) out.add(new Block(text, bounds));
                 }
@@ -327,8 +327,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         for (CachedTranslation result : resolved.values()) if (!result.error.isEmpty()) failed++;
         if (overlayView != null) overlayView.setEntries(entries);
         if (fullTextButton != null) {
-            fullTextButton.setText("全文 " + resolved.size() + "/" + new HashSet<>(blockTexts(blocks)).size()
-                + (failed > 0 ? " · 失败" + failed : ""));
+            fullTextButton.setText(getString(R.string.screen_translation_accessibility_02, resolved.size(), new HashSet<>(blockTexts(blocks)).size(), (failed > 0 ? getString(R.string.screen_translation_accessibility_01) + failed : getString(R.string.app_language_02))));
             fullTextButton.setVisibility(View.VISIBLE);
         }
         String path = fromOcr ? "无障碍截图 OCR" : "全局无障碍文字";
@@ -642,7 +641,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
 
     private void addBubbleWindow() {
         if (windowManager == null || bubble != null) return;
-        bubble = new TextView(this);
+        bubble = new TranslationBubbleView(this);
         bubble.setText("译");
         bubble.setTextColor(Color.WHITE);
         bubble.setTextSize(18f);
@@ -668,6 +667,8 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
         Rect screen = windowManager.getMaximumWindowMetrics().getBounds();
         bubbleParams.x = Math.max(dp(8), screen.width() - size - dp(14));
         bubbleParams.y = dp(180);
+        bubble.setOnClickListener(v -> handleBubbleTap());
+        bubble.setOnLongClickListener(v -> { toggleContinuous(); return true; });
         bubble.setOnTouchListener(new BubbleTouchListener());
         try {
             windowManager.addView(bubble, bubbleParams);
@@ -713,8 +714,8 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
                 case MotionEvent.ACTION_CANCEL:
                     if (!moved && event.getActionMasked() == MotionEvent.ACTION_UP) {
                         long held = SystemClock.elapsedRealtime() - downAt;
-                        if (held >= 650L) toggleContinuous();
-                        else handleBubbleTap();
+                        if (held >= 650L) v.performLongClick();
+                        else v.performClick();
                     }
                     return true;
                 default:

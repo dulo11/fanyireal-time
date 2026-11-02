@@ -125,15 +125,13 @@ public final class AsrPrecisionActivity extends Activity {
     private void refresh() {
         String selected = prefs.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
         String profile = prefs.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
-        if (current != null) current.setText("当前：" + precisionLabel(selected));
-        if (conversationCurrent != null) conversationCurrent.setText("当前：" + conversationLabel(profile));
+        if (current != null) current.setText(getString(R.string.asr_precision_01, precisionLabel(selected)));
+        if (conversationCurrent != null) conversationCurrent.setText(getString(R.string.asr_precision_01, conversationLabel(profile)));
         if (advancedStatus != null) {
             String raw = prefs.getString(AsrHotwordActivity.KEY_HOTWORDS, "");
             int count = 0;
             for (String line : raw.split("\\r?\\n")) if (!line.trim().isEmpty()) count++;
-            advancedStatus.setText(
-                "Silero VAD：" + (VadModelStore.isReady(this) ? "✅ 已准备" : "○ 首次高精度识别时自动下载") +
-                "\n热词：" + count + " 个 · 不按文字去重；每次识别结果独立提交");
+            advancedStatus.setText(getString(R.string.asr_precision_04, (VadModelStore.isReady(this) ? getString(R.string.asr_precision_02) : getString(R.string.asr_precision_03)), count));
         }
         if (models == null) return;
         OfflineModelStore store = new OfflineModelStore(this);

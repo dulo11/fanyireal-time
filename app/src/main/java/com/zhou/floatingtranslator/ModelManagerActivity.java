@@ -187,7 +187,7 @@ public class ModelManagerActivity extends Activity {
         if (selectedInfo == null) return;
         String id = selectedModelId();
         if (TranslationService.ASR_VOSK.equals(id)) {
-            selectedInfo.setText("Vosk：轻量流式 ASR。选择下方语言后点击下载，准备后可完全离线。适合省电，纯日语快语速/长句不是强项。");
+            selectedInfo.setText(getString(R.string.model_manager_01));
             if (downloadButton != null) {
                 downloadButton.setText("⬇ 下载所选模型");
                 downloadButton.setEnabled(!downloadInProgress);
@@ -213,8 +213,7 @@ public class ModelManagerActivity extends Activity {
             state = "未下载";
         }
 
-        selectedInfo.setText(model.name + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
-            + "\n状态：" + state);
+        selectedInfo.setText(getString(R.string.model_manager_02, model.name, model.remark, model.approximateSize, state));
         if (downloadButton != null) {
             downloadButton.setText(readyBytes > 0L && !installed ? "↻ 重新解压 / 安装" : "⬇ 下载所选模型");
             downloadButton.setEnabled(!installed && !downloadInProgress);
@@ -225,7 +224,7 @@ public class ModelManagerActivity extends Activity {
     private void prepareVosk() {
         if (downloadInProgress) return;
         LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
-        if (!OfflineSpeechEngine.supports(option.mlKitTag)) { status.setText("Vosk 不支持当前语言，请选择多语言模型"); return; }
+        if (!OfflineSpeechEngine.supports(option.mlKitTag)) { status.setText(getString(R.string.model_manager_03)); return; }
         try { RunPolicy.requireDownload(this); } catch (Exception e) { status.setText(e.getMessage()); return; }
         downloadInProgress = true;
         updateSelectedInfo();
@@ -275,14 +274,14 @@ public class ModelManagerActivity extends Activity {
 
             @Override public void onSuccess(File modelDir) {
                 downloadInProgress = false;
-                status.setText("✅ " + model.name + " 下载、解压和安装完成，可直接设为默认使用");
+                status.setText(getString(R.string.model_manager_04, model.name));
                 updateSelectedInfo();
                 refresh(false);
             }
 
             @Override public void onError(String message) {
                 downloadInProgress = false;
-                status.setText("❌ " + model.name + " 下载/安装失败：" + message);
+                status.setText(getString(R.string.model_manager_05, model.name, message));
                 updateSelectedInfo();
                 refresh(false);
             }
@@ -300,7 +299,7 @@ public class ModelManagerActivity extends Activity {
             return;
         }
         if (clearPartialButton != null) clearPartialButton.setEnabled(false);
-        status.setText("正在清理下载/安装缓存 " + OfflineModelStore.human(before) + "……");
+        status.setText(getString(R.string.model_manager_06, OfflineModelStore.human(before)));
         worker.execute(() -> {
             boolean ok = modelStore.clearDownloadCaches();
             long remaining = modelStore.allDownloadCacheBytes();
@@ -318,7 +317,7 @@ public class ModelManagerActivity extends Activity {
         String id = selectedModelId();
         OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
         if (model == null || downloadInProgress) return;
-        status.setText("正在删除 " + model.name + "……");
+        status.setText(getString(R.string.model_manager_07, model.name));
         worker.execute(() -> {
             boolean ok = modelStore.delete(id);
             runOnUiThread(() -> {
@@ -343,7 +342,7 @@ public class ModelManagerActivity extends Activity {
             return;
         }
         prefs.edit().putString("asr_mode", id).apply();
-        status.setText("✅ 已保存默认 ASR：" + modelLabels.get(asrModelSpinner.getSelectedItemPosition()));
+        status.setText(getString(R.string.model_manager_08, modelLabels.get(asrModelSpinner.getSelectedItemPosition())));
         toast("默认 ASR 已保存");
     }
 
@@ -379,15 +378,12 @@ public class ModelManagerActivity extends Activity {
                     updateSelectedInfo();
                 })
                 .addOnFailureListener(e -> {
-                    summary.setText("Vosk：" + voskCount + " 个 · sherpa：" + finalSherpaCount + " 个\n"
-                        + "完整下载待安装缓存：" + OfflineModelStore.human(readyBytes) + "\n"
-                        + "未完成下载/解压缓存：" + OfflineModelStore.human(partialBytes) + "\n"
-                        + "手机当前可用空间：" + OfflineModelStore.human(freeBytes));
+                    summary.setText(getString(R.string.model_manager_09, voskCount, finalSherpaCount, OfflineModelStore.human(readyBytes), OfflineModelStore.human(partialBytes), OfflineModelStore.human(freeBytes)));
                     if (clearPartialButton != null) {
                         clearPartialButton.setEnabled(!downloadInProgress && (readyBytes + partialBytes) > 0L);
                     }
                     if (overwriteStatus && !downloadInProgress) {
-                        status.setText("ML Kit 模型列表读取失败：" + safe(e));
+                        status.setText(getString(R.string.model_manager_10, safe(e)));
                     }
                     updateSelectedInfo();
                 });
@@ -397,7 +393,7 @@ public class ModelManagerActivity extends Activity {
     private void deleteCurrentVosk() {
         LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
         if (option == null) return;
-        status.setText("正在删除 " + option.label + " 的 Vosk 模型……");
+        status.setText(getString(R.string.model_manager_11, option.label));
         worker.execute(() -> {
             File base = new File(getFilesDir(), "vosk-models");
             int deleted = 0;
@@ -417,7 +413,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void deleteAllVosk() {
-        status.setText("正在删除全部 Vosk 语音模型……");
+        status.setText(getString(R.string.model_manager_12));
         worker.execute(() -> {
             boolean ok = OfflineModelStore.deleteRecursively(new File(getFilesDir(), "vosk-models"));
             runOnUiThread(() -> {
@@ -431,26 +427,26 @@ public class ModelManagerActivity extends Activity {
         LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
         if (option == null) return;
         TranslateRemoteModel model = new TranslateRemoteModel.Builder(option.mlKitTag).build();
-        status.setText("正在删除 ML Kit " + option.label + " 模型……");
+        status.setText(getString(R.string.model_manager_13, option.label));
         RemoteModelManager.getInstance().deleteDownloadedModel(model)
             .addOnSuccessListener(x -> {
-                status.setText("✅ 已删除 ML Kit " + option.label);
+                status.setText(getString(R.string.model_manager_14, option.label));
                 refresh(false);
             })
-            .addOnFailureListener(e -> status.setText("删除失败：" + safe(e)));
+            .addOnFailureListener(e -> status.setText(getString(R.string.model_manager_15, safe(e))));
     }
 
     private void deleteAllMlKit() {
         RemoteModelManager manager = RemoteModelManager.getInstance();
-        status.setText("正在读取 ML Kit 模型……");
+        status.setText(getString(R.string.model_manager_16));
         manager.getDownloadedModels(TranslateRemoteModel.class)
             .addOnSuccessListener(models -> deleteMlKitSet(manager, models))
-            .addOnFailureListener(e -> status.setText("读取模型失败：" + safe(e)));
+            .addOnFailureListener(e -> status.setText(getString(R.string.model_manager_17, safe(e))));
     }
 
     private void deleteMlKitSet(RemoteModelManager manager, Set<TranslateRemoteModel> models) {
         if (models.isEmpty()) {
-            status.setText("没有已下载的 ML Kit 翻译模型");
+            status.setText(getString(R.string.model_manager_18));
             return;
         }
         AtomicInteger remaining = new AtomicInteger(models.size());

@@ -34,6 +34,13 @@ public final class ScreenTranslationOverlayView extends View {
     private final Paint background = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private List<Entry> entries = Collections.emptyList();
+    private List<RenderedEntry> rendered = Collections.emptyList();
+    private static final class RenderedEntry {
+        final RectF box; final StaticLayout layout; final int x, y;
+        RenderedEntry(RectF box, StaticLayout layout, int x, int y) {
+            this.box=box; this.layout=layout; this.x=x; this.y=y;
+        }
+    }
 
     public ScreenTranslationOverlayView(Context context) {
         super(context);
@@ -45,6 +52,7 @@ public final class ScreenTranslationOverlayView extends View {
 
     public void setEntries(List<Entry> value) {
         entries = normalizeEntries(value);
+        rebuildLayouts();
         setVisibility(entries.isEmpty() ? INVISIBLE : VISIBLE);
         invalidate();
     }
@@ -106,8 +114,14 @@ public final class ScreenTranslationOverlayView extends View {
         return Math.max(0, rect.width()) * (long) Math.max(0, rect.height());
     }
 
-    @Override protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
+    @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w,h,oldw,oldh); rebuildLayouts();
+    }
+    @Override protected void onConfigurationChanged(android.content.res.Configuration config) {
+        super.onConfigurationChanged(config); rebuildLayouts(); invalidate();
+    }
+    private void rebuildLayouts() {
+        List<RenderedEntry> next = new ArrayList<>();
         float density = getResources().getDisplayMetrics().density;
         int pad = Math.max(3, Math.round(4f * density));
         float radius = 5f * density;
@@ -121,7 +135,8 @@ public final class ScreenTranslationOverlayView extends View {
 
             float textSize = Math.max(10f * density,
                 Math.min(16f * density, b.height() * 0.34f));
-            textPaint.setTextSize(textSize);
+            TextPaint entryPaint = new TextPaint(textPaint);
+            entryPaint.setTextSize(textSize);
 
             int left = Math.max(0, b.left);
             int available = Math.max(1, getWidth() - left - pad);
@@ -139,7 +154,7 @@ public final class ScreenTranslationOverlayView extends View {
             // Inline preview is intentionally compact; the service exposes all text in its scrollable panel.
             int maxLines = 4;
             StaticLayout.Builder builder = StaticLayout.Builder
-                .obtain(entry.translated, 0, entry.translated.length(), textPaint, textWidth)
+                .obtain(entry.translated, 0, entry.translated.length(), entryPaint, textWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setIncludePad(false)
                 .setMaxLines(maxLines);
@@ -152,13 +167,19 @@ public final class ScreenTranslationOverlayView extends View {
             int bottom = Math.min(getHeight(), top + boxHeight);
             if (right <= left || bottom <= top) continue;
 
-            RectF box = new RectF(left, top, right, bottom);
-            canvas.drawRoundRect(box, radius, radius, background);
-
-            int save = canvas.save();
-            canvas.clipRect(box);
-            canvas.translate(left + pad, top + pad);
-            layout.draw(canvas);
+            next.add(new RenderedEntry(new RectF(left,top,right,bottom),layout,left+pad,top+pad));
+        }
+        rendered=next;
+    }
+    @Override protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        float radius=5f*getResources().getDisplayMetrics().density;
+        for (RenderedEntry entry : rendered) {
+            canvas.drawRoundRect(entry.box,radius,radius,background);
+            int save=canvas.save();
+            canvas.clipRect(entry.box);
+            canvas.translate(entry.x,entry.y);
+            entry.layout.draw(canvas);
             canvas.restoreToCount(save);
         }
     }

@@ -242,7 +242,7 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：Android 系统外部 PCM · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -296,7 +296,7 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + engineName + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -340,7 +340,7 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + meta.name + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message) {
@@ -442,7 +442,7 @@ public final class RootCallTranslationService extends Service {
         long now = SystemClock.elapsedRealtime();
         diagAsr = "ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned);
         renderDiag();
-        if (showOriginal && original != null) original.setText("原文：" + cleaned);
+        if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
         if (committed) {
             lastStreamTranslated = "";
             queueTranslate(cleaned, true);
@@ -502,7 +502,7 @@ public final class RootCallTranslationService extends Service {
                 if (!running || translator != current) return;
                 diagTranslation = "翻译失败：" + message;
                 renderDiag();
-                if (!translationOnlyOverlay && translated != null) translated.setText("翻译失败：" + message);
+                if (!translationOnlyOverlay && translated != null) translated.setText(getString(R.string.face_to_face_16, message));
                 finishTranslate();
             }
         });
@@ -540,7 +540,7 @@ public final class RootCallTranslationService extends Service {
                 if (text.isEmpty()) return;
                 diagAsr = "ASR：有道云 · " + preview(text);
                 renderDiag();
-                if (showOriginal && original != null) original.setText("原文：" + text);
+                if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, text));
                 queueTranslate(text, true);
             }
             @Override public void onError(String message) {
@@ -633,16 +633,24 @@ public final class RootCallTranslationService extends Service {
     private void makeDraggable(View view) {
         final float[] start = new float[2];
         final int[] originalY = new int[1];
+        final boolean[] dragged = new boolean[1];
+        final int slop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
         view.setOnTouchListener((v, event) -> {
             if (overlayParams == null || windowManager == null || overlay == null) return false;
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
-                    start[0] = event.getRawX(); start[1] = event.getRawY(); originalY[0] = overlayParams.y; return true;
+                    start[0] = event.getRawX(); start[1] = event.getRawY(); originalY[0] = overlayParams.y; dragged[0] = false; return true;
                 case MotionEvent.ACTION_MOVE:
+                    dragged[0] |= Math.abs(event.getRawX()-start[0]) > slop || Math.abs(event.getRawY()-start[1]) > slop;
+                    if (!dragged[0]) return true;
                     overlayParams.y = Math.max(0, originalY[0] + Math.round(start[1] - event.getRawY()));
                     try { windowManager.updateViewLayout(overlay, overlayParams); } catch (Exception ignored) {}
                     return true;
-                case MotionEvent.ACTION_UP: RunPolicy.prefs(this).edit().putInt("subtitle_y",overlayParams.y).apply(); return true;
+                case MotionEvent.ACTION_UP:
+                    if (!dragged[0]) v.performClick();
+                    else RunPolicy.prefs(this).edit().putInt("subtitle_y",overlayParams.y).apply();
+                    return true;
+                case MotionEvent.ACTION_CANCEL: dragged[0] = false; return true;
                 default: return false;
             }
         });
@@ -671,7 +679,7 @@ public final class RootCallTranslationService extends Service {
             if (diag == null) return;
             diag.setVisibility(!translationOnlyOverlay && showDiagnostics ? View.VISIBLE : View.GONE);
             if (!translationOnlyOverlay && showDiagnostics) {
-                diag.setText("声音：" + diagAudio + "\n" + diagAsr + "\n翻译：" + diagTranslation);
+                diag.setText(getString(R.string.root_call_translation_02, diagAudio, diagAsr, diagTranslation));
             }
         });
     }

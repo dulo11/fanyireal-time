@@ -151,8 +151,7 @@ public final class ScreenTranslationActivity extends Activity {
         boolean enabled = ScreenTranslationAccessibilityService.isEnabled(this);
         String last = prefs.getString(ScreenTranslationAccessibilityService.PREF_SCREEN_LAST_STATUS, "尚未运行");
         if (status != null) {
-            status.setText("状态：" + (enabled ? "✅ 已开启" : "⚠ 未开启")
-                + "\n最近：" + (last == null ? "" : last));
+            status.setText(getString(R.string.screen_translation_03, (enabled ? getString(R.string.screen_translation_01) : getString(R.string.screen_translation_02)), (last == null ? getString(R.string.app_language_02) : last)));
         }
 
         boolean auto = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
@@ -162,12 +161,12 @@ public final class ScreenTranslationActivity extends Activity {
         boolean cache = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_INCREMENTAL_CACHE, true);
         boolean reverse = prefs.getBoolean(ScreenTranslationAccessibilityService.PREF_SCREEN_INPUT_REVERSE, true);
 
-        if (continuous != null) continuous.setText("全局自动翻译：" + (auto ? "✅ 开" : "关闭"));
-        if (ocrFallback != null) ocrFallback.setText("无障碍截图 OCR：" + (ocr ? "✅ 开" : "关闭"));
-        if (smartOcr != null) smartOcr.setText("整屏 OCR 补齐图片 / 漏读文字：" + (smart ? "✅ 开" : "关闭"));
-        if (skipTarget != null) skipTarget.setText("跳过已经是目标语言的文字：" + (skip ? "✅ 开" : "关闭"));
-        if (incrementalCache != null) incrementalCache.setText("网页 / 聊天增量缓存：" + (cache ? "✅ 开" : "关闭"));
-        if (inputReverse != null) inputReverse.setText("双击悬浮球发送前反向翻译：" + (reverse ? "✅ 开" : "关闭"));
+        if (continuous != null) continuous.setText(getString(R.string.screen_translation_06, (auto ? getString(R.string.screen_translation_04) : getString(R.string.screen_translation_05))));
+        if (ocrFallback != null) ocrFallback.setText(getString(R.string.screen_translation_07, (ocr ? getString(R.string.screen_translation_04) : getString(R.string.screen_translation_05))));
+        if (smartOcr != null) smartOcr.setText(getString(R.string.screen_translation_08, (smart ? getString(R.string.screen_translation_04) : getString(R.string.screen_translation_05))));
+        if (skipTarget != null) skipTarget.setText(getString(R.string.screen_translation_09, (skip ? getString(R.string.screen_translation_04) : getString(R.string.screen_translation_05))));
+        if (incrementalCache != null) incrementalCache.setText(getString(R.string.screen_translation_10, (cache ? getString(R.string.screen_translation_04) : getString(R.string.screen_translation_05))));
+        if (inputReverse != null) inputReverse.setText(getString(R.string.screen_translation_11, (reverse ? getString(R.string.screen_translation_04) : getString(R.string.screen_translation_05))));
 
         if (language != null) {
             int source = clampLanguageIndex(prefs.getInt("source_index", 2));
@@ -175,14 +174,7 @@ public final class ScreenTranslationActivity extends Activity {
             String engine = prefs.getString("engine_id", TranslationRouter.AUTO);
             if (engine == null) engine = TranslationRouter.AUTO;
             SecureConfig secure = new SecureConfig(this);
-            language.setText(
-                "对方 / 原语言：" + LanguageOption.ALL[source].label + "\n"
-                    + "我的 / 目标语言：" + LanguageOption.ALL[target].label + "\n"
-                    + "当前引擎：" + TranslationRouter.engineLabel(engine) + "\n"
-                    + "Azure 账号：" + secure.configuredAzureProfileCount() + " 个\n\n"
-                    + "整屏翻译：原语言 → 目标语言。\n"
-                    + "聊天输入框双击反向翻译：目标语言 → 原语言。"
-            );
+            language.setText(getString(R.string.screen_translation_12, LanguageOption.ALL[source].label, LanguageOption.ALL[target].label, TranslationRouter.engineLabel(engine), secure.configuredAzureProfileCount()));
         }
     }
 

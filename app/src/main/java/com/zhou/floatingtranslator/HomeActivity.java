@@ -181,20 +181,9 @@ public final class HomeActivity extends Activity {
         int sourceIndex = clampLanguageIndex(preferences.getInt("source_index", 2));
         int targetIndex = clampLanguageIndex(preferences.getInt("target_index", 0));
         RuntimeMemory.Snapshot memory = RuntimeMemory.read(this);
-        quickStatus.setText(
-            "声音：" + source + "\n" +
-            "语言：" + LanguageOption.ALL[sourceIndex].label + " → " + LanguageOption.ALL[targetIndex].label + "\n" +
-            "ASR：" + asrLabel(asr) + "\n" +
-            "对话模式：" + conversationLabel(conversation) + "\n" +
-            "ASR 精度：" + precisionLabel(precision) + "\n" +
-            "翻译：" + engineLabel(engine) + "\n" +
-            memory.compact() + "\n" +
-            "语音悬浮窗：" + (overlay ? "✅ 已授权" : "⚠ 未授权") + "\n" +
-            "全屏翻译：" + (screenTranslation
-                ? (screenContinuous ? "✅ 已开启 · 连续" : "✅ 已开启 · 点按")
-                : "⚠ 无障碍未开启") + "\n" +
-            "历史：" + HistoryStore.count(this) + " 条"
-        );
+        quickStatus.setText(getString(R.string.home_06, source, LanguageOption.ALL[sourceIndex].label, LanguageOption.ALL[targetIndex].label, asrLabel(asr), conversationLabel(conversation), precisionLabel(precision), engineLabel(engine), memory.compact(), (overlay ? getString(R.string.home_01) : getString(R.string.home_02)), (screenTranslation
+                ? (screenContinuous ? getString(R.string.home_03) : getString(R.string.home_04))
+                : getString(R.string.home_05)), HistoryStore.count(this)));
 
         if (recent != null) {
             String original = preferences.getString("last_original", "");

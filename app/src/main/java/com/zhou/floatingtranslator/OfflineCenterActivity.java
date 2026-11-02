@@ -102,7 +102,7 @@ public final class OfflineCenterActivity extends Activity {
     out.append("可用空间：").append(OfflineModelStore.human(store.availableBytes())).append("\nML Kit 不公开单模型实际体积，不能将估算显示为实测值。");
     main.post(()->{if(!destroyed&&version==refreshGeneration)readiness.setText(out.toString());});
    });
-  }).addOnFailureListener(e->{if(!destroyed)readiness.setText("读取文字模型失败："+e.getMessage());});
+  }).addOnFailureListener(e->{if(!destroyed)readiness.setText(getString(R.string.offline_center_01, e.getMessage()));});
  }
  private void preparePair(){
   if(active())return;if(RunPolicy.offline(this)){show("先切换混合模式手动准备模型，完成后切回完全离线。");return;}if(from().equals(to())){show("双方语言不能相同");return;}

@@ -95,7 +95,7 @@ public final class HistoryActivity extends Activity {
         filtered=HistoryStore.filter(HistoryStore.readAll(this),search.getText().toString(),CATEGORIES[category.getSelectedItemPosition()]);
         List<HistoryStore.Entry> entries=filtered.subList(Math.max(0,filtered.size()-200),filtered.size());
         int total = HistoryStore.count(this);
-        summary.setText("共 " + total + " 条；匹配 "+filtered.size()+" 条；当前页面显示最近 " + entries.size() + " 条");
+        summary.setText(getString(R.string.history_01, total, filtered.size(), entries.size()));
         if (entries.isEmpty()) {
             content.setText("暂无历史。开始实时翻译后会自动记录。");
             return;

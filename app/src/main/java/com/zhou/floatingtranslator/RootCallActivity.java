@@ -85,7 +85,7 @@ public final class RootCallActivity extends Activity {
             toast("Shizuku 已授权，开始扫描");
             main.postDelayed(this::scanPrivilegedAudio, 180L);
         } else {
-            rootStatus.setText("❌ Shizuku 授权被拒绝；不会自动切换到 ROOT 或麦克风");
+            rootStatus.setText(getString(R.string.root_call_01));
         }
     };
 
@@ -240,9 +240,9 @@ public final class RootCallActivity extends Activity {
                 return;
             }
             if (!ShizukuShell.hasPermission()) {
-                rootStatus.setText("正在请求 Shizuku 授权……");
+                rootStatus.setText(getString(R.string.root_call_02));
                 try { ShizukuShell.requestPermission(); }
-                catch (Exception e) { rootStatus.setText("❌ " + safe(e)); }
+                catch (Exception e) { rootStatus.setText(getString(R.string.root_call_03, safe(e))); }
                 return;
             }
         }
@@ -319,11 +319,11 @@ public final class RootCallActivity extends Activity {
         testPeak = 0;
         testBytes = 0;
         testButton.setEnabled(false);
-        rootStatus.setText("测试中：请保持目标 App 通话，并让对方持续说话约 5 秒……");
+        rootStatus.setText(getString(R.string.root_call_04));
         RootPcmSource source = new RootPcmSource(this, selectedTransport(), pcm.card, pcm.device, rate, channels,
             new RootPcmSource.Callback() {
                 @Override public void onStatus(String message) {
-                    runOnUiThread(() -> rootStatus.setText(message + "\n请保持通话有声音……"));
+                    runOnUiThread(() -> rootStatus.setText(getString(R.string.root_call_05, message)));
                 }
                 @Override public void onPcm(byte[] pcmBytes, int length, int peak) {
                     testBytes += length;
@@ -348,7 +348,7 @@ public final class RootCallActivity extends Activity {
             else if (peak < 500) level = "⚠ 有弱信号；可以再测试别的 PCM 对比";
             else level = "✅ 检测到明显内部音频，可以保存这个配置继续实测翻译";
             RunPolicy.prefs(this).edit().putString("last_call_test",new java.util.Date()+"："+level+"；峰值="+peak+"；PCM="+bytes).apply();
-            rootStatus.setText(level + "\n峰值=" + peak + " · 已转换 16k PCM=" + human(bytes)+"\n有信号不保证来自对方，请人工确认后保存配置。");
+            rootStatus.setText(getString(R.string.root_call_06, level, peak, human(bytes)));
             testButton.setEnabled(true);
         }, 6500L);
     }
@@ -379,7 +379,7 @@ public final class RootCallActivity extends Activity {
             pkg, label, selectedTransport(), pcm.card, pcm.device, selectedRate(), selectedChannels());
         RootCallProfileStore.save(this, profile);
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("input_mode", 2).apply();
-        savedStatus.setText("✅ 已保存并设为当前固定通话来源\n" + profile.summary());
+        savedStatus.setText(getString(R.string.root_call_07, profile.summary()));
         toast(profile.sourceLabel() + " 通话配置已保存");
     }
 

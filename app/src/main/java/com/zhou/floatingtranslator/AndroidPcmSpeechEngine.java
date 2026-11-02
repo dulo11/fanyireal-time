@@ -182,7 +182,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
 
             if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && !speechLanguage.isEmpty()) {
                 listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
-            } else {
+            } else if (android.os.Build.VERSION.SDK_INT >= 34) {
                 listen.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
             }
 
@@ -295,7 +295,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     @Override public void onEvent(int eventType, Bundle params) {}
 
     @Override public void onLanguageDetection(Bundle results) {
-        if (results == null) return;
+        if (results == null || android.os.Build.VERSION.SDK_INT < 34) return;
         String language = results.getString(SpeechRecognizer.DETECTED_LANGUAGE, "");
         if (language != null && !language.isEmpty()) detectedLanguage = language;
     }
