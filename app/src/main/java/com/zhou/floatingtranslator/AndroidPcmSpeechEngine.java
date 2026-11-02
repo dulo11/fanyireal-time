@@ -62,7 +62,6 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private long silenceMs;
     private boolean requestBusy;
     private int consecutiveFailures;
-    private String lastText = "";
     private String detectedLanguage = "";
     private ParcelFileDescriptor readFd;
     private ParcelFileDescriptor writeFd;
@@ -81,6 +80,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     }
 
     public void prepare() {
+        if(!RunPolicy.cloud(context)){postError(RunPolicy.blocked(),true);return;}
         main.post(() -> {
             if (closed) return;
             if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -101,6 +101,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
 
     /** Accepts 16 kHz mono PCM16 little-endian audio. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
+        if(LocalNarrator.muted())return;
         if (!isReady() || pcm == null || length <= 0) return;
         int safeLength = Math.min(length, pcm.length);
         long frameMs = Math.max(1L, Math.round((safeLength / 2.0) * 1000.0 / SAMPLE_RATE));
@@ -181,7 +182,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
 
             if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && !speechLanguage.isEmpty()) {
                 listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
-            } else {
+            } else if (android.os.Build.VERSION.SDK_INT >= 34) {
                 listen.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
             }
 
@@ -220,13 +221,10 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
             return;
         }
         consecutiveFailures = 0;
-        if (!text.equals(lastText)) {
-            lastText = text;
-            String lang = normalizeLanguage(detectedLanguage);
-            main.post(() -> {
-                if (!closed) callback.onText(text, lang);
-            });
-        }
+        String lang = normalizeLanguage(detectedLanguage);
+        main.post(() -> {
+            if (!closed) callback.onText(text, lang);
+        });
         finishCurrent(false);
     }
 
@@ -297,7 +295,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     @Override public void onEvent(int eventType, Bundle params) {}
 
     @Override public void onLanguageDetection(Bundle results) {
-        if (results == null) return;
+        if (results == null || android.os.Build.VERSION.SDK_INT < 34) return;
         String language = results.getString(SpeechRecognizer.DETECTED_LANGUAGE, "");
         if (language != null && !language.isEmpty()) detectedLanguage = language;
     }

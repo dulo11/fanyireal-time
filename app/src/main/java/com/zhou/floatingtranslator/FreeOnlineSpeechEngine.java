@@ -68,7 +68,6 @@ public final class FreeOnlineSpeechEngine implements AutoCloseable {
     private long silenceMs;
     private boolean requestBusy;
     private int consecutiveFailures;
-    private String lastTranscript = "";
 
     public FreeOnlineSpeechEngine(Context context, String mode, String languageMode,
                                   String sourceLanguage, Callback callback) {
@@ -99,6 +98,7 @@ public final class FreeOnlineSpeechEngine implements AutoCloseable {
     public boolean isReady() { return ready && !closed; }
 
     public void prepare() {
+        if(!RunPolicy.cloud(context)){postError(RunPolicy.blocked(),true);return;}
         List<String> providers = providers();
         if (providers.isEmpty()) {
             postError("免费在线 ASR 未配置。请填写 Groq Free Key 或 Cloudflare Workers AI Account ID + Token。", true);
@@ -115,6 +115,7 @@ public final class FreeOnlineSpeechEngine implements AutoCloseable {
 
     /** Accepts 16 kHz mono PCM16 LE audio. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
+        if(LocalNarrator.muted())return;
         if (!isReady() || pcm == null || length <= 0) return;
         int safeLength = Math.min(length, pcm.length);
         long frameMs = Math.max(1L, Math.round((safeLength / 2.0) * 1000.0 / SAMPLE_RATE));
@@ -174,6 +175,7 @@ public final class FreeOnlineSpeechEngine implements AutoCloseable {
                 if (closed) break;
                 try {
                     postStatus("在线识别中 · " + providerLabel(provider));
+                    RunPolicy.requireCloud(context);
                     result = transcribe(provider, chunk);
                     if (result != null && !result.text.isEmpty()) break;
                 } catch (Exception e) {
@@ -186,8 +188,7 @@ public final class FreeOnlineSpeechEngine implements AutoCloseable {
             if (result != null && !result.text.isEmpty()) {
                 consecutiveFailures = 0;
                 String cleaned = AsrTranscriptGuard.clean(result.text);
-                if (!cleaned.isEmpty() && !cleaned.equals(lastTranscript)) {
-                    lastTranscript = cleaned;
+                if (!cleaned.isEmpty()) {
                     Result finalResult = result;
                     main.post(() -> {
                         if (!closed) callback.onText(cleaned, finalResult.language, finalResult.engine);

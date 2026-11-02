@@ -131,7 +131,7 @@ public final class ScreenTranslationClient implements AutoCloseable {
                 }
             };
             if (batchEngine != null) batchEngine.translate(batch, target, batchCallback);
-            else if (secure.hasAnyAzureProfile()) translateAzureBatch(batch, target, batchCallback);
+            else if (RunPolicy.cloud(context) && !RunPolicy.localFirst(context) && secure.hasAnyAzureProfile()) translateAzureBatch(batch, target, batchCallback);
             else translateWithCurrentEngine(batch, target, batchCallback);
         }
         int completed() {
@@ -166,6 +166,7 @@ public final class ScreenTranslationClient implements AutoCloseable {
     private void translateAzureBatch(List<String> texts, String targetLanguage, Callback callback) {
         network.execute(() -> {
             try {
+                RunPolicy.requireCloud(context);
                 List<Integer> slots = secure.configuredAzureSlots();
                 if (slots.isEmpty()) throw new IllegalStateException("未配置 Azure 账号");
 

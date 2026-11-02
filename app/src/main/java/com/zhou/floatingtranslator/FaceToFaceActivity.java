@@ -63,6 +63,25 @@ public final class FaceToFaceActivity extends Activity {
     private final ArrayList<String> asrIds = new ArrayList<>();
     private final ArrayList<String> conversationLines = new ArrayList<>();
     private final ArrayDeque<ContinuousUtterance> pendingUtterances = new ArrayDeque<>();
+    private SessionHealth health;
+    private ContinuousUtterance activeUtterance;
+    private void saveUnfinished(ContinuousUtterance item,String reason) {
+        if(item==null)return;
+        String mine=((LanguageOption)myLanguage.getSelectedItem()).mlKitTag;
+        String other=((LanguageOption)partnerFallback.getSelectedItem()).mlKitTag;
+        String source=item.language.isEmpty()?other:item.language;
+        String target=OfflineFirstTranslationRouter.sameLanguage(source,mine)?other:mine;
+        FailureStore.add(this,item.text,source,target,TranslationRouter.AUTO,"conversation",reason);
+    }
+    private void startHealth(){
+        if(health!=null)health.close();
+        health=new SessionHealth(this,"面对面",()->pendingUtterances.size()+(translating?1:0),(held,reason)->{
+            if(offlineSession!=null)offlineSession.holdCapture(held);
+            if(held&&recognizer!=null)try{recognizer.stopListening();}catch(Exception ignored){}
+            if(!held&&continuousMode&&!persistentOfflineCapture)scheduleContinuousNext(250);
+            status.setText(reason.isEmpty()?"采音已恢复":reason);
+        });
+    }
     private final ArrayDeque<EchoSample> recentTtsEchoes = new ArrayDeque<>();
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -94,12 +113,17 @@ public final class FaceToFaceActivity extends Activity {
         startContinuousCapture();
     };
 
+    private final LocalNarrator.Listener narratorListener=new LocalNarrator.Listener(){
+        public void pauseCapture(){if(offlineSession!=null)offlineSession.flush();else destroySystemRecognizer();}
+        public void resumeCapture(){if(continuousMode&&!destroyed&&!persistentOfflineCapture)scheduleContinuousNext(250L);}
+    };
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         setTitle("面对面翻译");
         setContentView(buildUi());
         initTts();
+        LocalNarrator.register(narratorListener);
     }
 
     private View buildUi() {
@@ -238,7 +262,7 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void initTts() {
-        tts = new TextToSpeech(this, result -> ttsReady = result == TextToSpeech.SUCCESS);
+        // TTS is initialized lazily when a translation is spoken.
     }
 
     private void toggleContinuous() {
@@ -265,6 +289,7 @@ public final class FaceToFaceActivity extends Activity {
         saveLanguageSettings();
         rebuildTranslator();
         continuousMode = true;
+        startHealth();
         pendingUtterances.clear();
         recentTtsEchoes.clear();
         persistentOfflineCapture = false;
@@ -275,14 +300,14 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void startContinuousCapture() {
-        if (!continuousMode || destroyed || listening) return;
+        if (!continuousMode || destroyed || listening || (health!=null&&health.held())) return;
         LanguageOption fallback = (LanguageOption) partnerFallback.getSelectedItem();
         boolean fixed = ConversationLanguagePolicy.FIXED.equals(languageMode());
         LanguageOption input = fixed ? (LanguageOption) fixedInputLanguage.getSelectedItem() : fallback;
         String asr = selectConversationAsr(input.mlKitTag);
         if (asr == null) {
             cancelTurn();
-            status.setText("没有适合当前模式的已下载模型：自动双向需多语言模型；固定输入请用 Whisper、SenseVoice、Vosk 或系统识别");
+            status.setText(getString(R.string.face_to_face_01));
             languageStatus.setText("请核对语言模式、输入语言和语音识别引擎");
             return;
         }
@@ -293,9 +318,10 @@ public final class FaceToFaceActivity extends Activity {
             updateButtons();
             offlineSession = new FaceOfflineSession(this, asr, input.mlKitTag, !fixed,
                 new FaceOfflineSession.Callback() {
+                    @Override public void ready(String name){if(health!=null)health.asr(name);}
                     @Override public void status(String value) {
                         if (generation == session && continuousMode && !translating) {
-                            status.setText("持续监听 · " + value);
+                            status.setText(getString(R.string.face_to_face_02, value));
                         }
                     }
                     @Override public void result(String text, String language) {
@@ -306,11 +332,12 @@ public final class FaceToFaceActivity extends Activity {
                         if (generation != session || !continuousMode) return;
                         stopRecognition();
                         persistentOfflineCapture = false;
-                        status.setText("连续识别失败：" + text + " · 将重启");
+                        status.setText(getString(R.string.face_to_face_03, text));
                         updateButtons();
                         scheduleContinuousNext(900L);
                     }
                 });
+            offlineSession.setHealth(health);
             offlineSession.start();
             return;
         }
@@ -368,6 +395,7 @@ public final class FaceToFaceActivity extends Activity {
                         status.setText(text);
                     }
                 });
+            offlineSession.setHealth(health);
             offlineSession.start();
             return;
         }
@@ -376,6 +404,8 @@ public final class FaceToFaceActivity extends Activity {
 
     private void startSystemRecognition(int session, boolean continuous, boolean partnerManual,
                                         String fallbackSpeechTag) {
+        if(LocalNarrator.muted())return;
+        if(!RunPolicy.cloud(this)){cancelTurn();status.setText(RunPolicy.blocked());return;}
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             listening = false;
             if (continuous) {
@@ -393,6 +423,7 @@ public final class FaceToFaceActivity extends Activity {
         recognizer = SpeechRecognizer.createSpeechRecognizer(this);
         recognizer.setRecognitionListener(new RecognitionListener() {
             @Override public void onReadyForSpeech(Bundle b) {
+                if(health!=null)health.asr("Android 系统语音识别");
                 if (generation == session && recognitionGeneration == captureId) status.setText(continuous
                     ? "持续监听中 · 同一方可以连续说多句…"
                     : (partnerManual ? "请让对方说话…" : "请说话…"));
@@ -406,12 +437,12 @@ public final class FaceToFaceActivity extends Activity {
                 listening = false;
                 destroySystemRecognizer();
                 if (continuousMode && continuous) {
-                    status.setText("本句未识别（" + error + "），继续监听…");
+                    status.setText(getString(R.string.face_to_face_04, error));
                     updateButtons();
                     scheduleContinuousNext(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 1000L : 220L);
                 } else {
                     cancelTurn();
-                    status.setText("语音识别未完成（" + error + "），可重试或换离线模型");
+                    status.setText(getString(R.string.face_to_face_05, error));
                 }
             }
             @Override public void onResults(Bundle b) {
@@ -470,11 +501,11 @@ public final class FaceToFaceActivity extends Activity {
             listening = false;
             destroySystemRecognizer();
             if (continuousMode && continuous) {
-                status.setText("启动语音识别失败：" + safe(e) + " · 将重试");
+                status.setText(getString(R.string.face_to_face_06, safe(e)));
                 scheduleContinuousNext(900L);
             } else {
                 cancelTurn();
-                status.setText("启动语音识别失败：" + safe(e));
+                status.setText(getString(R.string.face_to_face_07, safe(e)));
             }
         }
     }
@@ -483,38 +514,35 @@ public final class FaceToFaceActivity extends Activity {
         if (!continuousMode || generation != session || text == null) return;
         String cleaned = text.trim();
         if (cleaned.isEmpty()) return;
-        if (looksLikeRecentTtsEcho(cleaned)) {
-            status.setText("持续监听 · 已忽略手机自身朗读回声");
-            return;
-        }
-        while (pendingUtterances.size() >= MAX_PENDING_UTTERANCES) pendingUtterances.pollFirst();
         pendingUtterances.addLast(new ContinuousUtterance(cleaned, language == null ? "" : language));
-        status.setText("持续监听 · 待处理 " + pendingUtterances.size() + " 句");
+        status.setText(getString(R.string.face_to_face_10, (pendingUtterances.size() >= MAX_PENDING_UTTERANCES ? getString(R.string.face_to_face_08) : getString(R.string.face_to_face_09)), pendingUtterances.size()));
         drainContinuousQueue(session);
     }
 
     private void drainContinuousQueue(int session) {
         if (!continuousMode || destroyed || generation != session || translating) return;
         ContinuousUtterance item = pendingUtterances.pollFirst();
+        activeUtterance=item;
         if (item == null) {
             if (persistentOfflineCapture && listening) status.setText("持续监听中 · 可继续说，不要求双方轮流");
             return;
         }
         if (translator == null) rebuildTranslator();
         translating = true;
+        if(health!=null)health.beginTranslation();
         updateButtons();
         translator.translateConversation(item.text, item.language, languageMode(),
             ((LanguageOption) fixedInputLanguage.getSelectedItem()).mlKitTag, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 if (destroyed || !continuousMode || generation != session) return;
+                activeUtterance=null;
+                if(health!=null)health.translated(engineName);
                 translating = false;
                 String detected = translator == null ? "" : translator.lastDetectedLanguage();
                 LanguageOption my = (LanguageOption) myLanguage.getSelectedItem();
                 boolean mySpoke = !ConversationLanguagePolicy.FIXED.equals(languageMode())
                     && OfflineFirstTranslationRouter.sameLanguage(detected, my.mlKitTag);
-                languageStatus.setText("识别原文：" + item.text + "\nASR："
-                    + (item.language.isEmpty() ? "未提供标签" : item.language)
-                    + " · 确认方向：" + detected + " → " + translator.lastTargetLanguage());
+                languageStatus.setText(getString(R.string.face_to_face_12, item.text, (item.language.isEmpty() ? getString(R.string.face_to_face_11) : item.language), detected, translator.lastTargetLanguage()));
                 boolean spokePartner = !mySpoke;
                 if (mySpoke) {
                     myOriginal.setText(item.text);
@@ -525,18 +553,19 @@ public final class FaceToFaceActivity extends Activity {
                 }
                 saveRecent(item.text, translated);
                 appendConversation(mySpoke ? "我" : "对方", item.text, translated, detected);
-                status.setText(engineName + " · 麦克风仍在持续监听");
+                status.setText(getString(R.string.face_to_face_13, engineName));
                 updateButtons();
-                if (continuousSpeak.isChecked()) speakResult(translated, spokePartner, true);
+                if (continuousSpeak.isChecked() || !"text".equals(RunPolicy.prefs(FaceToFaceActivity.this).getString("output_mode","text"))) speakResult(translated, spokePartner, true);
                 drainContinuousQueue(session);
             }
 
             @Override public void onError(String message) {
                 if (destroyed || !continuousMode || generation != session) return;
                 translating = false;
-                languageStatus.setText("未翻译原文：" + item.text + "\nASR：" + item.language + "\n" + message);
+                saveUnfinished(item,message);activeUtterance=null;
+                languageStatus.setText(getString(R.string.face_to_face_14, item.text, item.language, message));
                 appendConversation("待确认", item.text, "未翻译：" + message, item.language);
-                status.setText("翻译失败：" + message + " · 麦克风仍在监听");
+                status.setText(getString(R.string.face_to_face_15, message));
                 updateButtons();
                 drainContinuousQueue(session);
             }
@@ -544,14 +573,17 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void translateManualTranscript(String original, boolean spokePartner, String detected, int session) {
+        activeUtterance=new ContinuousUtterance(original,spokePartner?((LanguageOption)partnerFallback.getSelectedItem()).mlKitTag:((LanguageOption)myLanguage.getSelectedItem()).mlKitTag);
         if (translator == null) rebuildTranslator();
         translating = true;
+        if(health!=null)health.beginTranslation();
         updateButtons();
         if (spokePartner) partnerOriginal.setText(original); else myOriginal.setText(original);
         status.setText("正在翻译…");
         translator.translateTurn(original, spokePartner, detected, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 if (destroyed || generation != session) return;
+                activeUtterance=null;
                 translating = false;
                 updateButtons();
                 if (spokePartner) partnerTranslated.setText(translated); else myTranslated.setText(translated);
@@ -559,69 +591,25 @@ public final class FaceToFaceActivity extends Activity {
                 saveRecent(original, translated);
                 appendConversation(spokePartner ? "对方" : "我", original, translated,
                     translator == null ? "" : translator.lastDetectedLanguage());
-                if (autoSpeak.isChecked()) speakResult(translated, spokePartner, false);
+                if (autoSpeak.isChecked() || !"text".equals(RunPolicy.prefs(FaceToFaceActivity.this).getString("output_mode","text"))) speakResult(translated, spokePartner, false);
             }
             @Override public void onError(String message) {
                 if (destroyed || generation != session) return;
+                activeUtterance=null;
                 translating = false;
                 updateButtons();
-                status.setText("翻译失败：" + message);
+                String source=spokePartner?((LanguageOption)partnerFallback.getSelectedItem()).mlKitTag:((LanguageOption)myLanguage.getSelectedItem()).mlKitTag;
+                String target=spokePartner?((LanguageOption)myLanguage.getSelectedItem()).mlKitTag:((LanguageOption)partnerFallback.getSelectedItem()).mlKitTag;
+                FailureStore.add(FaceToFaceActivity.this,original,source,target,TranslationRouter.AUTO,"conversation",message);
+                status.setText(getString(R.string.face_to_face_16, message));
             }
         });
     }
 
-    private boolean speakResult(String value, boolean partnerSpoke, boolean continuous) {
-        if (!ttsReady || tts == null || value == null || value.trim().isEmpty()) return false;
-        LanguageOption my = (LanguageOption) myLanguage.getSelectedItem();
-        LanguageOption fallback = (LanguageOption) partnerFallback.getSelectedItem();
-        String lang = partnerSpoke ? my.mlKitTag
-            : (translator == null ? fallback.mlKitTag : translator.partnerLanguage());
-        try {
-            int result = tts.setLanguage(Locale.forLanguageTag(lang));
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                status.append(" · 当前设备缺少该语言朗读语音包");
-                return false;
-            }
-            int queueMode = continuous ? TextToSpeech.QUEUE_ADD : TextToSpeech.QUEUE_FLUSH;
-            String utteranceId = "face-translation-" + (++utteranceCounter);
-            int speak = tts.speak(value, queueMode, null, utteranceId);
-            if (speak == TextToSpeech.SUCCESS && continuous) rememberTtsEcho(value);
-            return speak == TextToSpeech.SUCCESS;
-        } catch (Exception e) {
-            status.append(" · 朗读失败");
-            return false;
-        }
-    }
-
-    private void rememberTtsEcho(String value) {
-        purgeOldEchoes();
-        recentTtsEchoes.addLast(new EchoSample(compact(value), android.os.SystemClock.elapsedRealtime()));
-        while (recentTtsEchoes.size() > 8) recentTtsEchoes.pollFirst();
-    }
-
-    private boolean looksLikeRecentTtsEcho(String value) {
-        purgeOldEchoes();
-        String candidate = compact(value);
-        if (candidate.length() < 2) return false;
-        for (EchoSample sample : recentTtsEchoes) {
-            if (sample.text.equals(candidate)) return true;
-            if (candidate.length() >= 4 && sample.text.length() >= 4
-                && (sample.text.contains(candidate) || candidate.contains(sample.text))) return true;
-        }
-        return false;
-    }
-
-    private void purgeOldEchoes() {
-        long now = android.os.SystemClock.elapsedRealtime();
-        while (!recentTtsEchoes.isEmpty()
-            && now - recentTtsEchoes.peekFirst().at > TTS_ECHO_WINDOW_MS) {
-            recentTtsEchoes.pollFirst();
-        }
-    }
-
-    private static String compact(String value) {
-        if (value == null) return "";
-        return value.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
+    private boolean speakResult(String value,boolean partnerSpoke,boolean continuous){
+        LanguageOption my=(LanguageOption)myLanguage.getSelectedItem(),fallback=(LanguageOption)partnerFallback.getSelectedItem();
+        String lang=partnerSpoke?my.mlKitTag:(translator==null?fallback.mlKitTag:translator.partnerLanguage());
+        LocalNarrator.get(this).speak(value,lang);status.append(" · 播报期间暂停采音，结束后继续");return true;
     }
 
     private String languageMode() {
@@ -651,17 +639,14 @@ public final class FaceToFaceActivity extends Activity {
         }
         OfflineModelStore store = new OfflineModelStore(this);
         try {
-            String[] ids = fixed
-                ? new String[]{TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_WHISPER_SMALL, TranslationService.ASR_SENSEVOICE}
-                : new String[]{TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_MEDIUM,
-                    TranslationService.ASR_WHISPER_SMALL, TranslationService.ASR_SENSEVOICE, TranslationService.ASR_OMNILINGUAL};
+            java.util.List<String> ids=ModelAdvisor.order(this,input,mine,!fixed);
             for (String id : ids) {
                 boolean compatible = fixed ? ConversationLanguagePolicy.supportsFixed(id, input)
                     : ConversationLanguagePolicy.supportsAutomatic(id, mine, input);
                 if (compatible && store.isInstalled(id)) return id;
             }
             if (fixed && OfflineSpeechEngine.isLanguageInstalled(this, input)) return "vosk";
-            return SpeechRecognizer.isRecognitionAvailable(this) ? "system" : null;
+            return RunPolicy.cloud(this) && SpeechRecognizer.isRecognitionAvailable(this) ? "system" : null;
         } finally { store.close(); }
     }
 
@@ -669,19 +654,17 @@ public final class FaceToFaceActivity extends Activity {
         String selected = asrIds.get(asrSpinner.getSelectedItemPosition());
         OfflineModelStore store = new OfflineModelStore(this);
         try {
-            if ("system".equals(selected)) return selected;
+            if ("system".equals(selected)) return RunPolicy.cloud(this)?selected:null;
             if ("vosk".equals(selected)) return OfflineSpeechEngine.isLanguageInstalled(this, language) ? selected : null;
             if (!"auto".equals(selected)) return store.isInstalled(selected) ? selected : null;
-            String[] candidates = {TranslationService.ASR_WHISPER_SMALL, TranslationService.ASR_QWEN3,
-                TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL,
-                TranslationService.ASR_SENSEVOICE};
+            java.util.List<String> candidates=ModelAdvisor.order(this,language,language,false);
             for (String id : candidates) {
                 if (TranslationService.ASR_SENSEVOICE.equals(id)
                     && !("zh".equals(language) || "en".equals(language) || "ja".equals(language)
                         || "ko".equals(language) || "yue".equals(language))) continue;
                 if (store.isInstalled(id)) return id;
             }
-            if (SpeechRecognizer.isRecognitionAvailable(this)) return "system";
+            if (RunPolicy.cloud(this) && SpeechRecognizer.isRecognitionAvailable(this)) return "system";
             if (OfflineSpeechEngine.isLanguageInstalled(this, language)) return "vosk";
             return null;
         } finally { store.close(); }
@@ -699,6 +682,7 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void saveRecent(String original, String translated) {
+        HistoryStore.append(this, original, translated,"conversation");
         prefs.edit().putString("last_original", original)
             .putString("last_translation", translated).apply();
     }
@@ -783,6 +767,9 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void cancelTurn() {
+        if(health!=null){health.close();health=null;}
+        saveUnfinished(activeUtterance,"会话停止，译文尚未完成");activeUtterance=null;
+        for(ContinuousUtterance pending:pendingUtterances)saveUnfinished(pending,"会话停止，等待重试");
         continuousMode = false;
         pendingPermissionForContinuous = false;
         generation++;
@@ -794,7 +781,7 @@ public final class FaceToFaceActivity extends Activity {
         recentTtsEchoes.clear();
         if (translator != null) { translator.close(); translator = null; }
         translatorPair = "";
-        if (tts != null) tts.stop();
+        LocalNarrator.stopIfCreated();
         updateButtons();
     }
 
@@ -806,7 +793,7 @@ public final class FaceToFaceActivity extends Activity {
     @Override protected void onDestroy() {
         destroyed = true;
         cancelTurn();
-        if (tts != null) tts.shutdown();
+        LocalNarrator.unregister(narratorListener);
         super.onDestroy();
     }
 

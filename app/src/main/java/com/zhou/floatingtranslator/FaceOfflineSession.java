@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 final class FaceOfflineSession implements AutoCloseable {
     interface Callback {
         void status(String text);
+        default void ready(String name) {}
         void result(String text, String language);
         void error(String text);
     }
@@ -23,7 +24,10 @@ final class FaceOfflineSession implements AutoCloseable {
     private final ExecutorService capture = Executors.newSingleThreadExecutor();
     private final Callback callback;
     private final String myLanguage;
-    private volatile boolean closed;
+    private volatile boolean closed, captureHeld;
+    private SessionHealth health;
+    void setHealth(SessionHealth value){health=value;}
+    void holdCapture(boolean value){captureHeld=value;if(value)flush();}
     private volatile AudioRecord record;
     private SherpaSpeechEngine sherpa;
     private OfflineSpeechEngine vosk;
@@ -57,6 +61,8 @@ final class FaceOfflineSession implements AutoCloseable {
         }
     }
 
+    void flush(){if(vosk!=null)vosk.finishCurrentUtterance();if(sherpa!=null)sherpa.flush();}
+
     void start() { if (vosk != null) vosk.prepare(); else sherpa.prepare(); }
 
     private void deliver(String text, String language) {
@@ -88,6 +94,7 @@ final class FaceOfflineSession implements AutoCloseable {
                 }
                 if (local.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                     throw new IllegalStateException("麦克风被其他应用占用");
+                main.post(()->{if(!closed)callback.ready(name);});
                 effects = MicAudioEffects.attach(local, MicAudioEffects.MODE_NEAR);
                 byte[] data = new byte[3200];
                 while (!closed) {
@@ -99,6 +106,8 @@ final class FaceOfflineSession implements AutoCloseable {
                         int sample = (short) ((data[i] & 255) | (data[i + 1] << 8));
                         peak = Math.max(peak, Math.abs(sample));
                     }
+                    if(health!=null)health.audio(peak);
+                    if(captureHeld)continue;
                     if (vosk != null) vosk.acceptPcm(data, n);
                     else if (sherpa != null) sherpa.acceptPcm(data, n, peak);
                 }

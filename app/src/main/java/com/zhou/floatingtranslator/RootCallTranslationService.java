@@ -54,6 +54,7 @@ public final class RootCallTranslationService extends Service {
     private volatile boolean running;
     private volatile boolean paused;
     private boolean cloudSpeechMode;
+    private boolean triedAutoOnline;
     private boolean cloudRequestBusy;
     private boolean allowYoudaoSpeech;
     private String asrMode = TranslationService.ASR_AUTO;
@@ -73,6 +74,8 @@ public final class RootCallTranslationService extends Service {
     private String lastStreamTranslated = "";
     private boolean translateBusy;
     private final SpeechQueue speechQueue = new SpeechQueue();
+    private SessionHealth health;
+    private SpeechQueue.Item inFlight;
     private final SmartSentenceAssembler sentenceAssembler = new SmartSentenceAssembler();
 
     private WindowManager windowManager;
@@ -86,8 +89,13 @@ public final class RootCallTranslationService extends Service {
     private volatile String diagAsr = "ASR 未启动";
     private volatile String diagTranslation = "翻译未启动";
 
+    private final LocalNarrator.Listener narratorListener=new LocalNarrator.Listener(){
+        public void pauseCapture(){if(sherpa!=null)sherpa.flush();if(vosk!=null)vosk.finishCurrentUtterance();if(onlineSpeech!=null)onlineSpeech.flush();if(pcmSystemSpeech!=null)pcmSystemSpeech.flush();}
+        public void resumeCapture(){}
+    };
     @Override public void onCreate() {
         super.onCreate();
+        LocalNarrator.register(narratorListener);
         NotificationChannel channel = new NotificationChannel(
             CHANNEL_ID, "内部通话翻译", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
@@ -141,9 +149,15 @@ public final class RootCallTranslationService extends Service {
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoModels.clear();
+        triedAutoOnline=false;
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
+        health=new SessionHealth(this,"通话",()->speechQueue.size()+(translateBusy?1:0),(held,reason)->{
+            if(held){if(vosk!=null)vosk.finishCurrentUtterance();if(sherpa!=null)sherpa.flush();if(onlineSpeech!=null)onlineSpeech.flush();if(pcmSystemSpeech!=null)pcmSystemSpeech.flush();}
+            showStatus(reason.isEmpty()?"采音已恢复":reason);updateNotification(reason.isEmpty()?"采音已恢复":reason);
+        });
+        health.direction(sourceMlTag+" → "+targetMlTag);
         createOverlay(fontSize);
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
         diagTranslation = translator.selectedEngineName();
@@ -157,6 +171,7 @@ public final class RootCallTranslationService extends Service {
 
     private void prepareAsr(RootCallProfileStore.Profile profile) {
         if (!running) return;
+        if (!TranslationService.ASR_AUTO.equals(asrMode) && !RunPolicy.localAsr(asrMode) && !RunPolicy.cloud(this)) { showStatus(RunPolicy.blocked()); return; }
         if (TranslationService.ASR_SYSTEM.equals(asrMode)) {
             startSystemPcm(profile, false);
             return;
@@ -180,6 +195,7 @@ public final class RootCallTranslationService extends Service {
             return;
         }
         if (TranslationService.ASR_AUTO.equals(asrMode)) {
+            if (RunPolicy.localFirst(this)) { prepareAutoLocal(profile); return; }
             if (SpeechRecognizer.isRecognitionAvailable(this)) {
                 startSystemPcm(profile, true);
                 return;
@@ -222,6 +238,7 @@ public final class RootCallTranslationService extends Service {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = TranslationService.ASR_SYSTEM;
                     diagAsr = "ASR：" + engineName + " · " + profile.sourceLabel() + " PCM";
@@ -233,7 +250,7 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：Android 系统外部 PCM · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -254,10 +271,13 @@ public final class RootCallTranslationService extends Service {
     private void prepareAutoLocal(RootCallProfileStore.Profile profile) {
         String selected = bestInstalledSherpa();
         if (selected != null) startSherpa(selected, profile, true);
-        else startVosk(profile, true);
+        else if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode) && OfflineSpeechEngine.isLanguageInstalled(this,sourceMlTag)) startVosk(profile,true);
+        else if(!triedAutoOnline && RunPolicy.cloud(this) && FreeOnlineSpeechEngine.hasAnyConfigured(this)) startFreeOnline(TranslationService.ASR_FREE_ONLINE,profile,true);
+        else showStatus("没有可用语音模型，请在离线中心准备模型；"+RunPolicy.blocked());
     }
 
     private void startFreeOnline(String mode, RootCallProfileStore.Profile profile, boolean autoFallback) {
+        triedAutoOnline=true;
         closeSystemPcm();
         closeOnline();
         closeOnline();
@@ -273,6 +293,7 @@ public final class RootCallTranslationService extends Service {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = mode;
                     diagAsr = "ASR：" + engineName + " · 内部 PCM";
@@ -284,7 +305,7 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + engineName + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -300,24 +321,7 @@ public final class RootCallTranslationService extends Service {
         onlineSpeech.prepare();
     }
 
-    private String bestInstalledSherpa() {
-        OfflineModelStore store = new OfflineModelStore(this);
-        try {
-            String[] order;
-            boolean mixed = !SherpaSpeechEngine.LANG_SINGLE.equals(languageMode);
-            if (mixed) order = new String[]{TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL};
-            else if ("ja".equals(sourceMlTag)) order = new String[]{TranslationService.ASR_REAZON,
-                TranslationService.ASR_PARAKEET, TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL};
-            else order = new String[]{TranslationService.ASR_SENSEVOICE, TranslationService.ASR_WHISPER_SMALL,
-                TranslationService.ASR_QWEN3, TranslationService.ASR_WHISPER_MEDIUM, TranslationService.ASR_OMNILINGUAL};
-            for (String id : order) if (!failedAutoModels.contains(id) && store.isInstalled(id)) return id;
-            return null;
-        } finally {
-            store.close();
-        }
-    }
+    private String bestInstalledSherpa() { return ModelAdvisor.installed(this,sourceMlTag,targetMlTag,!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode),failedAutoModels); }
 
     private void startSherpa(String modelId, RootCallProfileStore.Profile profile, boolean autoFallback) {
         OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
@@ -334,6 +338,7 @@ public final class RootCallTranslationService extends Service {
                     updateNotification(message);
                 }
                 @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                     if (!running) return;
                     activeAsrMode = modelId;
                     diagAsr = "ASR：" + engineName + " · 内部 PCM";
@@ -345,7 +350,7 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + meta.name + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
+                    if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message) {
@@ -355,7 +360,7 @@ public final class RootCallTranslationService extends Service {
                         failedAutoModels.add(modelId);
                         closeSherpa();
                         String next = bestInstalledSherpa();
-                        if (next != null) startSherpa(next, profile, true); else startVosk(profile, true);
+                        if (next != null) startSherpa(next, profile, true); else prepareAutoLocal(profile);
                     } else showStatus(meta.name + " 失败：" + message);
                 }
             });
@@ -381,6 +386,7 @@ public final class RootCallTranslationService extends Service {
                 renderDiag();
             }
             @Override public void onReady(String engineName) {
+                    if(health!=null)health.asr(engineName);
                 if (!running) return;
                 activeAsrMode = TranslationService.ASR_VOSK;
                 diagAsr = "ASR：" + engineName + " · 内部 PCM";
@@ -427,6 +433,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void consumePcm(byte[] pcm, int length, int peak) {
+        if(health!=null){health.audio(peak);if(health.held())return;}
         long now = SystemClock.elapsedRealtime();
         updateLevel(peak, now);
         AndroidPcmSpeechEngine pcmSystem = pcmSystemSpeech;
@@ -447,7 +454,7 @@ public final class RootCallTranslationService extends Service {
         long now = SystemClock.elapsedRealtime();
         diagAsr = "ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned);
         renderDiag();
-        if (showOriginal && original != null) original.setText("原文：" + cleaned);
+        if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, cleaned));
         if (committed) {
             lastStreamTranslated = "";
             queueTranslate(cleaned, true);
@@ -486,16 +493,20 @@ public final class RootCallTranslationService extends Service {
         String cleaned = next.text;
         OfflineFirstTranslationRouter current = translator;
         if (current == null) return;
-        translateBusy = true;
+        translateBusy = true;inFlight=next;
+        if(health!=null)health.beginTranslation();
         diagTranslation = "翻译中";
         renderDiag();
         current.translate(cleaned, next.language, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
                 if (!running || translator != current) return;
+                if(health!=null)health.translated(engineName);
                 diagTranslation = engineName;
                 renderDiag();
                 if (translated != null) translated.setText(translationOnlyOverlay ? out : "译文：" + out);
                 if (next.complete) {
+                    HistoryStore.append(RootCallTranslationService.this, cleaned, out,"call");
+                    LocalNarrator.translated(RootCallTranslationService.this,out,targetMlTag);
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putString("last_original", cleaned).putString("last_translation", out).apply();
                 }
@@ -503,15 +514,17 @@ public final class RootCallTranslationService extends Service {
             }
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
+                if(next.complete)FailureStore.add(RootCallTranslationService.this,cleaned,FailureStore.source(sourceMlTag,next.language),targetMlTag,engineId,"call",message);
                 diagTranslation = "翻译失败：" + message;
                 renderDiag();
-                if (!translationOnlyOverlay && translated != null) translated.setText("翻译失败：" + message);
+                if (!translationOnlyOverlay && translated != null) translated.setText(getString(R.string.face_to_face_16, message));
                 finishTranslate();
             }
         });
     }
 
     private void finishTranslate() {
+        inFlight=null;
         translateBusy = false;
         drainTranslateQueue();
     }
@@ -543,7 +556,7 @@ public final class RootCallTranslationService extends Service {
                 if (text.isEmpty()) return;
                 diagAsr = "ASR：有道云 · " + preview(text);
                 renderDiag();
-                if (showOriginal && original != null) original.setText("原文：" + text);
+                if (showOriginal && original != null) original.setText(getString(R.string.root_call_translation_01, text));
                 queueTranslate(text, true);
             }
             @Override public void onError(String message) {
@@ -555,6 +568,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private boolean canUseYoudaoSpeech() {
+        if (!RunPolicy.cloud(this)) return false;
         return allowYoudaoSpeech && translator != null && translator.hasYoudaoCredentials();
     }
 
@@ -578,6 +592,7 @@ public final class RootCallTranslationService extends Service {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(8), dp(14), dp(10));
         box.setBackgroundResource(R.drawable.panel);
+        box.getBackground().setAlpha(RunPolicy.prefs(this).getInt("subtitle_alpha",220));
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -598,6 +613,7 @@ public final class RootCallTranslationService extends Service {
         original.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translated = overlayText(fontSize, Color.WHITE);
         translated.setTypeface(null, android.graphics.Typeface.BOLD);
+        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text"))){translated.setVisibility(View.GONE);original.setVisibility(View.GONE);}
         box.addView(original, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translated, new LinearLayout.LayoutParams(-1, -2));
 
@@ -606,7 +622,7 @@ public final class RootCallTranslationService extends Service {
             getResources().getDisplayMetrics().widthPixels - dp(24), -2,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        overlayParams.y = dp(110);
+        overlayParams.y=RunPolicy.prefs(this).getInt("subtitle_y",dp(110));
         overlay = box;
         makeDraggable(box);
         windowManager.addView(overlay, overlayParams);
@@ -633,16 +649,24 @@ public final class RootCallTranslationService extends Service {
     private void makeDraggable(View view) {
         final float[] start = new float[2];
         final int[] originalY = new int[1];
+        final boolean[] dragged = new boolean[1];
+        final int slop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
         view.setOnTouchListener((v, event) -> {
             if (overlayParams == null || windowManager == null || overlay == null) return false;
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
-                    start[0] = event.getRawX(); start[1] = event.getRawY(); originalY[0] = overlayParams.y; return true;
+                    start[0] = event.getRawX(); start[1] = event.getRawY(); originalY[0] = overlayParams.y; dragged[0] = false; return true;
                 case MotionEvent.ACTION_MOVE:
+                    dragged[0] |= Math.abs(event.getRawX()-start[0]) > slop || Math.abs(event.getRawY()-start[1]) > slop;
+                    if (!dragged[0]) return true;
                     overlayParams.y = Math.max(0, originalY[0] + Math.round(start[1] - event.getRawY()));
                     try { windowManager.updateViewLayout(overlay, overlayParams); } catch (Exception ignored) {}
                     return true;
-                case MotionEvent.ACTION_UP: return true;
+                case MotionEvent.ACTION_UP:
+                    if (!dragged[0]) v.performClick();
+                    else RunPolicy.prefs(this).edit().putInt("subtitle_y",overlayParams.y).apply();
+                    return true;
+                case MotionEvent.ACTION_CANCEL: dragged[0] = false; return true;
                 default: return false;
             }
         });
@@ -671,7 +695,7 @@ public final class RootCallTranslationService extends Service {
             if (diag == null) return;
             diag.setVisibility(!translationOnlyOverlay && showDiagnostics ? View.VISIBLE : View.GONE);
             if (!translationOnlyOverlay && showDiagnostics) {
-                diag.setText("声音：" + diagAudio + "\n" + diagAsr + "\n翻译：" + diagTranslation);
+                diag.setText(getString(R.string.root_call_translation_02, diagAudio, diagAsr, diagTranslation));
             }
         });
     }
@@ -751,6 +775,10 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void stopPipeline() {
+        if(health!=null){health.close();health=null;}
+        if(inFlight!=null&&inFlight.complete)FailureStore.add(this,inFlight.text,FailureStore.source(sourceMlTag,inFlight.language),targetMlTag,engineId,"call","会话停止，译文尚未完成");
+        inFlight=null;SpeechQueue.Item pending;
+        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,FailureStore.source(sourceMlTag,pending.language),targetMlTag,engineId,"call","会话停止，等待重试");
         running = false;
         RootPcmSource r = rootSource;
         rootSource = null;
@@ -790,6 +818,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     @Override public void onDestroy() {
+        LocalNarrator.unregister(narratorListener);LocalNarrator.stopIfCreated();
         stopPipeline();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", false).apply();
         removeOverlay();

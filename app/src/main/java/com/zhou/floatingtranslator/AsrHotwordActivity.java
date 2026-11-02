@@ -129,7 +129,7 @@ public final class AsrHotwordActivity extends Activity {
         int count = 0;
         for (String line : raw.split("\\r?\\n")) if (!line.trim().isEmpty()) count++;
         float score = prefs.getFloat(KEY_SCORE, 1.8f);
-        status.setText("当前：" + count + " 个热词 · 偏置强度 " + score + "\n修改后，下次重新启动 ASR 时生效。");
+        status.setText(getString(R.string.asr_hotword_01, count, score));
     }
 
     private Button button(String value) {

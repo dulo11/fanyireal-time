@@ -51,6 +51,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     private volatile String partnerLanguage;
     private volatile String lastDetectedLanguage = "";
     private String lastTargetLanguage = "";
+    private final java.util.Map<String, TranslationRouter> routerCache = new java.util.HashMap<>();
     private final Set<TranslationRouter> activeRouters = Collections.synchronizedSet(new HashSet<>());
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -276,6 +277,13 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         }
     }
 
+    private TranslationRouter pairRouter(String from, String to, String engine) {
+        String key=from+":"+to+":"+engine;
+        TranslationRouter router=routerCache.get(key);
+        if(router==null){router=new TranslationRouter(context,from,to,engine);if(routerCache.size()<8)routerCache.put(key,router);}
+        return router;
+    }
+
     private void translatePair(String text, String from, String to, String suffix, Callback result) {
         if (closed) return;
         if (sameLanguage(from, to)) { result.onSuccess(text, "无需翻译" + suffix); return; }
@@ -290,12 +298,12 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
                 main.removeCallbacks(timeout[0]);
                 List<TranslationRouter> closing = new ArrayList<>(requestRouters);
                 for (TranslationRouter router : closing) {
-                    activeRouters.remove(router);
-                    try { router.close(); } catch (Exception ignored) {}
+                    if (!routerCache.containsValue(router)) { activeRouters.remove(router);
+                        try { router.close(); } catch (Exception ignored) {} }
                 }
                 return !closed;
             }
-            public void onSuccess(String value, String engine) { if (finish()) result.onSuccess(value, engine); }
+            public void onSuccess(String value, String engine) { if (finish()) { prefs.edit().putString("last_translation_engine", engine).putLong("last_translation_ok", System.currentTimeMillis()).apply(); result.onSuccess(value, engine); } }
             public void onError(String error) { if (finish()) result.onError(error); }
         };
         timeout[0] = () -> callback.onError("翻译超时，请检查网络或先下载离线语言包后重试");
@@ -304,11 +312,11 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         TranslationRouter local;
         TranslationRouter selected;
         try {
-            local = new TranslationRouter(context, from, to, TranslationRouter.MLKIT);
+            local = pairRouter(from, to, TranslationRouter.MLKIT);
             requestRouters.add(local);
             activeRouters.add(local);
             selected = TranslationRouter.MLKIT.equals(selectedEngine)
-                ? local : new TranslationRouter(context, from, to, selectedEngine);
+                ? local : pairRouter(from, to, selectedEngine);
             requestRouters.add(selected);
             activeRouters.add(selected);
         } catch (Exception e) {
@@ -316,7 +324,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
             return;
         }
 
-        if (!TranslationRouter.AUTO.equals(selectedEngine)) {
+        if (!TranslationRouter.AUTO.equals(selectedEngine) || !RunPolicy.localFirst(context)) {
             selected.translate(text, new TranslationRouter.Callback() {
                 @Override public void onSuccess(String translated, String engineName) {
                     callback.onSuccess(translated, engineName + suffix);
@@ -336,6 +344,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
             }
             @Override public void onError(String localError) {
                 if (closed || finished[0]) return;
+                if (!RunPolicy.cloud(context)) { callback.onError(localError + "；" + RunPolicy.blocked()); return; }
                 finalSelected.translate(text, new TranslationRouter.Callback() {
                     @Override public void onSuccess(String translated, String engineName) {
                         callback.onSuccess(translated, engineName + " · 离线失败后兜底" + suffix);
@@ -426,6 +435,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
             try { router.close(); } catch (Exception ignored) {}
         }
         activeRouters.clear();
+        routerCache.clear();
         try { speechRouter.close(); } catch (Exception ignored) {}
         if (languageIdentifier != null) {
             try { languageIdentifier.close(); } catch (Exception ignored) {}

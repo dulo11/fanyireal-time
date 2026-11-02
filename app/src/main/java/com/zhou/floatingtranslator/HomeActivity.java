@@ -29,6 +29,7 @@ public final class HomeActivity extends Activity {
     private SharedPreferences preferences;
     private TextView quickStatus;
     private TextView recent;
+    private TextView runtimeStatus;
     private UpdateChecker updateChecker;
     private final Handler dashboardHandler = new Handler(Looper.getMainLooper());
     private final Runnable dashboardTick = new Runnable() {
@@ -67,7 +68,12 @@ public final class HomeActivity extends Activity {
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, 0, 0, dp(16));
         root.addView(subtitle);
+        Button offline=button("离线就绪 · 一键准备 · 帮助与诊断");
+        offline.setOnClickListener(v->startActivity(new Intent(this,OfflineCenterActivity.class)));root.addView(offline,matchWrap());
 
+        Button recovery=button("运行状态 · 下载任务 · 失败重试 · 场景备份");
+        recovery.setOnClickListener(v->startActivity(new Intent(this,ReliabilityActivity.class)));root.addView(recovery,matchWrap());
+        runtimeStatus=text("",14,Color.WHITE);root.addView(runtimeStatus);
         LinearLayout statusCard = card(root);
         statusCard.addView(sectionTitle("当前状态 · 运行内存实时刷新"));
         quickStatus = text("", 14, Color.rgb(224, 217, 238));
@@ -119,7 +125,7 @@ public final class HomeActivity extends Activity {
             "全屏翻译默认走无障碍：优先直接读取屏幕文字，读不到时使用无障碍截图 + ML Kit OCR，不占用录屏。\n" +
             "快语速准确率优先：纯日语优先 Parakeet / ReazonSpeech；日英混说优先 Qwen3-ASR / Whisper Medium；" +
             "韩语、越南语、马来语、菲律宾语、泰语、印尼语优先 Qwen3 / Whisper / Omnilingual。\n" +
-            "高精度·快语速模式会延长连续语音切段，并在强制切段时保留音频重叠以减少漏字。",
+            "高精度模式可能增加处理延迟；每段语音独立识别，不重放已经提交的音频。",
             13, Color.rgb(180, 170, 205));
         note.setPadding(dp(3), dp(12), dp(3), 0);
         root.addView(note);
@@ -166,6 +172,7 @@ public final class HomeActivity extends Activity {
 
     private void refreshStatus() {
         if (quickStatus == null || preferences == null) return;
+        if(runtimeStatus!=null)runtimeStatus.setText(SessionHealth.summary(this));
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
         String asr = preferences.getString("asr_mode", TranslationService.ASR_AUTO);
         String precision = preferences.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
@@ -179,20 +186,9 @@ public final class HomeActivity extends Activity {
         int sourceIndex = clampLanguageIndex(preferences.getInt("source_index", 2));
         int targetIndex = clampLanguageIndex(preferences.getInt("target_index", 0));
         RuntimeMemory.Snapshot memory = RuntimeMemory.read(this);
-        quickStatus.setText(
-            "声音：" + source + "\n" +
-            "语言：" + LanguageOption.ALL[sourceIndex].label + " → " + LanguageOption.ALL[targetIndex].label + "\n" +
-            "ASR：" + asrLabel(asr) + "\n" +
-            "对话模式：" + conversationLabel(conversation) + "\n" +
-            "ASR 精度：" + precisionLabel(precision) + "\n" +
-            "翻译：" + engineLabel(engine) + "\n" +
-            memory.compact() + "\n" +
-            "语音悬浮窗：" + (overlay ? "✅ 已授权" : "⚠ 未授权") + "\n" +
-            "全屏翻译：" + (screenTranslation
-                ? (screenContinuous ? "✅ 已开启 · 连续" : "✅ 已开启 · 点按")
-                : "⚠ 无障碍未开启") + "\n" +
-            "历史：" + HistoryStore.count(this) + " 条"
-        );
+        quickStatus.setText(getString(R.string.home_06, source, LanguageOption.ALL[sourceIndex].label, LanguageOption.ALL[targetIndex].label, asrLabel(asr), conversationLabel(conversation), precisionLabel(precision), engineLabel(engine), memory.compact(), (overlay ? getString(R.string.home_01) : getString(R.string.home_02)), (screenTranslation
+                ? (screenContinuous ? getString(R.string.home_03) : getString(R.string.home_04))
+                : getString(R.string.home_05)), HistoryStore.count(this)));
 
         if (recent != null) {
             String original = preferences.getString("last_original", "");

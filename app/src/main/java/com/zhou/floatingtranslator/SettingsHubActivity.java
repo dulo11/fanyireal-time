@@ -33,6 +33,8 @@ public final class SettingsHubActivity extends Activity {
         sub.setPadding(0, dp(4), 0, dp(14));
         root.addView(sub);
 
+        Button offline=new Button(this);offline.setText("离线就绪 · 模型备份 · 帮助 · 诊断");
+        offline.setOnClickListener(v->startActivity(new Intent(this,OfflineCenterActivity.class)));root.addView(offline);
         addEntry(root, R.string.settings_app_language, R.string.settings_app_language_desc, AppLanguageActivity.class);
         addEntry(root, R.string.settings_translation_engine, R.string.settings_translation_engine_desc, ApiSettingsActivity.class);
         addEntry(root, R.string.settings_screen, R.string.settings_screen_desc, ScreenTranslationActivity.class);
