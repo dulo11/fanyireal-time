@@ -84,6 +84,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private volatile boolean closed;
     private volatile boolean neuralVad;
     private volatile String loadedPrecision = "";
+    private final PcmPreroll preroll=new PcmPreroll(6400);
     private boolean inSpeech;
     private long segmentMs;
     private long silenceMs;
@@ -168,6 +169,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
 
     /** Accept 16 kHz, mono, PCM16 little-endian audio plus its observed peak. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
+        if(LocalNarrator.muted())return;
         if (!isReady() || pcm == null || length <= 0) return;
         if (neuralVad && vad != null) acceptNeuralVad(pcm, length);
         else acceptEnergyFallback(pcm, length, peak);
@@ -194,7 +196,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         while (!localVad.empty()) {
             SpeechSegment segment = localVad.front();
             float[] raw = segment == null ? null : segment.getSamples();
-            if (raw != null && raw.length >= SAMPLE_RATE / 2) {
+            if (raw != null && raw.length >= SAMPLE_RATE / 10) {
                 queueDecode(raw);
             }
             localVad.pop();
@@ -210,17 +212,18 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 segmentMs = 0L;
                 silenceMs = 0L;
                 speech.reset();
+                byte[] lead=preroll.take();speech.write(lead,0,lead.length);
             }
             silenceMs = 0L;
         } else if (inSpeech) {
             silenceMs += frameMs;
         }
-        if (!inSpeech) return;
+        if(!inSpeech){preroll.offer(pcm,length);return;}
         speech.write(pcm, 0, Math.min(length, pcm.length));
         segmentMs += frameMs;
 
         boolean naturalEnd = silenceMs >= endSilenceMs() && segmentMs >= minSegmentMs();
-        boolean forcedEnd = segmentMs >= forceSegmentMs();
+        boolean forcedEnd=segmentMs>=forceSegmentMs()+1200L||(segmentMs>=forceSegmentMs()&&silenceMs>=120L);
         if (!naturalEnd && !forcedEnd) return;
 
         byte[] segment = speech.toByteArray();
@@ -230,7 +233,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         segmentMs = 0L;
         silenceMs = 0L;
         inSpeech = false;
-        if (segment.length >= SAMPLE_RATE) queueDecode(pcm16ToFloat(segment));
+        if (segment.length >= SAMPLE_RATE / 5) queueDecode(pcm16ToFloat(segment));
     }
 
     public synchronized void flush() {
@@ -247,7 +250,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             drainVadSegments(localVad);
             return;
         }
-        if (speech.size() >= SAMPLE_RATE) {
+        if (speech.size() >= SAMPLE_RATE / 5) {
             byte[] segment = speech.toByteArray();
             speech.reset();
             segmentMs = 0L;
@@ -271,6 +274,12 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 postError("识别失败：" + safe(e));
             }
         });
+    }
+
+    /** Executes the installed graph; silence success is a smoke test, not an accuracy claim. */
+    public void testInference(Runnable success, java.util.function.Consumer<String> error){
+        worker.execute(()->{try{if(closed||recognizer==null)throw new IllegalStateException("模型未加载");decodeOnce(recognizer,new float[SAMPLE_RATE]);main.post(()->{if(!closed)success.run();});}
+        catch(Throwable e){main.post(()->{if(!closed)error.accept("模型推理测试失败："+safe(e));});}});
     }
 
     private static final class Decoded {
@@ -474,7 +483,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     private int recommendedThreads(String id) {
-        if (PROFILE_ACCURACY.equals(conversationProfile)) return 4;
+        if("battery".equals(RunPolicy.prefs(context).getString("model_goal","balanced")))return 2;
+        if (PROFILE_ACCURACY.equals(conversationProfile)) return Math.min(4,Math.max(1,Runtime.getRuntime().availableProcessors()-1));
         if (OfflineAsrModelCatalog.QWEN3_ASR.equals(id)
             || OfflineAsrModelCatalog.WHISPER_MEDIUM.equals(id)
             || OfflineAsrModelCatalog.PARAKEET_JA.equals(id)) return 4;

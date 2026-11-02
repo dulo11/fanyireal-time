@@ -94,12 +94,17 @@ public final class FaceToFaceActivity extends Activity {
         startContinuousCapture();
     };
 
+    private final LocalNarrator.Listener narratorListener=new LocalNarrator.Listener(){
+        public void pauseCapture(){if(offlineSession!=null)offlineSession.flush();else destroySystemRecognizer();}
+        public void resumeCapture(){if(continuousMode&&!destroyed&&!persistentOfflineCapture)scheduleContinuousNext(250L);}
+    };
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         setTitle("面对面翻译");
         setContentView(buildUi());
         initTts();
+        LocalNarrator.register(narratorListener);
     }
 
     private View buildUi() {
@@ -238,7 +243,7 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void initTts() {
-        tts = new TextToSpeech(this, result -> ttsReady = result == TextToSpeech.SUCCESS);
+        // TTS is initialized lazily when a translation is spoken.
     }
 
     private void toggleContinuous() {
@@ -376,6 +381,7 @@ public final class FaceToFaceActivity extends Activity {
 
     private void startSystemRecognition(int session, boolean continuous, boolean partnerManual,
                                         String fallbackSpeechTag) {
+        if(LocalNarrator.muted())return;
         if(!RunPolicy.cloud(this)){cancelTurn();status.setText(RunPolicy.blocked());return;}
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             listening = false;
@@ -484,10 +490,6 @@ public final class FaceToFaceActivity extends Activity {
         if (!continuousMode || generation != session || text == null) return;
         String cleaned = text.trim();
         if (cleaned.isEmpty()) return;
-        if (looksLikeRecentTtsEcho(cleaned)) {
-            status.setText("持续监听 · 已忽略手机自身朗读回声");
-            return;
-        }
         while (pendingUtterances.size() >= MAX_PENDING_UTTERANCES) pendingUtterances.pollFirst();
         pendingUtterances.addLast(new ContinuousUtterance(cleaned, language == null ? "" : language));
         status.setText("持续监听 · 待处理 " + pendingUtterances.size() + " 句");
@@ -528,7 +530,7 @@ public final class FaceToFaceActivity extends Activity {
                 appendConversation(mySpoke ? "我" : "对方", item.text, translated, detected);
                 status.setText(engineName + " · 麦克风仍在持续监听");
                 updateButtons();
-                if (continuousSpeak.isChecked()) speakResult(translated, spokePartner, true);
+                if (continuousSpeak.isChecked() || !"text".equals(RunPolicy.prefs(FaceToFaceActivity.this).getString("output_mode","text"))) speakResult(translated, spokePartner, true);
                 drainContinuousQueue(session);
             }
 
@@ -560,7 +562,7 @@ public final class FaceToFaceActivity extends Activity {
                 saveRecent(original, translated);
                 appendConversation(spokePartner ? "对方" : "我", original, translated,
                     translator == null ? "" : translator.lastDetectedLanguage());
-                if (autoSpeak.isChecked()) speakResult(translated, spokePartner, false);
+                if (autoSpeak.isChecked() || !"text".equals(RunPolicy.prefs(FaceToFaceActivity.this).getString("output_mode","text"))) speakResult(translated, spokePartner, false);
             }
             @Override public void onError(String message) {
                 if (destroyed || generation != session) return;
@@ -571,58 +573,10 @@ public final class FaceToFaceActivity extends Activity {
         });
     }
 
-    private boolean speakResult(String value, boolean partnerSpoke, boolean continuous) {
-        if (!ttsReady || tts == null || value == null || value.trim().isEmpty()) return false;
-        LanguageOption my = (LanguageOption) myLanguage.getSelectedItem();
-        LanguageOption fallback = (LanguageOption) partnerFallback.getSelectedItem();
-        String lang = partnerSpoke ? my.mlKitTag
-            : (translator == null ? fallback.mlKitTag : translator.partnerLanguage());
-        try {
-            int result = tts.setLanguage(Locale.forLanguageTag(lang));
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                status.append(" · 当前设备缺少该语言朗读语音包");
-                return false;
-            }
-            int queueMode = continuous ? TextToSpeech.QUEUE_ADD : TextToSpeech.QUEUE_FLUSH;
-            String utteranceId = "face-translation-" + (++utteranceCounter);
-            int speak = tts.speak(value, queueMode, null, utteranceId);
-            if (speak == TextToSpeech.SUCCESS && continuous) rememberTtsEcho(value);
-            return speak == TextToSpeech.SUCCESS;
-        } catch (Exception e) {
-            status.append(" · 朗读失败");
-            return false;
-        }
-    }
-
-    private void rememberTtsEcho(String value) {
-        purgeOldEchoes();
-        recentTtsEchoes.addLast(new EchoSample(compact(value), android.os.SystemClock.elapsedRealtime()));
-        while (recentTtsEchoes.size() > 8) recentTtsEchoes.pollFirst();
-    }
-
-    private boolean looksLikeRecentTtsEcho(String value) {
-        purgeOldEchoes();
-        String candidate = compact(value);
-        if (candidate.length() < 2) return false;
-        for (EchoSample sample : recentTtsEchoes) {
-            if (sample.text.equals(candidate)) return true;
-            if (candidate.length() >= 4 && sample.text.length() >= 4
-                && (sample.text.contains(candidate) || candidate.contains(sample.text))) return true;
-        }
-        return false;
-    }
-
-    private void purgeOldEchoes() {
-        long now = android.os.SystemClock.elapsedRealtime();
-        while (!recentTtsEchoes.isEmpty()
-            && now - recentTtsEchoes.peekFirst().at > TTS_ECHO_WINDOW_MS) {
-            recentTtsEchoes.pollFirst();
-        }
-    }
-
-    private static String compact(String value) {
-        if (value == null) return "";
-        return value.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
+    private boolean speakResult(String value,boolean partnerSpoke,boolean continuous){
+        LanguageOption my=(LanguageOption)myLanguage.getSelectedItem(),fallback=(LanguageOption)partnerFallback.getSelectedItem();
+        String lang=partnerSpoke?my.mlKitTag:(translator==null?fallback.mlKitTag:translator.partnerLanguage());
+        LocalNarrator.get(this).speak(value,lang);status.append(" · 播报期间暂停采音，结束后继续");return true;
     }
 
     private String languageMode() {
@@ -791,7 +745,7 @@ public final class FaceToFaceActivity extends Activity {
         recentTtsEchoes.clear();
         if (translator != null) { translator.close(); translator = null; }
         translatorPair = "";
-        if (tts != null) tts.stop();
+        LocalNarrator.stopIfCreated();
         updateButtons();
     }
 
@@ -803,7 +757,7 @@ public final class FaceToFaceActivity extends Activity {
     @Override protected void onDestroy() {
         destroyed = true;
         cancelTurn();
-        if (tts != null) tts.shutdown();
+        LocalNarrator.unregister(narratorListener);
         super.onDestroy();
     }
 

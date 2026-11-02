@@ -87,8 +87,13 @@ public final class RootCallTranslationService extends Service {
     private volatile String diagAsr = "ASR 未启动";
     private volatile String diagTranslation = "翻译未启动";
 
+    private final LocalNarrator.Listener narratorListener=new LocalNarrator.Listener(){
+        public void pauseCapture(){if(sherpa!=null)sherpa.flush();if(vosk!=null)vosk.finishCurrentUtterance();if(onlineSpeech!=null)onlineSpeech.flush();if(pcmSystemSpeech!=null)pcmSystemSpeech.flush();}
+        public void resumeCapture(){}
+    };
     @Override public void onCreate() {
         super.onCreate();
+        LocalNarrator.register(narratorListener);
         NotificationChannel channel = new NotificationChannel(
             CHANNEL_ID, "内部通话翻译", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
@@ -487,6 +492,7 @@ public final class RootCallTranslationService extends Service {
                 if (translated != null) translated.setText(translationOnlyOverlay ? out : "译文：" + out);
                 if (next.complete) {
                     HistoryStore.append(RootCallTranslationService.this, cleaned, out);
+                    LocalNarrator.translated(RootCallTranslationService.this,out,targetMlTag);
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putString("last_original", cleaned).putString("last_translation", out).apply();
                 }
@@ -570,6 +576,7 @@ public final class RootCallTranslationService extends Service {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(8), dp(14), dp(10));
         box.setBackgroundResource(R.drawable.panel);
+        box.getBackground().setAlpha(RunPolicy.prefs(this).getInt("subtitle_alpha",220));
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -590,6 +597,7 @@ public final class RootCallTranslationService extends Service {
         original.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translated = overlayText(fontSize, Color.WHITE);
         translated.setTypeface(null, android.graphics.Typeface.BOLD);
+        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text")))translated.setVisibility(View.GONE);
         box.addView(original, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translated, new LinearLayout.LayoutParams(-1, -2));
 
@@ -598,7 +606,7 @@ public final class RootCallTranslationService extends Service {
             getResources().getDisplayMetrics().widthPixels - dp(24), -2,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        overlayParams.y = dp(110);
+        overlayParams.y=RunPolicy.prefs(this).getInt("subtitle_y",dp(110));
         overlay = box;
         makeDraggable(box);
         windowManager.addView(overlay, overlayParams);
@@ -634,7 +642,7 @@ public final class RootCallTranslationService extends Service {
                     overlayParams.y = Math.max(0, originalY[0] + Math.round(start[1] - event.getRawY()));
                     try { windowManager.updateViewLayout(overlay, overlayParams); } catch (Exception ignored) {}
                     return true;
-                case MotionEvent.ACTION_UP: return true;
+                case MotionEvent.ACTION_UP: RunPolicy.prefs(this).edit().putInt("subtitle_y",overlayParams.y).apply(); return true;
                 default: return false;
             }
         });
@@ -782,6 +790,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     @Override public void onDestroy() {
+        LocalNarrator.unregister(narratorListener);LocalNarrator.stopIfCreated();
         stopPipeline();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", false).apply();
         removeOverlay();

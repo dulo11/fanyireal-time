@@ -168,6 +168,7 @@ public final class OfflineSpeechEngine implements AutoCloseable {
 
     /** Feed 16 kHz, mono, signed PCM16 little-endian audio. */
     public void acceptPcm(byte[] pcm, int length) {
+        if(LocalNarrator.muted())return;
         if (!isReady() || pcm == null || length <= 0) return;
         try {
             String finalJson = null;

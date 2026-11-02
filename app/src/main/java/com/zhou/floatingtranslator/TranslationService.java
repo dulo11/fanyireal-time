@@ -178,9 +178,18 @@ public class TranslationService extends Service implements RecognitionListener {
     private volatile String diagSpeech = "未启动";
     private volatile String diagScreen = "未启动";
 
+    private final LocalNarrator.Listener narratorListener=new LocalNarrator.Listener(){
+        public void pauseCapture(){
+            if(sherpaSpeech!=null)sherpaSpeech.flush();if(offlineSpeech!=null)offlineSpeech.finishCurrentUtterance();
+            if(onlineSpeech!=null)onlineSpeech.flush();if(pcmSystemSpeech!=null)pcmSystemSpeech.flush();
+            if(ASR_SYSTEM.equals(activeAsrMode)&&INPUT_MICROPHONE.equals(inputMode))destroySystemRecognizer();
+        }
+        public void resumeCapture(){if(running&&!paused&&ASR_SYSTEM.equals(activeAsrMode)&&INPUT_MICROPHONE.equals(inputMode))startSystemRecognizer();}
+    };
     @Override public void onCreate() {
         super.onCreate();
         createNotificationChannel();
+        LocalNarrator.register(narratorListener);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -783,7 +792,7 @@ public class TranslationService extends Service implements RecognitionListener {
         if (index >= parts.size()) {
             String translated = out.toString().trim();
             if (translatedText != null) translatedText.setText(translationOnlyOverlay ? translated : "译文：" + translated);
-            if (finalResult) saveHistory(original, translated);
+            if(finalResult){saveHistory(original,translated);LocalNarrator.translated(this,translated,targetMlTag);}
             finishSpeechTranslation();
             return;
         }
@@ -874,6 +883,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void startSystemRecognizer() {
+        if(LocalNarrator.muted())return;
         if (!RunPolicy.cloud(this)) { showStatus(RunPolicy.blocked()); return; }
         if (!running || !INPUT_MICROPHONE.equals(inputMode)) {
             setDiagSpeech("ASR：系统识别器要求麦克风来源");
@@ -888,7 +898,7 @@ public class TranslationService extends Service implements RecognitionListener {
             return;
         }
         main.post(() -> {
-            if (!running || paused) return;
+            if(!running||paused||LocalNarrator.muted())return;
             destroySystemRecognizer();
             try {
                 systemRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
@@ -1039,6 +1049,7 @@ public class TranslationService extends Service implements RecognitionListener {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(8), dp(14), dp(10));
         box.setBackgroundResource(R.drawable.panel);
+        box.getBackground().setAlpha(RunPolicy.prefs(this).getInt("subtitle_alpha",220));
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -1060,6 +1071,7 @@ public class TranslationService extends Service implements RecognitionListener {
         originalText.setVisibility(!translationOnlyOverlay && showOriginal ? View.VISIBLE : View.GONE);
         translatedText = overlayText(fontSize, Color.WHITE);
         translatedText.setTypeface(null, android.graphics.Typeface.BOLD);
+        if("voice".equals(RunPolicy.prefs(this).getString("output_mode","text")))translatedText.setVisibility(View.GONE);
         box.addView(originalText, new LinearLayout.LayoutParams(-1, -2));
         box.addView(translatedText, new LinearLayout.LayoutParams(-1, -2));
 
@@ -1076,7 +1088,7 @@ public class TranslationService extends Service implements RecognitionListener {
             getResources().getDisplayMetrics().widthPixels - dp(24), -2,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        overlayParams.y = dp(110);
+        overlayParams.y=RunPolicy.prefs(this).getInt("subtitle_y",dp(110));
         overlay = box;
         makeDraggable(box);
         windowManager.addView(overlay, overlayParams);
@@ -1112,7 +1124,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     overlayParams.y = Math.max(0, originalY[0] + Math.round(start[1] - event.getRawY()));
                     try { windowManager.updateViewLayout(overlay, overlayParams); } catch (Exception ignored) {}
                     return true;
-                case MotionEvent.ACTION_UP: return true;
+                case MotionEvent.ACTION_UP: RunPolicy.prefs(this).edit().putInt("subtitle_y",overlayParams.y).apply(); return true;
                 default: return false;
             }
         });
@@ -1307,6 +1319,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     @Override public void onDestroy() {
+        LocalNarrator.unregister(narratorListener);LocalNarrator.stopIfCreated();
         stopPipelineOnly();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", false).apply();
         removeOverlay();

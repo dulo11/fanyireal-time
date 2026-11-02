@@ -101,6 +101,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
 
     /** Accepts 16 kHz mono PCM16 little-endian audio. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
+        if(LocalNarrator.muted())return;
         if (!isReady() || pcm == null || length <= 0) return;
         int safeLength = Math.min(length, pcm.length);
         long frameMs = Math.max(1L, Math.round((safeLength / 2.0) * 1000.0 / SAMPLE_RATE));

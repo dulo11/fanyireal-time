@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 final class FaceOfflineSession implements AutoCloseable {
     interface Callback {
         void status(String text);
+        default void ready(String name) {}
         void result(String text, String language);
         void error(String text);
     }
@@ -57,6 +58,8 @@ final class FaceOfflineSession implements AutoCloseable {
         }
     }
 
+    void flush(){if(vosk!=null)vosk.finishCurrentUtterance();if(sherpa!=null)sherpa.flush();}
+
     void start() { if (vosk != null) vosk.prepare(); else sherpa.prepare(); }
 
     private void deliver(String text, String language) {
@@ -88,6 +91,7 @@ final class FaceOfflineSession implements AutoCloseable {
                 }
                 if (local.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                     throw new IllegalStateException("麦克风被其他应用占用");
+                main.post(()->{if(!closed)callback.ready(name);});
                 effects = MicAudioEffects.attach(local, MicAudioEffects.MODE_NEAR);
                 byte[] data = new byte[3200];
                 while (!closed) {
