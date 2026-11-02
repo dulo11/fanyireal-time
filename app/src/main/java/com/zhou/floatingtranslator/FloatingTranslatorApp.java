@@ -18,7 +18,7 @@ public final class FloatingTranslatorApp extends Application implements Applicat
         registerActivityLifecycleCallbacks(this);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
-        prefs.edit().putBoolean("service_running",false).commit();
+        prefs.edit().putBoolean("service_running",false).apply();
         UserArchive.checkpointUpgrade(this);
         try{DownloadTasks.recover(this);}catch(Exception ignored){}
 

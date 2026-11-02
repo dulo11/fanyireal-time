@@ -78,7 +78,7 @@ public final class HistoryStore {
         synchronized(LOCK) {
             String id=source.getString("id");
             for(Entry e:readAll(context))if(id.equals(e.eventId))return;
-            JSONObject row=new JSONObject().put("eventId",id).put("time",source.getLong("time"))
+            JSONObject row=new JSONObject().put("eventId",id).put("time",System.currentTimeMillis()).put("sourceTime",source.getLong("time"))
                 .put("original",source.getString("text")).put("translated",translation).put("category",source.getString("category"));
             try(FileOutputStream out=new FileOutputStream(file(context),true)){
                 out.write((row.toString()+"\n").getBytes(StandardCharsets.UTF_8));out.getFD().sync();

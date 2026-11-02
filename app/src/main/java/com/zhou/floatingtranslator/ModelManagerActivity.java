@@ -234,6 +234,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void clearDownloadCaches() {
+        if(ModelDownloadService.active||SessionHealth.active()){status.setText("请先停止翻译和后台下载，再操作模型或缓存");return;}
         if (downloadInProgress) {
             status.setText("模型正在下载或安装，不能同时清理缓存。");
             return;
@@ -259,6 +260,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void deleteSelected() {
+        if(ModelDownloadService.active||SessionHealth.active()){status.setText("请先停止翻译和后台下载，再操作模型或缓存");return;}
         String id = selectedModelId();
         OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
         if (model == null || downloadInProgress) return;
@@ -336,6 +338,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void deleteCurrentVosk() {
+        if(ModelDownloadService.active||SessionHealth.active()){status.setText("请先停止翻译和后台下载，再操作模型或缓存");return;}
         LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
         if (option == null) return;
         status.setText(getString(R.string.model_manager_11, option.label));
@@ -358,6 +361,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void deleteAllVosk() {
+        if(ModelDownloadService.active||SessionHealth.active()){status.setText("请先停止翻译和后台下载，再操作模型或缓存");return;}
         status.setText(getString(R.string.model_manager_12));
         worker.execute(() -> {
             boolean ok = OfflineModelStore.deleteRecursively(new File(getFilesDir(), "vosk-models"));
@@ -369,6 +373,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void deleteCurrentMlKit() {
+        if(ModelDownloadService.active||SessionHealth.active()){status.setText("请先停止翻译和后台下载，再操作模型或缓存");return;}
         LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
         if (option == null) return;
         TranslateRemoteModel model = new TranslateRemoteModel.Builder(option.mlKitTag).build();
@@ -382,6 +387,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     private void deleteAllMlKit() {
+        if(ModelDownloadService.active||SessionHealth.active()){status.setText("请先停止翻译和后台下载，再操作模型或缓存");return;}
         RemoteModelManager manager = RemoteModelManager.getInstance();
         status.setText(getString(R.string.model_manager_16));
         manager.getDownloadedModels(TranslateRemoteModel.class)

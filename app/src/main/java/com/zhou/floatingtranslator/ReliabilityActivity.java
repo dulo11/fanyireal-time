@@ -12,14 +12,14 @@ import java.util.concurrent.*;
 
 /** Runtime state, recovery actions and an honest, device-specific acceptance log. */
 public final class ReliabilityActivity extends Activity {
-    private LinearLayout root;private TextView live,downloads,report;private boolean destroyed,retrying;
+    private LinearLayout root;private TextView live,downloads,report;private volatile boolean destroyed,retrying;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private OfflineFirstTranslationRouter retryRouter;private final ArrayDeque<JSONObject> retryQueue=new ArrayDeque<>();
     private int recovered;private static final int EXPORT=791,IMPORT=792;
     private final Runnable tick=new Runnable(){public void run(){if(destroyed)return;live.setText(SessionHealth.summary(ReliabilityActivity.this));downloads.setText(DownloadTasks.summary(ReliabilityActivity.this));main.postDelayed(this,2000);}};
     @Override public void onCreate(Bundle state){super.onCreate(state);setTitle("运行与恢复中心");
-        ScrollView scroll=new ScrollView(this);root=new LinearLayout(this);root.setOrientation(1);root.setPadding(28,28,28,150);scroll.setBackgroundColor(Color.rgb(17,13,30));scroll.addView(root);setContentView(scroll);
+        ScrollView scroll=new ScrollView(this);root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(28,28,28,150);scroll.setBackgroundColor(Color.rgb(17,13,30));scroll.addView(root);setContentView(scroll);
         label("运行状态与长时间保护",23);live=label("",14);
         button("只暂停采音，继续处理已有内容",()->SessionHealth.holdAll(true));button("请求恢复采音",()->SessionHealth.holdAll(false));
         label("保护默认开启：设备温控达到严重级别、系统低内存或积压 24 句时暂停采音；恢复条件满足后继续。暂停期间的新讲话不会被收录。不会按文字相同删除内容。",13);

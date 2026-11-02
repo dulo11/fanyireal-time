@@ -54,9 +54,6 @@
   <string name="main_12">"声音：%1$s\nASR：%2$s\n历史：%3$d 条%4$s%5$s"</string>
   <string name="model_manager_01">"Vosk：轻量流式 ASR。选择下方语言后点击下载，准备后可完全离线。适合省电，纯日语快语速/长句不是强项。"</string>
   <string name="model_manager_02">"%1$s\n%2$s\n下载/模型大小：%3$s\n状态：%4$s"</string>
-  <string name="model_manager_03">"Vosk 不支持当前语言，请选择多语言模型"</string>
-  <string name="model_manager_04">"✅ %1$s 下载、解压和安装完成，可直接设为默认使用"</string>
-  <string name="model_manager_05">"❌ %1$s 下载/安装失败：%2$s"</string>
   <string name="model_manager_06">"正在清理下载/安装缓存 %1$s……"</string>
   <string name="model_manager_07">"正在删除 %1$s……"</string>
   <string name="model_manager_08">"✅ 已保存默认 ASR：%1$s"</string>

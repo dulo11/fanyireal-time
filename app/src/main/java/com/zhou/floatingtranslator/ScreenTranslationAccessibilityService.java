@@ -84,7 +84,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
     private WindowManager windowManager;
     private ScreenTranslationOverlayView overlayView;
     private WindowManager.LayoutParams overlayParams;
-    private android.widget.Button bubble;
+    private TranslationBubbleView bubble;
     private WindowManager.LayoutParams bubbleParams;
 
     private boolean destroyed;
@@ -641,7 +641,7 @@ public final class ScreenTranslationAccessibilityService extends AccessibilitySe
 
     private void addBubbleWindow() {
         if (windowManager == null || bubble != null) return;
-        bubble = new android.widget.Button(this);
+        bubble = new TranslationBubbleView(this);
         bubble.setText("译");
         bubble.setTextColor(Color.WHITE);
         bubble.setTextSize(18f);

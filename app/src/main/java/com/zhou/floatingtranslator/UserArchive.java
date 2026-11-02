@@ -76,7 +76,7 @@ public final class UserArchive {
     }
     public static JSONObject scenes(Context c)throws Exception {return new JSONObject(c.getSharedPreferences("user_scenes",0).getString("scenes","{}"));}
     public static void saveScene(Context c,String name)throws Exception {JSONObject all=scenes(c);if(all.length()>=20&&!all.has(name))throw new IOException("最多保存 20 个场景");all.put(name,settings(c));if(!c.getSharedPreferences("user_scenes",0).edit().putString("scenes",all.toString()).commit())throw new IOException("保存失败");}
-    public static void deleteScene(Context c,String name)throws Exception {JSONObject all=scenes(c);all.remove(name);c.getSharedPreferences("user_scenes",0).edit().putString("scenes",all.toString()).commit();}
+    public static void deleteScene(Context c,String name)throws Exception {JSONObject all=scenes(c);all.remove(name);if(!c.getSharedPreferences("user_scenes",0).edit().putString("scenes",all.toString()).commit())throw new IOException("场景删除失败");}
     private static void saveLocal(Context c,String name,JSONObject value)throws Exception {
         AtomicFile f=new AtomicFile(new File(c.getFilesDir(),name));FileOutputStream out=null;
         try{out=f.startWrite();out.write(value.toString().getBytes(StandardCharsets.UTF_8));f.finishWrite(out);}catch(Exception e){if(out!=null)f.failWrite(out);throw e;}
@@ -86,7 +86,7 @@ public final class UserArchive {
         if(journal.exists())try{restoreCheckpoint(c,"before-restore.json");journal.delete();}catch(Exception e){RunPolicy.prefs(c).edit().putString("upgrade_checkpoint","上次恢复中断，自动回退失败："+e.getMessage()).apply();return;}
         int previous=RunPolicy.prefs(c).getInt("last_data_version",0);
         if(previous==BuildConfig.VERSION_CODE)return;
-        try{saveLocal(c,"before-upgrade.json",snapshot(c));RunPolicy.prefs(c).edit().putInt("last_data_version",BuildConfig.VERSION_CODE).putString("upgrade_checkpoint","已保存升级前历史与设置；不含密钥、模型或权限").commit();}
+        try{saveLocal(c,"before-upgrade.json",snapshot(c));if(!RunPolicy.prefs(c).edit().putInt("last_data_version",BuildConfig.VERSION_CODE).putString("upgrade_checkpoint","已保存升级前历史与设置；不含密钥、模型或权限").commit())throw new IOException("无法保存升级快照状态");}
         catch(Exception e){RunPolicy.prefs(c).edit().putString("upgrade_checkpoint","升级前备份失败："+e.getMessage()).apply();}
     }
     public static void restoreCheckpoint(Context c,String name)throws Exception {

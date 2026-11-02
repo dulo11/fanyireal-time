@@ -27,6 +27,7 @@ public final class HistoryActivity extends Activity {
     private android.widget.EditText search;private android.widget.Spinner category;
     private static final String[] CATEGORIES={"","realtime","call","conversation","sample","legacy"};
     private java.util.List<HistoryStore.Entry> filtered=new java.util.ArrayList<>(),exportEntries=new java.util.ArrayList<>();
+    private String exportSnapshot;
     private TextView summary;
     private TextView content;
 
@@ -34,6 +35,7 @@ public final class HistoryActivity extends Activity {
         super.onCreate(state);
         setTitle("浮译 "+BuildConfig.VERSION_NAME+" · 历史记录");
         setContentView(buildUi());
+        if(state!=null){search.setText(state.getString("query",""));category.setSelection(Math.max(0,Math.min(CATEGORIES.length-1,state.getInt("category",0))));String saved=state.getString("export_snapshot");if(saved!=null&&saved.matches("history-export-[a-zA-Z0-9.-]+"))exportSnapshot=saved;}
         refresh();
     }
 
@@ -117,6 +119,11 @@ public final class HistoryActivity extends Activity {
             return;
         }
         refresh();exportEntries=new java.util.ArrayList<>(filtered);if(exportEntries.isEmpty()){toast("当前筛选没有记录");return;}
+        try{
+            java.io.File snapshot=java.io.File.createTempFile("history-export-",".txt",getCacheDir());
+            String value=requestCode==EXPORT_SRT?HistoryStore.buildSrt(exportEntries):HistoryStore.buildTxt(exportEntries);
+            java.nio.file.Files.write(snapshot.toPath(),value.getBytes(StandardCharsets.UTF_8));exportSnapshot=snapshot.getName();
+        }catch(Exception e){toast("创建导出快照失败："+e.getMessage());return;}
         String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date());
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
@@ -130,17 +137,21 @@ public final class HistoryActivity extends Activity {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         if (requestCode != EXPORT_TXT && requestCode != EXPORT_SRT) return;
         Uri uri = data.getData();
-        String value = requestCode == EXPORT_SRT ? HistoryStore.buildSrt(exportEntries) : HistoryStore.buildTxt(exportEntries);
+        if(exportSnapshot==null){toast("导出快照不存在，请重新选择导出");return;}
+        java.io.File snapshot=new java.io.File(getCacheDir(),exportSnapshot);
         try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
             if (out == null) throw new IllegalStateException("无法打开目标文件");
-            out.write(value.getBytes(StandardCharsets.UTF_8));
-            out.flush();
+            try(java.io.InputStream in=new java.io.FileInputStream(snapshot)){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}
+            out.flush();snapshot.delete();exportSnapshot=null;
             toast(requestCode == EXPORT_SRT ? "SRT 已导出" : "TXT 已导出");
         } catch (Exception e) {
             toast("导出失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
         }
     }
 
+    @Override protected void onSaveInstanceState(Bundle state){
+        super.onSaveInstanceState(state);state.putString("query",search.getText().toString());state.putInt("category",category.getSelectedItemPosition());state.putString("export_snapshot",exportSnapshot);
+    }
     private TextView text(String value, float sp, int color) {
         TextView t = new TextView(this);
         t.setText(value);
