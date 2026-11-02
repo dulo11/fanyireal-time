@@ -154,6 +154,7 @@ public final class OfflineCenterActivity extends Activity {
  private boolean micPermission(){if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)return true;requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},746);show("授权后重新点击测试");return false;}
  private boolean noNetwork(){return getSystemService(ConnectivityManager.class).getActiveNetwork()==null;}
  private void testMic(){if(!micPermission())return;work(()->{
+  if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED)throw new SecurityException("麦克风权限已撤销，请重新授权");
   int size=Math.max(4096,AudioRecord.getMinBufferSize(16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT));AudioRecord r=new AudioRecord(MediaRecorder.AudioSource.MIC,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,size);int peak=0;long bytes=0;
   try{if(r.getState()!=AudioRecord.STATE_INITIALIZED)throw new IOException("AudioRecord 初始化失败");r.startRecording();long end=SystemClock.elapsedRealtime()+4000;short[] buffer=new short[size/2];
    while(!destroyed&&SystemClock.elapsedRealtime()<end){int n=r.read(buffer,0,buffer.length,AudioRecord.READ_NON_BLOCKING);if(n<0)throw new IOException("录音读取错误 "+n);bytes+=n*2L;for(int i=0;i<n;i++)peak=Math.max(peak,Math.abs((int)buffer[i]));Thread.sleep(20);}
