@@ -432,7 +432,7 @@ public final class MainActivity extends Activity {
         router.translate(sample, new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
                 status.setText("✅ " + engineName + "\n原文：" + sample + "\n译文：" + out);
-                HistoryStore.append(MainActivity.this, sample, out);
+                HistoryStore.append(MainActivity.this, sample, out,"sample");
                 preferences.edit().putString("last_original", sample).putString("last_translation", out).apply();
                 button.setEnabled(true);
                 updateRecent();

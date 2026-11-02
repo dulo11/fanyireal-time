@@ -67,6 +67,8 @@ public class ModelManagerActivity extends Activity {
         TextView title = text("离线模型中心", 30, Color.WHITE);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
+        Button advanced=button("一键准备 / 校验修复 / 备份导入 / 离线帮助");
+        advanced.setOnClickListener(v->startActivity(new android.content.Intent(this,OfflineCenterActivity.class)));root.addView(advanced,matchWrap());
 
         TextView note = text(
             "大模型不会强塞进 APK。需要哪个就下载哪个，保存到浮译私有目录；不用时可以删除。\n" +

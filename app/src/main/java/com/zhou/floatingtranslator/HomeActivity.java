@@ -67,6 +67,8 @@ public final class HomeActivity extends Activity {
             Color.rgb(201, 190, 221));
         subtitle.setPadding(0, 0, 0, dp(16));
         root.addView(subtitle);
+        Button offline=button("离线就绪 · 一键准备 · 帮助与诊断");
+        offline.setOnClickListener(v->startActivity(new Intent(this,OfflineCenterActivity.class)));root.addView(offline,matchWrap());
 
         LinearLayout statusCard = card(root);
         statusCard.addView(sectionTitle("当前状态 · 运行内存实时刷新"));

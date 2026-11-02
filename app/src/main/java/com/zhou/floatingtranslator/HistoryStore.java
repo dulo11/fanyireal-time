@@ -29,8 +29,13 @@ public final class HistoryStore {
         public final long time;
         public final String original;
         public final String translated;
+        public final String category;
 
         Entry(long time, String original, String translated) {
+            this(time,original,translated,"legacy");
+        }
+        Entry(long time,String original,String translated,String category){
+            this.category=category;
             this.time = time;
             this.original = original;
             this.translated = translated;
@@ -44,6 +49,9 @@ public final class HistoryStore {
     }
 
     public static void append(Context context, String original, String translated) {
+        append(context,original,translated,"legacy");
+    }
+    public static void append(Context context,String original,String translated,String category){
         if (context == null || translated == null) return;
         String o = original == null ? "" : original.trim();
         String t = translated.trim();
@@ -53,7 +61,7 @@ public final class HistoryStore {
             try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(
                     new FileOutputStream(file(context), true), StandardCharsets.UTF_8))) {
                 JSONObject json = new JSONObject();
-                json.put("time", now);
+                json.put("time", now);json.put("category",category);
                 json.put("original", o);
                 json.put("translated", t);
                 out.write(json.toString());
@@ -79,12 +87,18 @@ public final class HistoryStore {
                         entries.add(new Entry(
                             json.optLong("time", 0L),
                             json.optString("original", ""),
-                            translated));
+                            translated,json.optString("category","legacy")));
                     } catch (Exception ignored) {}
                 }
             } catch (Exception ignored) {}
             return entries;
         }
+    }
+
+    public static List<Entry> filter(List<Entry> entries,String query,String category){
+        String q=query==null?"":query.trim().toLowerCase(Locale.ROOT);List<Entry> out=new ArrayList<>();
+        for(Entry e:entries)if((category==null||category.isEmpty()||category.equals(e.category))&&(q.isEmpty()||e.original.toLowerCase(Locale.ROOT).contains(q)||e.translated.toLowerCase(Locale.ROOT).contains(q)))out.add(e);
+        return out;
     }
 
     public static List<Entry> readLatest(Context context, int limit) {
@@ -105,7 +119,9 @@ public final class HistoryStore {
     }
 
     public static String buildTxt(Context context) {
-        List<Entry> entries = readAll(context);
+        return buildTxt(readAll(context));
+    }
+    public static String buildTxt(List<Entry> entries){
         SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
         StringBuilder out = new StringBuilder();
         out.append("浮译 翻译历史\n");
@@ -119,7 +135,9 @@ public final class HistoryStore {
     }
 
     public static String buildSrt(Context context) {
-        List<Entry> entries = readAll(context);
+        return buildSrt(readAll(context));
+    }
+    public static String buildSrt(List<Entry> entries){
         if (entries.isEmpty()) return "";
         long first = entries.get(0).time;
         StringBuilder out = new StringBuilder();
@@ -163,7 +181,7 @@ public final class HistoryStore {
                 new FileOutputStream(file(context), false), StandardCharsets.UTF_8))) {
             for (Entry entry : entries) {
                 JSONObject json = new JSONObject();
-                json.put("time", entry.time);
+                json.put("time", entry.time);json.put("category",entry.category);
                 json.put("original", entry.original);
                 json.put("translated", entry.translated);
                 out.write(json.toString());

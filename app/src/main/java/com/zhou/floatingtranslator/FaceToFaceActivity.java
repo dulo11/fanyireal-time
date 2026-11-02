@@ -649,7 +649,7 @@ public final class FaceToFaceActivity extends Activity {
     }
 
     private void saveRecent(String original, String translated) {
-        HistoryStore.append(this, original, translated);
+        HistoryStore.append(this, original, translated,"conversation");
         prefs.edit().putString("last_original", original)
             .putString("last_translation", translated).apply();
     }

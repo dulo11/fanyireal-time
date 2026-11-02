@@ -491,7 +491,7 @@ public final class RootCallTranslationService extends Service {
                 renderDiag();
                 if (translated != null) translated.setText(translationOnlyOverlay ? out : "译文：" + out);
                 if (next.complete) {
-                    HistoryStore.append(RootCallTranslationService.this, cleaned, out);
+                    HistoryStore.append(RootCallTranslationService.this, cleaned, out,"call");
                     LocalNarrator.translated(RootCallTranslationService.this,out,targetMlTag);
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putString("last_original", cleaned).putString("last_translation", out).apply();

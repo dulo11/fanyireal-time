@@ -347,7 +347,8 @@ public final class RootCallActivity extends Activity {
             else if (peak < 80) level = "⚠ 读到了 PCM，但接近静音；这个设备大概率不是通话声音";
             else if (peak < 500) level = "⚠ 有弱信号；可以再测试别的 PCM 对比";
             else level = "✅ 检测到明显内部音频，可以保存这个配置继续实测翻译";
-            rootStatus.setText(level + "\n峰值=" + peak + " · 已转换 16k PCM=" + human(bytes));
+            RunPolicy.prefs(this).edit().putString("last_call_test",new java.util.Date()+"："+level+"；峰值="+peak+"；PCM="+bytes).apply();
+            rootStatus.setText(level + "\n峰值=" + peak + " · 已转换 16k PCM=" + human(bytes)+"\n有信号不保证来自对方，请人工确认后保存配置。");
             testButton.setEnabled(true);
         }, 6500L);
     }
