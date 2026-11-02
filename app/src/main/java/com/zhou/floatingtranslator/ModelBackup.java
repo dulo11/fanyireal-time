@@ -36,7 +36,7 @@ public final class ModelBackup {
    if(previous.exists())throw new IOException("存在待恢复的旧模型备份，请先检查");
    if(target.exists()){if(!target.renameTo(previous))throw new IOException("无法备份原模型");backedUp=true;}
    if(!incoming.renameTo(target))throw new IOException("无法发布导入模型");moved=true;
-   java.nio.file.Files.writeString(new File(target,".ready").toPath(),id);done=true;OfflineModelStore.deleteRecursively(previous);return id;
+   java.nio.file.Files.write(new File(target,".ready").toPath(),id.getBytes(java.nio.charset.StandardCharsets.UTF_8));done=true;OfflineModelStore.deleteRecursively(previous);return id;
   }finally{
    try {
     if(!done){if(moved&&target!=null)OfflineModelStore.deleteRecursively(target);if(backedUp&&previous.exists()&&!previous.renameTo(target))throw new IOException("恢复失败，旧模型仍保留在 .import-previous 目录");}

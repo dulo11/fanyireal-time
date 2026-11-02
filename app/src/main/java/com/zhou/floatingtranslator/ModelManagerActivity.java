@@ -40,6 +40,7 @@ public class ModelManagerActivity extends Activity {
     private TextView summary;
     private TextView status;
     private Button downloadButton;
+    private OfflineSpeechEngine preparingVosk;
     private Button deleteButton;
     private Button clearPartialButton;
     private volatile boolean downloadInProgress;
@@ -186,10 +187,10 @@ public class ModelManagerActivity extends Activity {
         if (selectedInfo == null) return;
         String id = selectedModelId();
         if (TranslationService.ASR_VOSK.equals(id)) {
-            selectedInfo.setText("Vosk：轻量流式 ASR。语言包首次使用自动下载；之后完全离线。适合省电，纯日语快语速/长句不是强项。");
+            selectedInfo.setText("Vosk：轻量流式 ASR。选择下方语言后点击下载，准备后可完全离线。适合省电，纯日语快语速/长句不是强项。");
             if (downloadButton != null) {
                 downloadButton.setText("⬇ 下载所选模型");
-                downloadButton.setEnabled(false);
+                downloadButton.setEnabled(!downloadInProgress);
             }
             if (deleteButton != null) deleteButton.setEnabled(false);
             return;
@@ -221,11 +222,33 @@ public class ModelManagerActivity extends Activity {
         if (deleteButton != null) deleteButton.setEnabled(installed && !downloadInProgress);
     }
 
+    private void prepareVosk() {
+        if (downloadInProgress) return;
+        LanguageOption option = (LanguageOption) languageSpinner.getSelectedItem();
+        if (!OfflineSpeechEngine.supports(option.mlKitTag)) { status.setText("Vosk 不支持当前语言，请选择多语言模型"); return; }
+        try { RunPolicy.requireDownload(this); } catch (Exception e) { status.setText(e.getMessage()); return; }
+        downloadInProgress = true;
+        updateSelectedInfo();
+        preparingVosk = new OfflineSpeechEngine(this, option.mlKitTag, new OfflineSpeechEngine.Callback() {
+            public void onStatus(String value) { status.setText(value); }
+            public void onReady(String name) { finish(name + " 已准备并加载成功"); }
+            public void onError(String value) { finish(value); }
+            public void onPartial(String value) {}
+            public void onFinal(String value) {}
+            private void finish(String value) {
+                downloadInProgress = false;
+                if (preparingVosk != null) { preparingVosk.close(); preparingVosk = null; }
+                if (!isDestroyed()) { status.setText(value); updateSelectedInfo(); }
+            }
+        });
+        preparingVosk.prepare();
+    }
+
     private void downloadSelected() {
         String id = selectedModelId();
         OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
         if (model == null) {
-            status.setText("Vosk 语言包会在实际使用时自动下载，不需要从这里重复下载。");
+            prepareVosk();
             return;
         }
         if (downloadInProgress) {
@@ -512,6 +535,7 @@ public class ModelManagerActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (preparingVosk != null) preparingVosk.close();
         modelStore.close();
         worker.shutdownNow();
         super.onDestroy();

@@ -106,7 +106,7 @@ public final class OfflineModelStore implements AutoCloseable {
         if (files == null) return 0L;
         long total = 0L;
         for (File file : files) {
-            if (file.getName().endsWith(".part")) total += folderSize(file);
+            if ((file.getName().endsWith(".part") || file.getName().endsWith(".validator"))) total += folderSize(file);
         }
         return total;
     }
@@ -133,7 +133,7 @@ public final class OfflineModelStore implements AutoCloseable {
         if (files == null) return true;
         boolean ok = true;
         for (File file : files) {
-            if (file.getName().endsWith(".part")) ok &= deleteRecursively(file);
+            if ((file.getName().endsWith(".part") || file.getName().endsWith(".validator"))) ok &= deleteRecursively(file);
         }
         return ok;
         } finally { MUTATION.unlock(); }
@@ -303,7 +303,7 @@ public final class OfflineModelStore implements AutoCloseable {
     private void downloadFile(String address, File output, Callback callback) throws Exception {
         long existing = output.isFile() ? output.length() : 0L;
         File validatorFile=new File(output.getPath()+".validator");
-        String validator=validatorFile.isFile()?java.nio.file.Files.readString(validatorFile.toPath()).trim():"";
+        String validator=validatorFile.isFile()?new String(java.nio.file.Files.readAllBytes(validatorFile.toPath()),java.nio.charset.StandardCharsets.UTF_8).trim():"";
         if(existing>0&&validator.isEmpty()){if(!output.delete())throw new java.io.IOException("无法重置旧断点");existing=0;}
         HttpURLConnection connection = null;
         try {
@@ -334,7 +334,7 @@ public final class OfflineModelStore implements AutoCloseable {
             String current=connection.getHeaderField("ETag");
             if(current==null||current.startsWith("W/"))current=connection.getHeaderField("Last-Modified");
             if(append&&current!=null&&!current.equals(validator)){output.delete();validatorFile.delete();throw new java.io.IOException("下载源更新，重置断点后重试");}
-            if(current!=null)java.nio.file.Files.writeString(validatorFile.toPath(),current);
+            if(current!=null)java.nio.file.Files.write(validatorFile.toPath(),current.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             long done = append ? existing : 0L;
             long responseLength = connection.getContentLengthLong();
             if(code==HttpURLConnection.HTTP_PARTIAL){

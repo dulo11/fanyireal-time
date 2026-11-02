@@ -490,9 +490,8 @@ public final class FaceToFaceActivity extends Activity {
         if (!continuousMode || generation != session || text == null) return;
         String cleaned = text.trim();
         if (cleaned.isEmpty()) return;
-        while (pendingUtterances.size() >= MAX_PENDING_UTTERANCES) pendingUtterances.pollFirst();
         pendingUtterances.addLast(new ContinuousUtterance(cleaned, language == null ? "" : language));
-        status.setText("持续监听 · 待处理 " + pendingUtterances.size() + " 句");
+        status.setText((pendingUtterances.size() >= MAX_PENDING_UTTERANCES ? "翻译积压，请暂停讲话；已识别内容全部保留 · " : "持续监听 · ") + "待处理 " + pendingUtterances.size() + " 句");
         drainContinuousQueue(session);
     }
 

@@ -31,12 +31,12 @@ public final class ModelIntegrity {
  public static void inventory(File root,String id)throws Exception{
   if(!structure(root,id))throw new IOException("缺少模型网络或词表文件");JSONArray entries=new JSONArray();
   for(File f:files(root))entries.put(new JSONObject().put("path",root.toPath().relativize(f.toPath()).toString()).put("size",f.length()).put("sha256",digest(f)));
-  File temp=new File(root,MANIFEST+".tmp");Files.writeString(temp.toPath(),new JSONObject().put("model",id).put("files",entries).toString());Files.move(temp.toPath(),new File(root,MANIFEST).toPath(),StandardCopyOption.REPLACE_EXISTING);
+  File temp=new File(root,MANIFEST+".tmp");Files.write(temp.toPath(),new JSONObject().put("model",id).put("files",entries).toString().getBytes(StandardCharsets.UTF_8));Files.move(temp.toPath(),new File(root,MANIFEST).toPath(),StandardCopyOption.REPLACE_EXISTING);
  }
  public static void verify(File root,String id)throws Exception{
   if(!structure(root,id))throw new IOException("必需文件缺失或为空");File file=new File(root,MANIFEST);
   if(!file.isFile())throw new IOException("旧模型无校验基线，请建立清单或重新下载安装");if(file.length()>12*1024*1024)throw new IOException("清单异常");
-  JSONObject json=new JSONObject(Files.readString(file.toPath()));if(!id.equals(json.getString("model")))throw new IOException("模型标识不匹配");JSONArray entries=json.getJSONArray("files");Set<String> names=new HashSet<>();
+  JSONObject json=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));if(!id.equals(json.getString("model")))throw new IOException("模型标识不匹配");JSONArray entries=json.getJSONArray("files");Set<String> names=new HashSet<>();
   for(int i=0;i<entries.length();i++){JSONObject e=entries.getJSONObject(i);String name=e.getString("path");File f=safeChild(root,name);if(!names.add(name)||!f.isFile()||f.length()!=e.getLong("size")||!digest(f).equals(e.getString("sha256")))throw new IOException("校验失败："+name);}
   if(entries.length()!=files(root).size())throw new IOException("存在未登记模型文件");
  }

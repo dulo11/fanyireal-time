@@ -114,7 +114,7 @@ public final class OfflineCenterActivity extends Activity {
  private OfflineModelStore.Callback downloadCallback(Runnable done){return new OfflineModelStore.Callback(){public void onStatus(String s){show(s);}public void onProgress(int p,long d,long t){show("下载 "+(p<0?"":p+"% ")+OfflineModelStore.human(d));}public void onSuccess(File f){done.run();}public void onError(String e){busy=false;show(e);}};}
  private void prepareText(String a,String b){
   show("正在准备双方 ML Kit 文字模型……");worker.execute(()->{String result;
-   try{RunPolicy.requireDownload(this);for(String lang:new LinkedHashSet<>(Arrays.asList(a,b)))if(!lang.equals("en"))Tasks.await(RemoteModelManager.getInstance().download(new TranslateRemoteModel.Builder().setLanguage(lang).build(),new DownloadConditions.Builder().build()),15,TimeUnit.MINUTES);
+   try{RunPolicy.requireDownload(this);for(String lang:new LinkedHashSet<>(Arrays.asList(a,b)))if(!lang.equals("en"))Tasks.await(RemoteModelManager.getInstance().download(new TranslateRemoteModel.Builder(lang).build(),new DownloadConditions.Builder().build()),15,TimeUnit.MINUTES);
     VadModelStore.ensure(this,s->main.post(()->{if(!destroyed)show(s);}));result="模型准备完成。切回完全离线，关闭网络，然后执行断网实测。";
    }catch(Exception e){result="准备未完成："+e.getMessage();}String text=result;main.post(()->{busy=false;if(!destroyed){show(text);refresh();}});
   });
