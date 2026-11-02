@@ -481,6 +481,8 @@ public class ModelManagerActivity extends Activity {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
+    @Override protected void onResume(){super.onResume();if(modelStore!=null){updateSelectedInfo();refresh(false);}}
+
     @Override protected void onDestroy() {
         if (preparingVosk != null) preparingVosk.close();
         modelStore.close();

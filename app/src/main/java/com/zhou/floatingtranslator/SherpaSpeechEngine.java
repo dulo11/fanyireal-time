@@ -262,13 +262,14 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     private void queueDecode(float[] primarySamples) {
+        long queuedAt=android.os.SystemClock.elapsedRealtime();
         worker.execute(() -> {
             OfflineRecognizer r = recognizer;
             if (closed || r == null || primarySamples == null || primarySamples.length == 0) return;
             try {
                 long inferenceAt=android.os.SystemClock.elapsedRealtime();
                 Decoded result = decodeOnce(r, primarySamples);
-                SessionHealth.inference(android.os.SystemClock.elapsedRealtime()-inferenceAt);
+                SessionHealth.inference(android.os.SystemClock.elapsedRealtime()-inferenceAt,primarySamples.length*1000L/SAMPLE_RATE,inferenceAt-queuedAt);
                 if (!result.text.isEmpty()) {
                     main.post(() -> { if (!closed) callback.onText(result.text, result.lang); });
                 }

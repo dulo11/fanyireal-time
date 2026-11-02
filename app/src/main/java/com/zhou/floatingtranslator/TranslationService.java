@@ -834,7 +834,7 @@ public class TranslationService extends Service implements RecognitionListener {
             }
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
-                if(finalResult)FailureStore.add(TranslationService.this,original,sourceMlTag,targetMlTag,engineId,"realtime",message);
+                if(finalResult)FailureStore.add(TranslationService.this,original,FailureStore.source(sourceMlTag,segmentLanguage),targetMlTag,engineId,"realtime",message);
                 setDiagTranslation("翻译失败：" + message);
                 if (!translationOnlyOverlay && translatedText != null) translatedText.setText(getString(R.string.face_to_face_16, message));
                 finishSpeechTranslation();
@@ -1277,10 +1277,10 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void stopPipelineOnly() {
         if(health!=null){health.close();health=null;}
-        if(inFlightFinal&&inFlightOriginal!=null)FailureStore.add(this,inFlightOriginal,sourceMlTag,targetMlTag,engineId,"realtime","会话停止，译文尚未完成");
+        if(inFlightFinal&&inFlightOriginal!=null)FailureStore.add(this,inFlightOriginal,FailureStore.source(sourceMlTag,segmentLanguage),targetMlTag,engineId,"realtime","会话停止，译文尚未完成");
         inFlightOriginal=null;inFlightFinal=false;
         SpeechQueue.Item pending;
-        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,sourceMlTag,targetMlTag,engineId,"realtime","会话停止，等待重试");
+        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,FailureStore.source(sourceMlTag,pending.language),targetMlTag,engineId,"realtime","会话停止，等待重试");
         running = false;
         stopAudioCapture();
         destroySystemRecognizer();
@@ -1366,7 +1366,7 @@ public class TranslationService extends Service implements RecognitionListener {
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
-    @Override public void onReadyForSpeech(Bundle params) { setDiagSpeech("ASR：系统 SpeechRecognizer 已就绪"); }
+    @Override public void onReadyForSpeech(Bundle params) { if(health!=null)health.asr("Android 系统语音识别");setDiagSpeech("ASR：系统 SpeechRecognizer 已就绪"); }
     @Override public void onBeginningOfSpeech() { setDiagAudio("固定·麦克风外放：检测到语音"); }
 
     @Override public void onRmsChanged(float rmsdB) {

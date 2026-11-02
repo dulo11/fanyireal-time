@@ -10,8 +10,8 @@ import java.util.function.IntSupplier;
 public final class SessionHealth implements AutoCloseable {
     public interface Listener { void changed(boolean held,String reason); }
     private static final Map<String,SessionHealth> sessions=new LinkedHashMap<>();
-    private static volatile long lastInferenceMs=-1;
-    public static void inference(long millis) { lastInferenceMs=millis; }
+    private static volatile long lastInferenceMs=-1,lastSegmentMs=-1,lastAsrWaitMs=-1;
+    public static void inference(long millis,long segmentMillis,long queueMillis) { lastInferenceMs=millis;lastSegmentMs=segmentMillis;lastAsrWaitMs=queueMillis; }
     private final Context context; private final String name; private final IntSupplier queue; private final Listener listener;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final long started=SystemClock.elapsedRealtime();
@@ -58,7 +58,7 @@ public final class SessionHealth implements AutoCloseable {
                     .append("\n待处理：").append(s.queue.getAsInt()).append(" 句；温控级别：").append(s.thermal).append("\n采音：").append(s.held?"暂停":"开放")
                     .append(s.reason.isEmpty()?"":" · "+s.reason).append('\n');
             }}
-        out.append("最近本地分段推理：").append(lastInferenceMs<0?"未测":lastInferenceMs+" ms（不含采集和排队）");
+        out.append("最近本地片段时长：").append(lastSegmentMs<0?"未测":lastSegmentMs+" ms").append("；识别排队：").append(lastAsrWaitMs<0?"未测":lastAsrWaitMs+" ms").append("\n最近本地分段推理：").append(lastInferenceMs<0?"未测":lastInferenceMs+" ms（不含采集和排队）");
         return out.toString();
     }
     @Override public void close(){closed=true;main.removeCallbacksAndMessages(null);synchronized(sessions){if(sessions.get(name)==this)sessions.remove(name);}}

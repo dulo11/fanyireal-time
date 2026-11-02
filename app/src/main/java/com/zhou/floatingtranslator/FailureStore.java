@@ -20,6 +20,10 @@ public final class FailureStore {
         try { stream=f.startWrite(); stream.write(data.toString().getBytes(StandardCharsets.UTF_8)); f.finishWrite(stream); }
         catch(Exception e) { if(stream!=null)f.failWrite(stream); throw e; }
     }
+    public static String source(String fallback,String detected){
+        String tag=AsrTranscriptGuard.normalizeTag(detected);
+        return com.google.mlkit.nl.translate.TranslateLanguage.getAllLanguages().contains(tag)?tag:fallback;
+    }
     public static synchronized void add(Context c,String text,String source,String target,String engine,String category,String reason) {
         if(text==null || text.trim().isEmpty())return;
         try {

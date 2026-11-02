@@ -423,6 +423,7 @@ public final class FaceToFaceActivity extends Activity {
         recognizer = SpeechRecognizer.createSpeechRecognizer(this);
         recognizer.setRecognitionListener(new RecognitionListener() {
             @Override public void onReadyForSpeech(Bundle b) {
+                if(health!=null)health.asr("Android 系统语音识别");
                 if (generation == session && recognitionGeneration == captureId) status.setText(continuous
                     ? "持续监听中 · 同一方可以连续说多句…"
                     : (partnerManual ? "请让对方说话…" : "请说话…"));

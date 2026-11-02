@@ -514,7 +514,7 @@ public final class RootCallTranslationService extends Service {
             }
             @Override public void onError(String message) {
                 if (!running || translator != current) return;
-                if(next.complete)FailureStore.add(RootCallTranslationService.this,cleaned,sourceMlTag,targetMlTag,engineId,"call",message);
+                if(next.complete)FailureStore.add(RootCallTranslationService.this,cleaned,FailureStore.source(sourceMlTag,next.language),targetMlTag,engineId,"call",message);
                 diagTranslation = "翻译失败：" + message;
                 renderDiag();
                 if (!translationOnlyOverlay && translated != null) translated.setText(getString(R.string.face_to_face_16, message));
@@ -776,9 +776,9 @@ public final class RootCallTranslationService extends Service {
 
     private void stopPipeline() {
         if(health!=null){health.close();health=null;}
-        if(inFlight!=null&&inFlight.complete)FailureStore.add(this,inFlight.text,sourceMlTag,targetMlTag,engineId,"call","会话停止，译文尚未完成");
+        if(inFlight!=null&&inFlight.complete)FailureStore.add(this,inFlight.text,FailureStore.source(sourceMlTag,inFlight.language),targetMlTag,engineId,"call","会话停止，译文尚未完成");
         inFlight=null;SpeechQueue.Item pending;
-        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,sourceMlTag,targetMlTag,engineId,"call","会话停止，等待重试");
+        while((pending=speechQueue.poll())!=null)if(pending.complete)FailureStore.add(this,pending.text,FailureStore.source(sourceMlTag,pending.language),targetMlTag,engineId,"call","会话停止，等待重试");
         running = false;
         RootPcmSource r = rootSource;
         rootSource = null;
