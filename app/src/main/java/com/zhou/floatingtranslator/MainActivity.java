@@ -41,7 +41,6 @@ public final class MainActivity extends Activity {
     private SharedPreferences preferences;
     private Spinner inputModeSpinner;
     private Spinner micProcessingSpinner;
-    private Spinner asrModeSpinner;
     private Spinner languageModeSpinner;
     private Spinner sourceSpinner;
     private Spinner targetSpinner;
@@ -119,33 +118,19 @@ public final class MainActivity extends Activity {
         micProcessingSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(micProcessingSpinner, params());
         TextView micTip = text(
-            "自动模式下，麦克风直接用 Android SpeechRecognizer；系统内部声音和 ROOT/Shizuku PCM 会先尝试 Android 13+ 的 EXTRA_AUDIO_SOURCE 外部 PCM 注入。厂商识别服务若不支持，再自动切免费在线和本地；付费 ASR 只在你显式开启后最后兜底。",
+            "语音识别引擎由设置页手动指定。安卓内置识别麦克风可直接使用；系统内部声音需要厂商支持外部 PCM。失败不会自动切换其他识别引擎。",
             12, Color.rgb(184, 174, 207));
         audioCard.addView(micTip);
 
-        audioCard.addView(label("ASR 语音识别"));
-        asrModeSpinner = new Spinner(this);
-        asrModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
-            new String[]{
-                "自动推荐｜安卓内置（含内部PCM）→ 免费在线 → 本地 → 付费最后",
-                "免费在线自动｜Groq Free → Cloudflare Free → 本地",
-                "Groq Free｜Whisper Large V3｜在线高精度",
-                "Groq Free｜Whisper Large V3 Turbo｜在线低延迟",
-                "Cloudflare Workers AI Free｜Whisper Large V3 Turbo",
-                "Vosk｜省电/小模型",
-                "SenseVoice INT8｜中英日韩粤",
-                "ReazonSpeech｜日语直播优先",
-                "Parakeet 日语 0.6B INT8｜快语速/长句",
-                "Whisper Small INT8｜多语言混合",
-                "Whisper Medium INT8｜高精度/高占用",
-                "Qwen3-ASR 0.6B INT8｜日英混合优先",
-                "Omnilingual ASR 300M INT8｜小语种",
-                "Android 系统 SpeechRecognizer｜首选｜麦克风 / 内部PCM",
-                "有道云 ASR｜付费/旧兼容｜只做最后兜底"
-            }));
-        asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
-        asrModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
-        audioCard.addView(asrModeSpinner, params());
+        audioCard.addView(label("ASR 识别引擎｜仅在设置中切换"));
+        TextView currentAsr = text(
+            "当前：" + asrLabel(selectedAsrMode()) + "（固定，不自动回退）",
+            14, Color.rgb(220, 212, 235));
+        audioCard.addView(currentAsr, params());
+        Button asrSettings = secondaryButton("⚙ 设置 / 手动选择语音识别引擎");
+        asrSettings.setOnClickListener(v ->
+            startActivity(new Intent(this, AsrEngineSettingsActivity.class)));
+        audioCard.addView(asrSettings, params());
 
         audioCard.addView(label("识别语言模式"));
         languageModeSpinner = new Spinner(this);
@@ -169,7 +154,7 @@ public final class MainActivity extends Activity {
 
         TextView rootTip = text(
             "内部通话模式：在兼容中心明确选择固定 ROOT 或固定 Shizuku，再扫描/测试 PCM 并按 App 保存。" +
-            "一旦读到 PCM，自动 ASR 会先尝试把 16k PCM 注入 Android 系统 SpeechRecognizer；不支持时再走免费在线/本地。Shizuku 仍受 shell/SELinux 限制。",
+            "选安卓内置时才会尝试把 16k PCM 送给系统识别器；不支持则报告错误，不切免费在线/本地。Shizuku 仍受 shell/SELinux 限制。",
             12, Color.rgb(184, 174, 207));
         rootTip.setPadding(0, dp(6), 0, 0);
         audioCard.addView(rootTip);
@@ -492,7 +477,6 @@ public final class MainActivity extends Activity {
         if (sourceSpinner == null) return;
         preferences.edit()
             .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
-            .putString("asr_mode", selectedAsrMode())
             .putString("language_mode", selectedLanguageMode())
             .putInt("source_index", sourceSpinner.getSelectedItemPosition())
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
@@ -519,7 +503,7 @@ public final class MainActivity extends Activity {
         String internal = profile == null ? "" : "\n内部 App：" + profile.packageName + " · " + profile.sourceLabel();
         String mic = mode == 1 ? "\n麦克风处理：" + micProcessingLabel(preferences.getString(
             "mic_processing", MicAudioEffects.MODE_REMOTE)) : "";
-        summary.setText("声音：" + source + "\nASR：" + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO))
+        summary.setText("声音：" + source + "\nASR：" + asrLabel(TranslationService.strictAsrMode(preferences.getString("asr_mode", TranslationService.ASR_SYSTEM)))
             + "\n历史：" + HistoryStore.count(this) + " 条" + internal + mic);
     }
 
@@ -537,42 +521,9 @@ public final class MainActivity extends Activity {
         toast("已复制");
     }
 
-    private int asrIndex(String mode) {
-        if (TranslationService.ASR_FREE_ONLINE.equals(mode)) return 1;
-        if (TranslationService.ASR_GROQ_LARGE.equals(mode)) return 2;
-        if (TranslationService.ASR_GROQ_TURBO.equals(mode)) return 3;
-        if (TranslationService.ASR_CLOUDFLARE.equals(mode)) return 4;
-        if (TranslationService.ASR_VOSK.equals(mode)) return 5;
-        if (TranslationService.ASR_SENSEVOICE.equals(mode)) return 6;
-        if (TranslationService.ASR_REAZON.equals(mode)) return 7;
-        if (TranslationService.ASR_PARAKEET.equals(mode)) return 8;
-        if (TranslationService.ASR_WHISPER_SMALL.equals(mode)) return 9;
-        if (TranslationService.ASR_WHISPER_MEDIUM.equals(mode)) return 10;
-        if (TranslationService.ASR_QWEN3.equals(mode)) return 11;
-        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return 12;
-        if (TranslationService.ASR_SYSTEM.equals(mode)) return 13;
-        if (TranslationService.ASR_YOUDAO.equals(mode)) return 14;
-        return 0;
-    }
-
     private String selectedAsrMode() {
-        switch (asrModeSpinner.getSelectedItemPosition()) {
-            case 1: return TranslationService.ASR_FREE_ONLINE;
-            case 2: return TranslationService.ASR_GROQ_LARGE;
-            case 3: return TranslationService.ASR_GROQ_TURBO;
-            case 4: return TranslationService.ASR_CLOUDFLARE;
-            case 5: return TranslationService.ASR_VOSK;
-            case 6: return TranslationService.ASR_SENSEVOICE;
-            case 7: return TranslationService.ASR_REAZON;
-            case 8: return TranslationService.ASR_PARAKEET;
-            case 9: return TranslationService.ASR_WHISPER_SMALL;
-            case 10: return TranslationService.ASR_WHISPER_MEDIUM;
-            case 11: return TranslationService.ASR_QWEN3;
-            case 12: return TranslationService.ASR_OMNILINGUAL;
-            case 13: return TranslationService.ASR_SYSTEM;
-            case 14: return TranslationService.ASR_YOUDAO;
-            default: return TranslationService.ASR_AUTO;
-        }
+        return TranslationService.strictAsrMode(
+            preferences.getString("asr_mode", TranslationService.ASR_SYSTEM));
     }
 
     private int micProcessingIndex(String mode) {
