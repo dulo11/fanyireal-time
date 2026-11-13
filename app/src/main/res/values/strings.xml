@@ -8,6 +8,7 @@
     <string name="settings_translation_engine">翻译引擎 / API</string><string name="settings_translation_engine_desc">Azure、百度、阿里云等翻译服务与密钥。</string>
     <string name="settings_screen">全屏翻译</string><string name="settings_screen_desc">无障碍全屏翻译、连续模式和 OCR 兜底。</string>
     <string name="settings_models">离线模型</string><string name="settings_models_desc">管理 ASR 与 ML Kit 离线模型。</string>
+    <string name="settings_asr_engine">语音识别引擎（独立）</string><string name="settings_asr_engine_desc">安卓内置 / 本地 / 在线手动选择，失败不自动切换，也不启用付费兜底。</string>
     <string name="settings_asr">ASR 精度</string><string name="settings_asr_desc">识别精度、快语速和对话模式。</string>
     <string name="settings_root">ROOT / Shizuku</string><string name="settings_root_desc">内部通话和 PCM 兼容设置。</string>
     <string name="settings_history">历史与导出</string><string name="settings_history_desc">查看翻译记录并导出 TXT / SRT。</string>
