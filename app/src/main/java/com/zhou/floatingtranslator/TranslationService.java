@@ -619,7 +619,6 @@ public class TranslationService extends Service implements RecognitionListener {
         if (cleaned.isEmpty()) return;
         long now = SystemClock.elapsedRealtime();
         setDiagSpeech("ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned));
-        if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
         if (committed) {
             lastStreamTranslated = "";
             queueSpeechTranslation(cleaned, true);
@@ -950,7 +949,6 @@ public class TranslationService extends Service implements RecognitionListener {
                 String text = original == null ? "" : original.trim();
                 if (text.isEmpty()) return;
                 setDiagSpeech("ASR：有道云 · " + preview(text));
-    
                 queueSpeechTranslation(text, true);
             }
             @Override public void onError(String message) {
@@ -1439,7 +1437,6 @@ public class TranslationService extends Service implements RecognitionListener {
     @Override public void onResults(Bundle results) {
         String text = bestText(results);
         if (!text.isEmpty()) {
-
             setDiagSpeech("ASR：系统最终 · " + preview(text));
             queueSpeechTranslation(text, true);
         }
@@ -1451,7 +1448,6 @@ public class TranslationService extends Service implements RecognitionListener {
         if (text.isEmpty()) return;
         long now = SystemClock.elapsedRealtime();
         setDiagSpeech("ASR：系统流式 · " + preview(text));
-        if (showOriginal && originalText != null) originalText.setText("原文：" + text);
         if (text.length() >= 3 && now - lastStreamTranslateAt >= STREAM_TRANSLATE_INTERVAL_MS
             && !text.equals(lastStreamTranslated)) {
             lastStreamTranslateAt = now;
