@@ -31,6 +31,7 @@
         <activity android:name=".RootCallActivity" android:exported="false" />
         <activity android:name=".AsrHotwordActivity" android:exported="false" />
         <activity android:name=".AsrPrecisionActivity" android:exported="false" />
+        <activity android:name=".AsrEngineSettingsActivity" android:exported="false" />
         <activity android:name=".ModelManagerActivity" android:exported="false" />
         <activity android:name=".ApiSettingsActivity" android:exported="false" />
         <activity android:name=".ScreenTranslationActivity" android:exported="false" />
