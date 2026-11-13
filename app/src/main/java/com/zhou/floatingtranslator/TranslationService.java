@@ -34,6 +34,10 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.google.mlkit.nl.languageid.IdentifiedLanguage;
+import com.google.mlkit.nl.languageid.LanguageIdentification;
+import com.google.mlkit.nl.languageid.LanguageIdentifier;
+
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -118,6 +122,8 @@ public class TranslationService extends Service implements RecognitionListener {
     private FreeOnlineSpeechEngine onlineSpeech;
     private SpeechRecognizer systemRecognizer;
     private OfflineFirstTranslationRouter translator;
+    private LanguageIdentifier fixedSpeechIdentifier;
+    private int speechGuardEpoch;
     private OcrCapture ocrCapture;
 
     private volatile boolean running;
@@ -256,7 +262,11 @@ public class TranslationService extends Service implements RecognitionListener {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
         createOverlay(fontSize);
-        translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
+        if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
+            fixedSpeechIdentifier = LanguageIdentification.getClient();
+        }
+        translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId,
+            SherpaSpeechEngine.LANG_SINGLE.equals(languageMode));
         setDiagTranslation(translator.selectedEngineName());
         setDiagAudio(fixedSourceLabel() + " · 等待声音");
         setDiagSpeech("ASR：" + asrLabel(asrMode) + " · " + languageModeLabel() + " · 准备中");
@@ -459,7 +469,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     String cleaned = text.trim();
                     String lang = detectedLanguage == null || detectedLanguage.isEmpty() ? "" : " · " + detectedLanguage;
                     setDiagSpeech("ASR：" + meta.name + lang + " · " + preview(cleaned));
-                    if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+        
                     queueSpeechTranslation(cleaned, true, detectedLanguage);
                 }
 
@@ -498,7 +508,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     if (!running || paused || text == null || text.trim().isEmpty()) return;
                     String cleaned = text.trim();
                     setDiagSpeech("ASR：Android 系统外部 PCM · " + preview(cleaned));
-                    if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+        
                     queueSpeechTranslation(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -537,7 +547,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     if (!running || paused || text == null || text.trim().isEmpty()) return;
                     String cleaned = text.trim();
                     setDiagSpeech("ASR：" + engineName + " · " + preview(cleaned));
-                    if (showOriginal && originalText != null) originalText.setText("原文：" + cleaned);
+        
                     queueSpeechTranslation(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -765,13 +775,73 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void queueSpeechTranslation(String text, boolean finalResult, String language) {
-        if (!running || text == null || text.trim().isEmpty()) return;
-        if (smartSentenceTranslation) {
-            sentenceAssembler.offer(text.trim(), finalResult, language,
-                (assembled, complete, lang) -> enqueueSpeechTranslation(assembled, complete, lang));
+        if (!running || paused || text == null || text.trim().isEmpty()) return;
+        String cleaned = AsrTranscriptGuard.clean(text);
+        if (cleaned.isEmpty()) return;
+        if (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
+            acceptRecognizedSpeech(cleaned, finalResult, language);
             return;
         }
-        enqueueSpeechTranslation(text.trim(), finalResult, language);
+
+        // Omnilingual CTC does not have a language-conditioning option.
+        // Block obviously wrong scripts / explicit mismatched ASR language tags.
+        if (!SingleLanguageAsrGuard.accepts(cleaned, sourceMlTag, language)) {
+            setDiagSpeech("ASR：单语言 " + sourceMlTag + " · 已过滤其他语言文字");
+            return;
+        }
+
+        // ML Kit is a conservative second check for longer Latin-script phrases.
+        // Short/ambiguous utterances are kept; a guessed language must not
+        // silently replace the source language set by the user.
+        LanguageIdentifier identifier = fixedSpeechIdentifier;
+        if (identifier != null && SingleLanguageAsrGuard.needsLanguageId(cleaned, sourceMlTag)) {
+            final int epoch = speechGuardEpoch;
+            identifier.identifyPossibleLanguages(cleaned)
+                .addOnSuccessListener(candidates -> {
+                    if (!running || paused || epoch != speechGuardEpoch) return;
+                    String bestLanguage = "";
+                    float bestConfidence = 0f;
+                    float sourceConfidence = 0f;
+                    if (candidates != null) {
+                        for (IdentifiedLanguage item : candidates) {
+                            String tag = AsrTranscriptGuard.normalizeTag(item.getLanguageTag());
+                            float confidence = item.getConfidence();
+                            if (confidence > bestConfidence) {
+                                bestConfidence = confidence;
+                                bestLanguage = tag;
+                            }
+                            if (sourceMlTag.equals(tag)) sourceConfidence = confidence;
+                        }
+                    }
+                    if (SingleLanguageAsrGuard.rejectConfidentOther(sourceMlTag,
+                            bestLanguage, bestConfidence, sourceConfidence)) {
+                        setDiagSpeech("ASR：单语言 " + sourceMlTag + " · 已过滤识别为 "
+                            + bestLanguage + " 的片段");
+                        return;
+                    }
+                    acceptRecognizedSpeech(cleaned, finalResult, sourceMlTag);
+                })
+                .addOnFailureListener(error -> {
+                    if (running && !paused && epoch == speechGuardEpoch) {
+                        acceptRecognizedSpeech(cleaned, finalResult, sourceMlTag);
+                    }
+                });
+            return;
+        }
+        acceptRecognizedSpeech(cleaned, finalResult, sourceMlTag);
+    }
+
+    private void acceptRecognizedSpeech(String text, boolean finalResult, String language) {
+        if (!running || paused || text == null || text.isEmpty()) return;
+        if (showOriginal) main.post(() -> {
+            if (running && originalText != null) originalText.setText("原文：" + text);
+        });
+        if (smartSentenceTranslation) {
+            sentenceAssembler.offer(text, finalResult, language,
+                (assembled, complete, lang) -> enqueueSpeechTranslation(assembled, complete, lang));
+        } else {
+            enqueueSpeechTranslation(text, finalResult, language);
+        }
     }
 
     private void enqueueSpeechTranslation(String text, boolean complete, String language) {
@@ -880,7 +950,7 @@ public class TranslationService extends Service implements RecognitionListener {
                 String text = original == null ? "" : original.trim();
                 if (text.isEmpty()) return;
                 setDiagSpeech("ASR：有道云 · " + preview(text));
-                if (showOriginal && originalText != null) originalText.setText("原文：" + text);
+    
                 queueSpeechTranslation(text, true);
             }
             @Override public void onError(String message) {
@@ -1248,6 +1318,10 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void stopPipelineOnly() {
         running = false;
+        speechGuardEpoch++;
+        LanguageIdentifier languageId = fixedSpeechIdentifier;
+        fixedSpeechIdentifier = null;
+        if (languageId != null) try { languageId.close(); } catch (Exception ignored) {}
         stopAudioCapture();
         destroySystemRecognizer();
         closePcmSystemSpeech();
@@ -1365,7 +1439,7 @@ public class TranslationService extends Service implements RecognitionListener {
     @Override public void onResults(Bundle results) {
         String text = bestText(results);
         if (!text.isEmpty()) {
-            if (showOriginal && originalText != null) originalText.setText("原文：" + text);
+
             setDiagSpeech("ASR：系统最终 · " + preview(text));
             queueSpeechTranslation(text, true);
         }
