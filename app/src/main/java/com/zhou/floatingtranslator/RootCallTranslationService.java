@@ -208,7 +208,6 @@ public final class RootCallTranslationService extends Service {
 
     private void startSystemPcm(RootCallProfileStore.Profile profile, boolean autoFallback) {
         closeSystemPcm();
-        closeSystemPcm();
         closeOnline();
         closeVosk();
         closeSherpa();
@@ -239,12 +238,12 @@ public final class RootCallTranslationService extends Service {
                 @Override public void onError(String message, boolean fatal) {
                     diagAsr = "ASR：Android 系统外部 PCM · " + message;
                     renderDiag();
-                    if (fatal && autoFallback && TranslationService.ASR_AUTO.equals(asrMode)) {
+                    if (fatal) {
                         closeSystemPcm();
-                        showStatus("Android 系统不支持/不适合当前内部 PCM，自动切免费在线/本地");
-                        prepareAutoAfterSystem(profile);
-                    } else if (fatal) {
-                        showStatus("Android 系统外部 PCM 失败：" + message);
+                        RootPcmSource source = rootSource;
+                        rootSource = null;
+                        if (source != null) try { source.close(); } catch (Exception ignored) {}
+                        showStatus("安卓内置识别无法读取 ROOT 内部 PCM，已停止。不自动切换引擎。请到设置手动选择。");
                     }
                 }
             });
@@ -259,7 +258,6 @@ public final class RootCallTranslationService extends Service {
 
     private void startFreeOnline(String mode, RootCallProfileStore.Profile profile, boolean autoFallback) {
         closeSystemPcm();
-        closeOnline();
         closeOnline();
         closeVosk();
         closeSherpa();
@@ -698,14 +696,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private String normalizeAsr(String value) {
-        if (TranslationService.ASR_VOSK.equals(value) || TranslationService.ASR_SYSTEM.equals(value)
-            || TranslationService.ASR_YOUDAO.equals(value)
-            || TranslationService.ASR_FREE_ONLINE.equals(value)
-            || TranslationService.ASR_GROQ_LARGE.equals(value)
-            || TranslationService.ASR_GROQ_TURBO.equals(value)
-            || TranslationService.ASR_CLOUDFLARE.equals(value)
-            || OfflineAsrModelCatalog.find(value) != null) return value;
-        return TranslationService.ASR_AUTO;
+        return TranslationService.strictAsrMode(value);
     }
 
     private String normalizeLanguageMode(String value) {
@@ -755,6 +746,8 @@ public final class RootCallTranslationService extends Service {
         RootPcmSource r = rootSource;
         rootSource = null;
         if (r != null) try { r.close(); } catch (Exception ignored) {}
+        closeSystemPcm();
+        closeOnline();
         closeVosk();
         closeSherpa();
         if (translator != null) {
