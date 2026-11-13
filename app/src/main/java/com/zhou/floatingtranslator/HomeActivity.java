@@ -102,6 +102,9 @@ public final class HomeActivity extends Activity {
         Button engine = secondaryButton("⚙ 翻译引擎 / API 设置");
         engine.setOnClickListener(v -> startActivity(new Intent(this, ApiSettingsActivity.class)));
         toolsCard.addView(engine, matchWrap());
+        Button asrEngine = secondaryButton("🎤 语音识别引擎（手动固定）");
+        asrEngine.setOnClickListener(v -> startActivity(new Intent(this, AsrEngineSettingsActivity.class)));
+        toolsCard.addView(asrEngine, matchWrap());
         Button update = secondaryButton("⬆ 检查更新 / ↩ 稳定回滚");
         update.setOnClickListener(v -> checkUpdate());
         toolsCard.addView(update, matchWrap());
@@ -167,7 +170,8 @@ public final class HomeActivity extends Activity {
     private void refreshStatus() {
         if (quickStatus == null || preferences == null) return;
         String engine = preferences.getString("engine_id", TranslationRouter.AUTO);
-        String asr = preferences.getString("asr_mode", TranslationService.ASR_AUTO);
+        String asr = TranslationService.strictAsrMode(
+            preferences.getString("asr_mode", TranslationService.ASR_SYSTEM));
         String precision = preferences.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
         String conversation = preferences.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
         int input = Math.min(2, preferences.getInt("input_mode", 0));
