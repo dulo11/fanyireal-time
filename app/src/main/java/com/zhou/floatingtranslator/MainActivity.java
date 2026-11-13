@@ -151,7 +151,7 @@ public final class MainActivity extends Activity {
         languageModeSpinner = new Spinner(this);
         languageModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "单语言",
+                "单语言｜锁定原语言并过滤其他语言",
                 "日语 + 英语（混合）",
                 "中文 + 英语（混合）",
                 "韩语 + 英语（混合）",
@@ -161,6 +161,11 @@ public final class MainActivity extends Activity {
             "language_mode", SherpaSpeechEngine.LANG_SINGLE)));
         languageModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(languageModeSpinner, params());
+        audioCard.addView(label(
+            "单语言模式：使用下面选择的原语言进行翻译；过滤明显非该语言的 ASR 结果。" +
+            "Whisper 可设置识别语言；Omnilingual CTC 模型不能强制指定语言，" +
+            "相同文字体系的语言只能尽量辨别，不能保证完全过滤。"
+        ));
 
         TextView rootTip = text(
             "内部通话模式：在兼容中心明确选择固定 ROOT 或固定 Shizuku，再扫描/测试 PCM 并按 App 保存。" +
