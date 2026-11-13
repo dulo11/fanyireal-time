@@ -282,12 +282,20 @@ public class TranslationService extends Service implements RecognitionListener {
         return OfflineAsrModelCatalog.find(mode) == null ? null : mode;
     }
 
-    private String normalizeAsr(String mode) {
+    /**
+     * The legacy AUTO value is migrated to a single explicit system engine.
+     * No other engine can be started without a new manual selection.
+     */
+    public static String strictAsrMode(String mode) {
         if (ASR_VOSK.equals(mode) || ASR_SYSTEM.equals(mode) || ASR_YOUDAO.equals(mode)
-            || ASR_FREE_ONLINE.equals(mode) || ASR_GROQ_LARGE.equals(mode)
-            || ASR_GROQ_TURBO.equals(mode) || ASR_CLOUDFLARE.equals(mode)
+            || ASR_GROQ_LARGE.equals(mode) || ASR_GROQ_TURBO.equals(mode)
+            || ASR_CLOUDFLARE.equals(mode)
             || OfflineAsrModelCatalog.find(mode) != null) return mode;
-        return ASR_AUTO;
+        return ASR_SYSTEM;
+    }
+
+    private String normalizeAsr(String mode) {
+        return strictAsrMode(mode);
     }
 
     private String normalizeLanguageMode(String mode) {
@@ -363,10 +371,17 @@ public class TranslationService extends Service implements RecognitionListener {
             case ASR_GROQ_TURBO:
             case ASR_CLOUDFLARE:
                 startFreeOnline(asrMode, false); break;
-            case ASR_AUTO: prepareAutoAsr(); break;
+            case ASR_AUTO:
+                // Old API clients cannot enable multi-engine fallback implicitly.
+                if (INPUT_MICROPHONE.equals(inputMode)) startSystemFixed();
+                else startSystemPcm(false);
+                break;
             default:
                 if (OfflineAsrModelCatalog.find(asrMode) != null) startSherpa(asrMode, false);
-                else prepareAutoAsr();
+                else {
+                    setDiagSpeech("ASR：选择的识别引擎不存在");
+                    showStatus("语音识别引擎不可用，请到设置中手动选择。");
+                }
                 break;
         }
     }
@@ -501,7 +516,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     if (!running) return;
                     activeAsrMode = ASR_SYSTEM;
                     setDiagSpeech("ASR：" + engineName + " · " + languageModeLabel());
-                    showStatus(engineName + " 已就绪；失败会自动切免费在线/本地");
+                    showStatus("Android 系统语音识别已启动（独立模式）。");
                     startRawAudioCapture();
                 }
                 @Override public void onText(String text, String detectedLanguage) {
@@ -514,13 +529,12 @@ public class TranslationService extends Service implements RecognitionListener {
                 @Override public void onError(String message, boolean fatal) {
                     if (!running) return;
                     setDiagSpeech("ASR：Android 系统外部 PCM · " + message);
-                    if (fatal && allowAutoFallback && ASR_AUTO.equals(asrMode)) {
-                        failedAutoSystem = true;
+                    if (fatal) {
+                        stopAudioCapture();
                         closePcmSystemSpeech();
-                        showStatus("Android 系统不适合当前外部 PCM，自动切免费在线/本地");
-                        prepareAutoAfterSystem();
-                    } else if (fatal) {
-                        showStatus("Android 系统外部 PCM 失败：" + message);
+                        showStatus("安卓内置识别无法读取内部声音。已停止识别，不会自动切换其他引擎。请到设置选择。");
+                    } else {
+                        showStatus("安卓内置识别正在重试当前 PCM；不会切换引擎。");
                     }
                 }
             });
@@ -540,7 +554,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     if (!running) return;
                     activeAsrMode = mode;
                     setDiagSpeech("ASR：" + engineName + " · 在线免费");
-                    showStatus(engineName + " 已就绪；免费额度到限后自动回退本地");
+                    showStatus(engineName + " 已就绪；仅使用所选在线识别引擎。");
                     startRawAudioCapture();
                 }
                 @Override public void onText(String text, String detectedLanguage, String engineName) {
@@ -1426,12 +1440,12 @@ public class TranslationService extends Service implements RecognitionListener {
         boolean transientError = error == SpeechRecognizer.ERROR_NO_MATCH
             || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
-        if (!transientError && ASR_AUTO.equals(asrMode)) {
-            failedAutoSystem = true;
+        if (transientError) {
+            main.postDelayed(this::startSystemRecognizer, 600);
+        } else {
             destroySystemRecognizer();
-            setDiagSpeech("ASR：Android 系统失败 → 免费在线 / 本地");
-            prepareAutoAfterSystem();
-        } else main.postDelayed(this::startSystemRecognizer, transientError ? 450 : 900);
+            showStatus("安卓内置语音识别失败：" + message + "。请在设置中手动更换引擎。");
+        }
     }
 
     @Override public void onResults(Bundle results) {
