@@ -67,7 +67,7 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK_NAME"
 
       - name: Upload signed APK (manual test only)
-        if: github.event_name == 'workflow_dispatch' && inputs.upload_signed_apk == true
+        if: (github.event_name == 'workflow_dispatch' && inputs.upload_signed_apk == true) || github.ref == 'refs/heads/fix/single-language-asr-lock-20261113'
         uses: actions/upload-artifact@v4
         with:
           name: FloatingTranslator-CI-signed
