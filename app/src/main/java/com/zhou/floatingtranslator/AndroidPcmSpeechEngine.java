@@ -224,7 +224,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private void emit(Bundle bundle, boolean finalResult) {
         String text = bestText(bundle);
         if (text.isEmpty()) {
-            if (finalResult) finishCurrent(false);
+            if (finalResult) failCurrent("系统识别器未返回文字（内部 PCM 可能不受支持）", true);
             return;
         }
         if (!finalResult) {
