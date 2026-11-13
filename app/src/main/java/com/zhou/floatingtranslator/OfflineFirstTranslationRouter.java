@@ -43,6 +43,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     private final String source;
     private final String target;
     private final boolean autoLanguage;
+    private final boolean fixedSpeechSource;
     private final boolean conversationMode;
     private final LanguageIdentifier languageIdentifier;
 
@@ -55,6 +56,13 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
     private final Handler main = new Handler(Looper.getMainLooper());
 
     public OfflineFirstTranslationRouter(Context caller, String source, String target, String selectedEngine) {
+        this(caller, source, target, selectedEngine, false);
+    }
+
+    /** Realtime speech may lock its source even when global text language detection is enabled. */
+    public OfflineFirstTranslationRouter(Context caller, String source, String target,
+                                         String selectedEngine, boolean fixedSpeechSource) {
+        this.fixedSpeechSource = fixedSpeechSource;
         this.conversationMode = caller instanceof FaceToFaceActivity;
         this.context = caller.getApplicationContext();
         this.prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -63,7 +71,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         this.source = normalizeTag(source);
         this.target = normalizeTag(target);
         this.partnerLanguage = this.source;
-        this.autoLanguage = prefs.getBoolean(PREF_AUTO_LANGUAGE, true);
+        this.autoLanguage = !fixedSpeechSource && prefs.getBoolean(PREF_AUTO_LANGUAGE, true);
         this.languageIdentifier = (autoLanguage || conversationMode) ? LanguageIdentification.getClient() : null;
         this.speechRouter = new TranslationRouter(this.context, this.source, this.target, this.selectedEngine);
     }
@@ -72,6 +80,7 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         String base = TranslationRouter.AUTO.equals(selectedEngine)
             ? "自动 · ML Kit 离线优先"
             : TranslationRouter.engineLabel(selectedEngine);
+        if (fixedSpeechSource) return base + " · 固定原语言 " + source + "→" + target;
         if (!autoLanguage) return base;
         return conversationMode
             ? base + " · 自动识别语言/面对面双向"
