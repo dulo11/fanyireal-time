@@ -1240,7 +1240,8 @@ public class TranslationService extends Service implements RecognitionListener {
         } else {
             setDiagSpeech("ASR：" + asrLabel(activeAsrMode) + " · 已恢复");
             showStatus("实时翻译已继续");
-            if (ASR_SYSTEM.equals(activeAsrMode)) startSystemRecognizer();
+            if (ASR_SYSTEM.equals(activeAsrMode)
+                && INPUT_MICROPHONE.equals(inputMode)) startSystemRecognizer();
         }
     }
 
