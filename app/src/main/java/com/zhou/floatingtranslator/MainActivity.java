@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
     private CheckBox preferOffline;
     private CheckBox enableOcr;
     private SeekBar fontSize;
+    private TextView currentAsr;
     private TextView summary;
     private TextView status;
     private TextView recent;
@@ -123,7 +124,7 @@ public final class MainActivity extends Activity {
         audioCard.addView(micTip);
 
         audioCard.addView(label("ASR 识别引擎｜仅在设置中切换"));
-        TextView currentAsr = text(
+        currentAsr = text(
             "当前：" + asrLabel(selectedAsrMode()) + "（固定，不自动回退）",
             14, Color.rgb(220, 212, 235));
         audioCard.addView(currentAsr, params());
@@ -675,6 +676,8 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        if (currentAsr != null) currentAsr.setText(
+            "当前：" + asrLabel(selectedAsrMode()) + "（固定，不自动回退）");
         if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
         if (micProcessingSpinner != null) micProcessingSpinner.setSelection(micProcessingIndex(
             preferences.getString("mic_processing", MicAudioEffects.MODE_REMOTE)));
