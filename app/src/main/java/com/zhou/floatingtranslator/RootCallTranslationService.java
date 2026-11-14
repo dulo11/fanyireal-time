@@ -39,10 +39,32 @@ public final class RootCallTranslationService extends Service {
     private static final long STREAM_TRANSLATE_INTERVAL_MS = 1200L;
     private static final long CLOUD_CHUNK_MS = 3600L;
     private static final int SAMPLE_RATE = 16000;
+    private static final long STALE_SUBTITLE_MS = 11000L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<String> failedAutoModels = new HashSet<>();
     private final ByteArrayOutputStream cloudPcm = new ByteArrayOutputStream();
+    private volatile long lastAcceptedSpeechAt;
+    private boolean staleSubtitleHidden;
+    private int filteredSinceLastAccepted;
+    private final Runnable staleSubtitleMonitor = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            if (!paused && !staleSubtitleHidden && lastAcceptedSpeechAt > 0
+                && SystemClock.elapsedRealtime() - lastAcceptedSpeechAt >= STALE_SUBTITLE_MS) {
+                staleSubtitleHidden = true;
+                if (original != null) original.setText("");
+                if (translated != null) translated.setText(
+                    translationOnlyOverlay ? "" : "等待新的 " + sourceMlTag + " 语音识别…");
+                diagAsr = filteredSinceLastAccepted > 0
+                    ? "ASR：近 11 秒没有有效 " + sourceMlTag + " 文本，已过滤 "
+                        + filteredSinceLastAccepted + " 段"
+                    : "ASR：近 11 秒没有新语音文字，请检查音频或识别模型";
+                renderDiag();
+            }
+            main.postDelayed(this, 1200L);
+        }
+    };
 
     private RootPcmSource rootSource;
     private boolean mediaCapture;
@@ -143,6 +165,11 @@ public final class RootCallTranslationService extends Service {
         translateBusy = false;
         speechQueue.clear();
         sentenceAssembler.reset();
+        lastAcceptedSpeechAt = 0L;
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
+        main.removeCallbacks(staleSubtitleMonitor);
+        main.postDelayed(staleSubtitleMonitor, 1200L);
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoModels.clear();
@@ -471,6 +498,7 @@ public final class RootCallTranslationService extends Service {
         if (!running || paused || text == null || text.trim().isEmpty()) return;
         String cleaned = AsrTranscriptGuard.clean(text);
         if (AsrTranscriptGuard.isLikelyNoise(cleaned)) {
+            filteredSinceLastAccepted++;
             diagAsr = "ASR：已过滤孤立字符或标点噪声";
             renderDiag();
             return;
@@ -478,14 +506,18 @@ public final class RootCallTranslationService extends Service {
 
         String acceptedLanguage = language;
         if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
-            if (!SingleLanguageAsrGuard.accepts(cleaned, sourceMlTag, language)) {
-                diagAsr = "ASR：单语言 " + sourceMlTag + " · 已过滤错误语种或文字";
+            if (!SingleLanguageAsrGuard.acceptsLive(cleaned, sourceMlTag, language)) {
+                filteredSinceLastAccepted++;
+                diagAsr = "ASR：单语言 " + sourceMlTag + " · 已过滤错误文字体系";
                 renderDiag();
                 return;
             }
             acceptedLanguage = sourceMlTag;
         }
 
+        lastAcceptedSpeechAt = SystemClock.elapsedRealtime();
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
         if (showOriginal) main.post(() -> {
             if (running && original != null) original.setText("原文：" + cleaned);
         });
@@ -768,6 +800,10 @@ public final class RootCallTranslationService extends Service {
 
     private void stopPipeline() {
         running = false;
+        main.removeCallbacks(staleSubtitleMonitor);
+        lastAcceptedSpeechAt = 0L;
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
         RootPcmSource r = rootSource;
         rootSource = null;
         if (r != null) try { r.close(); } catch (Exception ignored) {}
