@@ -678,6 +678,8 @@ public final class MainActivity extends Activity {
     }
 
     private String asrLabel(String mode) {
+        OfflineAsrModelCatalog.Model localModel = OfflineAsrModelCatalog.find(mode);
+        if (localModel != null) return localModel.name + "｜" + localModel.parameterText();
         if (TranslationService.ASR_FREE_ONLINE.equals(mode)) return "免费在线自动";
         if (TranslationService.ASR_GROQ_LARGE.equals(mode)) return "Groq Free · Whisper Large V3";
         if (TranslationService.ASR_GROQ_TURBO.equals(mode)) return "Groq Free · Whisper Turbo";
@@ -689,7 +691,7 @@ public final class MainActivity extends Activity {
         if (TranslationService.ASR_WHISPER_SMALL.equals(mode)) return "Whisper Small";
         if (TranslationService.ASR_WHISPER_MEDIUM.equals(mode)) return "Whisper Medium";
         if (TranslationService.ASR_QWEN3.equals(mode)) return "Qwen3-ASR";
-        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return "Omnilingual";
+        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return "Omnilingual｜约3亿参数";
         if (TranslationService.ASR_SYSTEM.equals(mode)) return "系统 SpeechRecognizer";
         if (TranslationService.ASR_YOUDAO.equals(mode)) return "有道云 ASR";
         return "自动推荐";
