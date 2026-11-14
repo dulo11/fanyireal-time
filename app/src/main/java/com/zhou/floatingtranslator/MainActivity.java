@@ -88,6 +88,9 @@ public final class MainActivity extends Activity {
         Button rootLab = secondaryButton("☎ 通话内部声音兼容中心｜ROOT / Shizuku");
         rootLab.setOnClickListener(v -> startActivity(new Intent(this, RootCallActivity.class)));
         quick.addView(rootLab, params());
+        Button mediaLab = secondaryButton("🎧 ROOT 直播/视频音频｜无屏幕共享授权（实验）");
+        mediaLab.setOnClickListener(v -> openRootAudioSettings(true));
+        quick.addView(mediaLab, params());
         Button models = secondaryButton("📦 离线模型中心");
         models.setOnClickListener(v -> startActivity(new Intent(this, ModelManagerActivity.class)));
         quick.addView(models, params());
@@ -100,11 +103,17 @@ public final class MainActivity extends Activity {
             new String[]{
                 "系统内部声音｜直播/视频",
                 "麦克风｜通话外放兼容",
-                "ROOT / Shizuku 内部通话/VoIP｜按 App 保存 PCM"
+                "ROOT / Shizuku 内部通话/VoIP｜按 App 保存 PCM",
+                "ROOT 直播/视频内部声音｜无屏幕授权（需先实测 PCM）"
             }));
-        inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
+        inputModeSpinner.setSelection(Math.min(3, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(inputModeSpinner, params());
+        audioCard.addView(label(
+            "直播/视频：普通系统内部声音模式只抓取音频；OCR 关闭时不读取屏幕画面，但 Android 仍会显示屏幕共享授权。"
+            + " ROOT 直播模式不申请 MediaProjection，但仅限通过 tinycap 实机测试可读取声音的设备，"
+            + " 不保证当前 PCM 属于指定 App。请用播放/暂停对照验证。"
+        ));
 
         audioCard.addView(label("麦克风通话处理｜仅麦克风 + 本地/有道 PCM ASR"));
         micProcessingSpinner = new Spinner(this);
@@ -188,7 +197,7 @@ public final class MainActivity extends Activity {
             preferences.getBoolean("translation_only_overlay", false));
         smartSentenceTranslation = check("智能拼句修正（不使用 AI；先立即翻译，后续片段可自动合并重译）",
             preferences.getBoolean("smart_sentence_translation", true));
-        enableOcr = check("屏幕 OCR（ROOT 通话模式会忽略）",
+        enableOcr = check("屏幕 OCR（默认关闭；ROOT 内部音频模式忽略）",
             preferences.getBoolean("enable_ocr", false));
         preferOffline = check("手动选择系统 SpeechRecognizer 时强制请求离线（自动模式忽略此项，优先在线质量）",
             preferences.getBoolean("prefer_offline", false));
@@ -280,12 +289,14 @@ public final class MainActivity extends Activity {
 
         int mode = inputModeSpinner.getSelectedItemPosition();
         boolean mic = mode == 1;
-        boolean root = mode == 2;
+        boolean root = mode == 2 || mode == 3;
+        boolean rootMedia = mode == 3;
         String asr = selectedAsrMode();
 
-        if (root && !RootCallProfileStore.hasSelected(this)) {
-            toast("内部通话模式还没有保存 PCM 配置，先去 ROOT / Shizuku 兼容中心");
-            startActivity(new Intent(this, RootCallActivity.class));
+        if (root && !(rootMedia
+            ? RootCallProfileStore.hasSelectedMedia(this) : RootCallProfileStore.hasSelected(this))) {
+            toast(rootMedia ? "请先测试并保存直播内部 PCM 配置" : "请先保存通话 PCM 配置");
+            openRootAudioSettings(rootMedia);
             return;
         }
         if ((TranslationService.ASR_FREE_ONLINE.equals(asr)
@@ -311,10 +322,12 @@ public final class MainActivity extends Activity {
         }
 
         if (root) {
-            if (enableOcr.isChecked()) toast("ROOT / Shizuku 通话模式暂不使用 OCR，已只启动通话声音翻译");
-            startRootTranslationService();
-            RootCallProfileStore.Profile p = RootCallProfileStore.loadSelected(this);
-            status.setText("正在启动 " + (p == null ? "内部" : p.sourceLabel()) + " 通话翻译；保持目标 App 通话即可。");
+            if (enableOcr.isChecked()) toast("ROOT 内部音频模式只采声音，不使用 OCR");
+            startRootTranslationService(rootMedia);
+            RootCallProfileStore.Profile p = rootMedia ? RootCallProfileStore.loadSelectedMedia(this)
+                : RootCallProfileStore.loadSelected(this);
+            status.setText("正在启动 " + (p == null ? "内部" : p.sourceLabel())
+                + (rootMedia ? " 直播音频翻译；不请求屏幕共享权限。" : " 通话翻译；保持通话即可。"));
             return;
         }
 
@@ -329,7 +342,9 @@ public final class MainActivity extends Activity {
         Intent captureIntent = Build.VERSION.SDK_INT >= 34
             ? manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
             : manager.createScreenCaptureIntent();
-        status.setText("请允许共享整个屏幕；系统内部声音/OCR 需要此授权。");
+        status.setText(enableOcr.isChecked()
+            ? "已开启 OCR：系统需要屏幕共享授权，并且会读取画面中的文字。"
+            : "音频专用：只采集直播音频，不抓取屏幕画面。Android 仍要求显示屏幕共享授权。");
         startActivityForResult(captureIntent, REQUEST_CAPTURE);
     }
 
@@ -367,11 +382,16 @@ public final class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
     }
 
-    private void startRootTranslationService() {
+    private void openRootAudioSettings(boolean media) {
+        startActivity(new Intent(this, RootCallActivity.class)
+            .putExtra(RootCallActivity.EXTRA_MEDIA_MODE, media));
+    }
+
+    private void startRootTranslationService(boolean media) {
         stopService(new Intent(this, TranslationService.class));
         Intent service = baseServiceIntent(RootCallTranslationService.class)
             .putExtra(TranslationService.EXTRA_ENABLE_OCR, false)
-            .putExtra(TranslationService.EXTRA_INPUT_MODE, "root");
+            .putExtra(TranslationService.EXTRA_INPUT_MODE, media ? "root_media" : "root");
         startForegroundService(service);
     }
 
@@ -499,9 +519,12 @@ public final class MainActivity extends Activity {
         if (summary == null) return;
         int mode = inputModeSpinner == null ? preferences.getInt("input_mode", 0) : inputModeSpinner.getSelectedItemPosition();
         RootCallProfileStore.Profile profile = RootCallProfileStore.loadSelected(this);
-        String source = mode == 2 ? ((profile == null ? "ROOT/Shizuku" : profile.sourceLabel()) + " 通话/VoIP")
-            : mode == 1 ? "麦克风" : "系统内部声音";
-        String internal = profile == null ? "" : "\n内部 App：" + profile.packageName + " · " + profile.sourceLabel();
+        if (mode == 3) profile = RootCallProfileStore.loadSelectedMedia(this);
+        String source = mode == 3 ? "ROOT 直播内部声音（无屏幕授权·实验）"
+            : mode == 2 ? ((profile == null ? "ROOT/Shizuku" : profile.sourceLabel()) + " 通话/VoIP")
+            : mode == 1 ? "麦克风" : "系统内部声音（授权后仅采音频）";
+        String internal = mode < 2 || profile == null ? "" : "\n内部 PCM 配置：" + profile.packageName
+            + " · " + profile.sourceLabel();
         String mic = mode == 1 ? "\n麦克风处理：" + micProcessingLabel(preferences.getString(
             "mic_processing", MicAudioEffects.MODE_REMOTE)) : "";
         summary.setText("声音：" + source + "\nASR：" + asrLabel(TranslationService.strictAsrMode(preferences.getString("asr_mode", TranslationService.ASR_SYSTEM)))
@@ -678,7 +701,7 @@ public final class MainActivity extends Activity {
         super.onResume();
         if (currentAsr != null) currentAsr.setText(
             "当前：" + asrLabel(selectedAsrMode()) + "（固定，不自动回退）");
-        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
+        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(3, preferences.getInt("input_mode", 0)));
         if (micProcessingSpinner != null) micProcessingSpinner.setSelection(micProcessingIndex(
             preferences.getString("mic_processing", MicAudioEffects.MODE_REMOTE)));
         refreshSummary();
