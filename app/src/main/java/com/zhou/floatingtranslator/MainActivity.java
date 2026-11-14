@@ -356,6 +356,17 @@ public final class MainActivity extends Activity {
 
         String modelId = TranslationService.modelIdForAsr(asr);
         if (modelId != null) {
+            boolean mixed = SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode());
+            boolean allowed = mixed
+                ? OfflineAsrModelCatalog.supportsMixedLanguages(modelId, chosenCustomLanguages)
+                : OfflineAsrModelCatalog.supportsLanguage(modelId, source.mlKitTag);
+            if (!allowed) {
+                OfflineAsrModelCatalog.Model selected = OfflineAsrModelCatalog.find(modelId);
+                toast((selected == null ? "当前模型" : selected.name)
+                    + " 不支持所选识别语言；请更换 ASR 或语言，不会自动切换。");
+                return;
+            }
+
             OfflineModelStore store = new OfflineModelStore(this);
             boolean installed = store.isInstalled(modelId);
             store.close();
