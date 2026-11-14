@@ -149,10 +149,18 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 postStatus("正在加载 " + meta.name + " · " + requestedPrecisionLabel(meta)
                     + " · " + profileLabel());
                 OfflineRecognizer r;
-                try {
-                    r = buildRecognizer(meta, modelDir, true);
-                } catch (Throwable hotwordFailure) {
-                    postStatus("热词原生偏置暂不可用，继续加载普通识别器");
+                boolean canNativeHotword = OfflineAsrModelCatalog.REAZON_JA.equals(modelId)
+                    && PROFILE_ACCURACY.equals(conversationProfile) && !hotwords.isEmpty();
+                if (canNativeHotword) {
+                    try {
+                        r = buildRecognizer(meta, modelDir, true);
+                    } catch (Throwable hotwordFailure) {
+                        postStatus("Reazon 原生热词不可用，继续加载普通识别器");
+                        r = buildRecognizer(meta, modelDir, false);
+                    }
+                } else {
+                    // Never retry a failed 1.7B/Whisper/FunASR model load as a
+                    // "hotword fallback": it can double memory pressure.
                     r = buildRecognizer(meta, modelDir, false);
                 }
                 Vad preparedVad = null;
