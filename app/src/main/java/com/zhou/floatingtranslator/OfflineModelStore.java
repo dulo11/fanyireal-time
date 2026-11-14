@@ -724,6 +724,12 @@ public final class OfflineModelStore implements AutoCloseable {
             File exact = findDirectory(modelDir, hint);
             if (exact != null) return exact;
         }
+        // A model root with ONNX/ORT files and one tokenizer subdirectory
+        // must NOT be mistaken for an archive containing a single model folder.
+        File[] models = modelDir.listFiles(file -> file.isFile()
+            && (file.getName().toLowerCase(Locale.ROOT).endsWith(".onnx")
+                || file.getName().toLowerCase(Locale.ROOT).endsWith(".ort")));
+        if (models != null && models.length > 0) return modelDir;
         File[] children = modelDir.listFiles(File::isDirectory);
         if (children != null && children.length == 1) return children[0];
         return modelDir;
