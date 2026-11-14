@@ -111,6 +111,11 @@ public class ModelManagerActivity extends Activity {
         importButton.setOnClickListener(v -> chooseImportTemplate());
         root.addView(importButton, matchWrap());
 
+        Button disclosure = button("🔒 查看音频权限、数据去向与浮译源码");
+        disclosure.setOnClickListener(v ->
+            startActivity(new Intent(this, PrivacyAndSourcesActivity.class)));
+        root.addView(disclosure, matchWrap());
+
         selectedInfo = text("", 13, Color.rgb(184, 174, 207));
         selectedInfo.setPadding(dp(4), dp(6), dp(4), dp(8));
         root.addView(selectedInfo);
