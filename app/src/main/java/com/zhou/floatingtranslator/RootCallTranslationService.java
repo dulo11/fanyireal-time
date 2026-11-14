@@ -23,6 +23,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -73,6 +75,9 @@ public final class RootCallTranslationService extends Service {
     private AndroidPcmSpeechEngine pcmSystemSpeech;
     private FreeOnlineSpeechEngine onlineSpeech;
     private OfflineFirstTranslationRouter translator;
+    private CustomSpeechLanguageResolver customSpeechResolver;
+    private List<String> customSpeechLanguages = new ArrayList<>();
+    private int speechResolverEpoch;
 
     private volatile boolean running;
     private volatile boolean paused;
@@ -146,6 +151,12 @@ public final class RootCallTranslationService extends Service {
         asrMode = normalizeAsr(intent.getStringExtra(TranslationService.EXTRA_ASR_MODE));
         activeAsrMode = asrMode;
         languageMode = normalizeLanguageMode(intent.getStringExtra(TranslationService.EXTRA_LANGUAGE_MODE));
+        customSpeechLanguages = SelectedSpeechLanguages.parse(
+            intent.getStringExtra(SelectedSpeechLanguages.EXTRA_CUSTOM_CODES));
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode) && customSpeechLanguages.size() < 2) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         sourceMlTag = value(intent.getStringExtra(TranslationService.EXTRA_SOURCE_MLKIT), "en");
         speechLanguage = value(intent.getStringExtra(TranslationService.EXTRA_SOURCE_SPEECH), "en-US");
         targetMlTag = value(intent.getStringExtra(TranslationService.EXTRA_TARGET_MLKIT), "zh");
@@ -177,9 +188,14 @@ public final class RootCallTranslationService extends Service {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
         createOverlay(fontSize);
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            customSpeechResolver = new CustomSpeechLanguageResolver(customSpeechLanguages);
+        }
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId,
             SherpaSpeechEngine.LANG_SINGLE.equals(languageMode));
-        diagTranslation = translator.selectedEngineName();
+        diagTranslation = SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+            ? "自选混合 " + SelectedSpeechLanguages.display(customSpeechLanguages)
+                + " → " + targetMlTag : translator.selectedEngineName();
         diagAudio = profile.sourceLabel() + " · " + profile.packageName + " · 等待 PCM";
         diagAsr = "ASR：" + asrLabel(asrMode) + " · 准备中";
         renderDiag();
@@ -504,6 +520,27 @@ public final class RootCallTranslationService extends Service {
             return;
         }
 
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            CustomSpeechLanguageResolver resolver = customSpeechResolver;
+            if (resolver == null) return;
+            final int epoch = speechResolverEpoch;
+            resolver.resolve(cleaned, language, new CustomSpeechLanguageResolver.Callback() {
+                @Override public void onSelected(String selected) {
+                    if (!running || paused || epoch != speechResolverEpoch) return;
+                    diagAsr = "ASR：混合语种 " + selected + " ✓ · " + preview(cleaned);
+                    renderDiag();
+                    acceptSelectedSpeech(cleaned, finalResult, selected);
+                }
+                @Override public void onRejected(String reason) {
+                    if (!running || paused || epoch != speechResolverEpoch) return;
+                    filteredSinceLastAccepted++;
+                    diagAsr = "ASR：自选混合已跳过：" + reason;
+                    renderDiag();
+                }
+            });
+            return;
+        }
+
         String acceptedLanguage = language;
         if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
             if (!SingleLanguageAsrGuard.acceptsLive(cleaned, sourceMlTag, language)) {
@@ -515,6 +552,11 @@ public final class RootCallTranslationService extends Service {
             acceptedLanguage = sourceMlTag;
         }
 
+        acceptSelectedSpeech(cleaned, finalResult, acceptedLanguage);
+    }
+
+    private void acceptSelectedSpeech(String cleaned, boolean finalResult, String acceptedLanguage) {
+        if (!running || paused) return;
         lastAcceptedSpeechAt = SystemClock.elapsedRealtime();
         staleSubtitleHidden = false;
         filteredSinceLastAccepted = 0;
@@ -545,7 +587,7 @@ public final class RootCallTranslationService extends Service {
         translateBusy = true;
         diagTranslation = "翻译中";
         renderDiag();
-        current.translate(cleaned, next.language, new OfflineFirstTranslationRouter.Callback() {
+        OfflineFirstTranslationRouter.Callback callback = new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
                 if (!running || translator != current) return;
                 diagTranslation = engineName;
@@ -564,7 +606,12 @@ public final class RootCallTranslationService extends Service {
                 if (!translationOnlyOverlay && translated != null) translated.setText("翻译失败：" + message);
                 finishTranslate();
             }
-        });
+        };
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            current.translateExplicitSource(cleaned, next.language, callback);
+        } else {
+            current.translate(cleaned, next.language, callback);
+        }
     }
 
     private void finishTranslate() {
@@ -758,7 +805,9 @@ public final class RootCallTranslationService extends Service {
 
     private String normalizeLanguageMode(String value) {
         if (SherpaSpeechEngine.LANG_JA_EN.equals(value) || SherpaSpeechEngine.LANG_ZH_EN.equals(value)
-            || SherpaSpeechEngine.LANG_KO_EN.equals(value) || SherpaSpeechEngine.LANG_AUTO.equals(value)) return value;
+            || SherpaSpeechEngine.LANG_KO_EN.equals(value)
+            || SherpaSpeechEngine.LANG_AUTO.equals(value)
+            || SelectedSpeechLanguages.MODE_CUSTOM.equals(value)) return value;
         return SherpaSpeechEngine.LANG_SINGLE;
     }
 
@@ -800,6 +849,11 @@ public final class RootCallTranslationService extends Service {
 
     private void stopPipeline() {
         running = false;
+        speechResolverEpoch++;
+        CustomSpeechLanguageResolver resolver = customSpeechResolver;
+        customSpeechResolver = null;
+        if (resolver != null) resolver.close();
+        customSpeechLanguages = new ArrayList<>();
         main.removeCallbacks(staleSubtitleMonitor);
         lastAcceptedSpeechAt = 0L;
         staleSubtitleHidden = false;
