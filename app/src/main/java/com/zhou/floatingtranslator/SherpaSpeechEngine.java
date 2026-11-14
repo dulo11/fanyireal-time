@@ -504,7 +504,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 markPrecision(llm);
                 OfflineFunAsrNanoModelConfig cfg = new OfflineFunAsrNanoModelConfig();
                 cfg.setEncoderAdaptor(adapter.getAbsolutePath());
-                cfg.setLLM(llm.getAbsolutePath());
+                cfg.setLlm(llm.getAbsolutePath());
                 cfg.setEmbedding(embedding.getAbsolutePath());
                 cfg.setTokenizer(tokenizer.getAbsolutePath());
                 cfg.setMaxNewTokens(PROFILE_ACCURACY.equals(conversationProfile) ? 256 : 160);
