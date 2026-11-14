@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -82,6 +83,44 @@ public final class AsrEngineSettingsActivity extends Activity {
             if (ids.get(i).equals(chosen)) { selector.setSelection(i); break; }
         }
         root.addView(selector, new LinearLayout.LayoutParams(-1, dp(62)));
+
+        TextView source = text("", 12, Color.rgb(179, 216, 235));
+        source.setPadding(0, dp(6), 0, dp(10));
+        root.addView(source);
+        Button official = new Button(this);
+        official.setText("🌐 打开所选识别模型 / 语音服务的研发方官网");
+        official.setTextColor(Color.WHITE);
+        official.setAllCaps(false);
+        official.setBackgroundResource(R.drawable.button_secondary);
+        root.addView(official, new LinearLayout.LayoutParams(-1, -2));
+        Runnable updateSource = () -> {
+            String currentId = ids.get(Math.max(0, selector.getSelectedItemPosition()));
+            OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, currentId);
+            String link = model == null ? ModelSourceLinks.speechRecognizerUrl(currentId)
+                : ModelSourceLinks.officialModelUrl(model.runtimeModelId);
+            source.setText("官方出处：" + (link.isEmpty() ? "未公开或暂无准确地址" : link)
+                + "\n语音识别与 Azure 等文字翻译是不同的服务。"
+                + "如果选择在线识别，语音片段会上传给对应提供商。");
+            official.setEnabled(!link.isEmpty());
+            official.setOnClickListener(v -> ModelSourceLinks.open(this, link));
+        };
+        selector.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view,
+                                                   int position, long id) {
+                updateSource.run();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        updateSource.run();
+
+        Button privacy = new Button(this);
+        privacy.setText("🔒 了解音频权限 / 数据去向 / 查看完整源码");
+        privacy.setTextColor(Color.WHITE);
+        privacy.setAllCaps(false);
+        privacy.setBackgroundResource(R.drawable.button_secondary);
+        privacy.setOnClickListener(v -> startActivity(
+            new android.content.Intent(this, PrivacyAndSourcesActivity.class)));
+        root.addView(privacy, new LinearLayout.LayoutParams(-1, -2));
 
         Button save = new Button(this);
         save.setText("保存识别引擎（下次启动实时翻译生效）");
