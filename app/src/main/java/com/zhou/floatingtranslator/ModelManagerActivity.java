@@ -400,7 +400,7 @@ public class ModelManagerActivity extends Activity {
         String deployedPack = ModelSourceLinks.packSourceUrl(model);
         selectedInfo.setText(model.name + "\n参数规模：" + model.parameterText()
             + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
-            + "\n模型研发方：" + author
+            + (imported ? "\n参考架构研发方（不代表导入文件出处）：" : "\n模型研发方：") + author
             + "\n部署文件来源：" + (deployedPack.isEmpty()
                 ? "本地导入（不会通过导入操作上传）" : deployedPack)
             + "\n状态：" + state);
