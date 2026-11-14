@@ -610,7 +610,10 @@ public final class MainActivity extends Activity {
     }
 
     private int languageModeIndex(String mode) {
-        return SherpaSpeechEngine.LANG_SINGLE.equals(mode) ? 0 : 1;
+        return SelectedSpeechLanguages.MODE_CUSTOM.equals(mode)
+            || SherpaSpeechEngine.LANG_JA_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_ZH_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_KO_EN.equals(mode) ? 1 : 0;
     }
 
     private String selectedLanguageMode() {
