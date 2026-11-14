@@ -483,7 +483,8 @@ public class TranslationService extends Service implements RecognitionListener {
                     if (!running || paused || text == null || text.trim().isEmpty()) return;
                     String cleaned = text.trim();
                     String lang = detectedLanguage == null || detectedLanguage.isEmpty() ? "" : " · " + detectedLanguage;
-                    setDiagSpeech("ASR：" + meta.name + lang + " · " + preview(cleaned));
+                    setDiagSpeech("ASR：" + meta.name + lang + " · "
+                        + languageModeLabel() + " · " + preview(cleaned));
         
                     queueSpeechTranslation(cleaned, true, detectedLanguage);
                 }
@@ -522,7 +523,8 @@ public class TranslationService extends Service implements RecognitionListener {
                 @Override public void onText(String text, String detectedLanguage) {
                     if (!running || paused || text == null || text.trim().isEmpty()) return;
                     String cleaned = text.trim();
-                    setDiagSpeech("ASR：Android 系统外部 PCM · " + preview(cleaned));
+                    setDiagSpeech("ASR：Android 系统外部 PCM · " + languageModeLabel()
+                        + " · " + preview(cleaned));
         
                     queueSpeechTranslation(cleaned, true, detectedLanguage);
                 }
@@ -790,7 +792,10 @@ public class TranslationService extends Service implements RecognitionListener {
     private void queueSpeechTranslation(String text, boolean finalResult, String language) {
         if (!running || paused || text == null || text.trim().isEmpty()) return;
         String cleaned = AsrTranscriptGuard.clean(text);
-        if (cleaned.isEmpty()) return;
+        if (AsrTranscriptGuard.isLikelyNoise(cleaned)) {
+            setDiagSpeech("ASR：已过滤孤立字符或标点噪声");
+            return;
+        }
         if (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
             acceptRecognizedSpeech(cleaned, finalResult, language);
             return;
