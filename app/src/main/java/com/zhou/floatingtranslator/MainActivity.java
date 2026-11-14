@@ -321,9 +321,21 @@ public final class MainActivity extends Activity {
         boolean rootMedia = mode == 3;
         String asr = selectedAsrMode();
         if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
-            && TranslationService.ASR_VOSK.equals(asr)) {
-            toast("Vosk 只能同时加载一种语言；自选混合请改选 Whisper 或 Omnilingual 等多语种 ASR");
+            && (TranslationService.ASR_VOSK.equals(asr)
+                || TranslationService.ASR_REAZON.equals(asr)
+                || TranslationService.ASR_PARAKEET.equals(asr))) {
+            toast("当前 ASR 只有单语种模型；自选混合请使用 Whisper、Omnilingual 等多语种模型");
             return;
+        }
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && TranslationService.ASR_SENSEVOICE.equals(asr)) {
+            for (String lang : chosenCustomLanguages) {
+                if (!("zh".equals(lang) || "en".equals(lang) || "ja".equals(lang)
+                    || "ko".equals(lang) || "yue".equals(lang))) {
+                    toast("SenseVoice 只适合中/英/日/韩/粤；所选混合含其它语言，请换识别模型");
+                    return;
+                }
+            }
         }
 
         if (root && !(rootMedia
