@@ -173,7 +173,7 @@ public final class MainActivity extends Activity {
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
         audioCard.addView(label(
-            "单语言：下面的「原语言」下拉列表可选择全部支持的语言。\\n"
+            "单语言：下面的「原语言」下拉列表可选择全部支持的语言。\n"
             + "混合：点击上方按钮，自选英语+日语、英语+马来语+越南语等任意组合；"
             + "只把选定语种送去翻译，无法判断的片段直接提示，不擅自猜其他语种。"
             + "注意 Omnilingual 等多语言 ASR 不支持在模型内部锁定这些语言。"
@@ -188,7 +188,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout languageCard = card(root);
         languageCard.addView(section("翻译语言"));
-        languageCard.addView(label("原语言"));
+        languageCard.addView(label("单语言原语言（混合模式以勾选语言为准）"));
         sourceSpinner = languageSpinner();
         sourceSpinner.setSelection(preferences.getInt("source_index", 2));
         languageCard.addView(sourceSpinner, params());
@@ -299,8 +299,9 @@ public final class MainActivity extends Activity {
 
         LanguageOption source = (LanguageOption) sourceSpinner.getSelectedItem();
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
-        if (source.mlKitTag.equals(target.mlKitTag)) {
-            toast("原语言和目标语言不能相同");
+        if (!SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && source.mlKitTag.equals(target.mlKitTag)) {
+            toast("单语言原语言和目标语言不能相同");
             return;
         }
 
@@ -315,6 +316,11 @@ public final class MainActivity extends Activity {
         boolean root = mode == 2 || mode == 3;
         boolean rootMedia = mode == 3;
         String asr = selectedAsrMode();
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && TranslationService.ASR_VOSK.equals(asr)) {
+            toast("Vosk 只能同时加载一种语言；自选混合请改选 Whisper 或 Omnilingual 等多语种 ASR");
+            return;
+        }
 
         if (root && !(rootMedia
             ? RootCallProfileStore.hasSelectedMedia(this) : RootCallProfileStore.hasSelected(this))) {
