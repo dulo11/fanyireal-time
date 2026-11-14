@@ -122,12 +122,12 @@ public final class RootCallActivity extends Activity {
 
         TextView intro = text(mediaMode
             ? "此模式只通过 ROOT/tinycap 尝试读取设备内部 PCM，不调用 MediaProjection，"
-                + "不申请屏幕共享授权、不读取画面、不使用麦克风。\\n\\n"
+                + "不申请屏幕共享授权、不读取画面；本应用不主动启动系统麦克风，但部分 ALSA PCM 可能包含麦克风。\n\n"
                 + "必须先在目标视频/直播播放期间测试 PCM，再播放/暂停做对照。"
                 + "并非所有 ColorOS 设备都暴露媒体混音 PCM；设备可录音不代表抓到的是指定 App。"
                 + "不支持就明确失败，不自动切到麦克风或屏幕共享。"
             : "这里提供两个固定内部声音后端：ROOT（uid=0）和 Shizuku（ADB shell，实验）。"
-                + "两者都按 App 保存 ALSA card/device/采样率/声道，失败不会偷偷切换来源。\\n\\n"
+                + "两者都按 App 保存 ALSA card/device/采样率/声道，失败不会偷偷切换来源。\n\n"
                 + "若选择系统内置 ASR，系统服务仍需支持 16k 外部 PCM 输入；"
                 + "不支持时会报错而不会切换其它识别引擎。",
             14, Color.rgb(210, 200, 225));
@@ -379,7 +379,7 @@ public final class RootCallActivity extends Activity {
             long bytes = testBytes;
             String level;
             if (bytes < 8000) level = "❌ 几乎没有读到 PCM 数据，换设备/采样率/声道";
-            else if (peak < 80) level = "⚠ 读到了 PCM，但接近静音；这个设备大概率不是通话声音";
+            else if (peak < 80) level = "⚠ 读到了 PCM，但接近静音；当前 PCM 接近静音，可能不是所需声音";
             else if (peak < 500) level = "⚠ 有弱信号；可以再测试别的 PCM 对比";
             else level = mediaMode
                 ? "✅ PCM 有明显声音（仍需通过播放/暂停对照确认来源）"
