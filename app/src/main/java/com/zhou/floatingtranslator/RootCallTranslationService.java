@@ -823,7 +823,7 @@ public final class RootCallTranslationService extends Service {
         if (TranslationService.ASR_GROQ_TURBO.equals(value)) return "Groq Free · Whisper Turbo";
         if (TranslationService.ASR_CLOUDFLARE.equals(value)) return "Cloudflare Workers AI Free";
         OfflineAsrModelCatalog.Model m = OfflineAsrModelCatalog.find(value);
-        return m == null ? "自动推荐 ASR" : m.name;
+        return m == null ? "自动推荐 ASR" : m.name + "｜" + m.parameterText();
     }
 
     private void closeSystemPcm() {
