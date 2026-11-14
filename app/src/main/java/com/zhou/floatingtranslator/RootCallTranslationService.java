@@ -57,7 +57,9 @@ public final class RootCallTranslationService extends Service {
                 staleSubtitleHidden = true;
                 if (original != null) original.setText("");
                 if (translated != null) translated.setText(
-                    translationOnlyOverlay ? "" : "等待新的 " + sourceMlTag + " 语音识别…");
+                    translationOnlyOverlay ? "" : "等待新的 "
+                        + (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                            ? "已选语种" : sourceMlTag) + " 语音识别…");
                 diagAsr = filteredSinceLastAccepted > 0
                     ? "ASR：近 11 秒没有有效 " + sourceMlTag + " 文本，已过滤 "
                         + filteredSinceLastAccepted + " 段"
