@@ -33,6 +33,7 @@
         <activity android:name=".AsrPrecisionActivity" android:exported="false" />
         <activity android:name=".AsrEngineSettingsActivity" android:exported="false" />
         <activity android:name=".ModelManagerActivity" android:exported="false" />
+        <activity android:name=".PrivacyAndSourcesActivity" android:exported="false" />
         <activity android:name=".ApiSettingsActivity" android:exported="false" />
         <activity android:name=".ScreenTranslationActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="false" />
