@@ -23,6 +23,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -39,17 +41,45 @@ public final class RootCallTranslationService extends Service {
     private static final long STREAM_TRANSLATE_INTERVAL_MS = 1200L;
     private static final long CLOUD_CHUNK_MS = 3600L;
     private static final int SAMPLE_RATE = 16000;
+    private static final long STALE_SUBTITLE_MS = 11000L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<String> failedAutoModels = new HashSet<>();
     private final ByteArrayOutputStream cloudPcm = new ByteArrayOutputStream();
+    private volatile long lastAcceptedSpeechAt;
+    private boolean staleSubtitleHidden;
+    private int filteredSinceLastAccepted;
+    private final Runnable staleSubtitleMonitor = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            if (!paused && !staleSubtitleHidden && lastAcceptedSpeechAt > 0
+                && SystemClock.elapsedRealtime() - lastAcceptedSpeechAt >= STALE_SUBTITLE_MS) {
+                staleSubtitleHidden = true;
+                if (original != null) original.setText("");
+                if (translated != null) translated.setText(
+                    translationOnlyOverlay ? "" : "等待新的 "
+                        + (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                            ? "已选语种" : sourceMlTag) + " 语音识别…");
+                diagAsr = filteredSinceLastAccepted > 0
+                    ? "ASR：近 11 秒没有有效 " + sourceMlTag + " 文本，已过滤 "
+                        + filteredSinceLastAccepted + " 段"
+                    : "ASR：近 11 秒没有新语音文字，请检查音频或识别模型";
+                renderDiag();
+            }
+            main.postDelayed(this, 1200L);
+        }
+    };
 
     private RootPcmSource rootSource;
+    private boolean mediaCapture;
     private OfflineSpeechEngine vosk;
     private SherpaSpeechEngine sherpa;
     private AndroidPcmSpeechEngine pcmSystemSpeech;
     private FreeOnlineSpeechEngine onlineSpeech;
     private OfflineFirstTranslationRouter translator;
+    private CustomSpeechLanguageResolver customSpeechResolver;
+    private List<String> customSpeechLanguages = new ArrayList<>();
+    private int speechResolverEpoch;
 
     private volatile boolean running;
     private volatile boolean paused;
@@ -111,7 +141,10 @@ public final class RootCallTranslationService extends Service {
         if (!TranslationService.ACTION_START.equals(action)) return START_NOT_STICKY;
 
         stopPipeline();
-        RootCallProfileStore.Profile profile = RootCallProfileStore.loadSelected(this);
+        mediaCapture = "root_media".equals(intent.getStringExtra(TranslationService.EXTRA_INPUT_MODE));
+        RootCallProfileStore.Profile profile = mediaCapture
+            ? RootCallProfileStore.loadSelectedMedia(this)
+            : RootCallProfileStore.loadSelected(this);
         if (profile == null || !Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -120,6 +153,12 @@ public final class RootCallTranslationService extends Service {
         asrMode = normalizeAsr(intent.getStringExtra(TranslationService.EXTRA_ASR_MODE));
         activeAsrMode = asrMode;
         languageMode = normalizeLanguageMode(intent.getStringExtra(TranslationService.EXTRA_LANGUAGE_MODE));
+        customSpeechLanguages = SelectedSpeechLanguages.parse(
+            intent.getStringExtra(SelectedSpeechLanguages.EXTRA_CUSTOM_CODES));
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode) && customSpeechLanguages.size() < 2) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         sourceMlTag = value(intent.getStringExtra(TranslationService.EXTRA_SOURCE_MLKIT), "en");
         speechLanguage = value(intent.getStringExtra(TranslationService.EXTRA_SOURCE_SPEECH), "en-US");
         targetMlTag = value(intent.getStringExtra(TranslationService.EXTRA_TARGET_MLKIT), "zh");
@@ -131,13 +170,19 @@ public final class RootCallTranslationService extends Service {
         allowYoudaoSpeech = intent.getBooleanExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, false);
         int fontSize = intent.getIntExtra(TranslationService.EXTRA_FONT_SIZE, 24);
 
-        startForeground(NOTIFICATION_ID, notification("准备 " + profile.sourceLabel() + " 通话翻译"),
+        startForeground(NOTIFICATION_ID, notification("准备 " + profile.sourceLabel()
+                + (mediaCapture ? " 直播/视频音频翻译" : " 通话翻译")),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         running = true;
         paused = false;
         translateBusy = false;
         speechQueue.clear();
         sentenceAssembler.reset();
+        lastAcceptedSpeechAt = 0L;
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
+        main.removeCallbacks(staleSubtitleMonitor);
+        main.postDelayed(staleSubtitleMonitor, 1200L);
         cloudSpeechMode = false;
         cloudRequestBusy = false;
         failedAutoModels.clear();
@@ -145,12 +190,20 @@ public final class RootCallTranslationService extends Service {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
         createOverlay(fontSize);
-        translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
-        diagTranslation = translator.selectedEngineName();
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            customSpeechResolver = new CustomSpeechLanguageResolver(customSpeechLanguages);
+        }
+        translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId,
+            SherpaSpeechEngine.LANG_SINGLE.equals(languageMode));
+        diagTranslation = SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+            ? "自选混合 " + SelectedSpeechLanguages.display(customSpeechLanguages)
+                + " → " + targetMlTag : translator.selectedEngineName();
         diagAudio = profile.sourceLabel() + " · " + profile.packageName + " · 等待 PCM";
         diagAsr = "ASR：" + asrLabel(asrMode) + " · 准备中";
         renderDiag();
-        showStatus(profile.sourceLabel() + " 通话来源：" + profile.packageName + "\n正在准备 " + asrLabel(asrMode));
+        showStatus(profile.sourceLabel() + (mediaCapture ? " 直播音频配置：" : " 通话配置：")
+            + profile.packageName + "\n正在准备 " + asrLabel(asrMode)
+            + (mediaCapture ? "\n不使用屏幕共享，也不读取画面；此 PCM 未必属于所选 App。" : ""));
         prepareAsr(profile);
         return START_NOT_STICKY;
     }
@@ -208,13 +261,13 @@ public final class RootCallTranslationService extends Service {
 
     private void startSystemPcm(RootCallProfileStore.Profile profile, boolean autoFallback) {
         closeSystemPcm();
-        closeSystemPcm();
         closeOnline();
         closeVosk();
         closeSherpa();
         diagAsr = "ASR：正在准备 Android 系统外部 PCM";
         renderDiag();
         pcmSystemSpeech = new AndroidPcmSpeechEngine(this, languageMode, speechLanguage,
+            customSpeechLanguages,
             new AndroidPcmSpeechEngine.Callback() {
                 @Override public void onStatus(String message) {
                     diagAsr = "ASR：" + message;
@@ -233,18 +286,17 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：Android 系统外部 PCM · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
                     diagAsr = "ASR：Android 系统外部 PCM · " + message;
                     renderDiag();
-                    if (fatal && autoFallback && TranslationService.ASR_AUTO.equals(asrMode)) {
+                    if (fatal) {
                         closeSystemPcm();
-                        showStatus("Android 系统不支持/不适合当前内部 PCM，自动切免费在线/本地");
-                        prepareAutoAfterSystem(profile);
-                    } else if (fatal) {
-                        showStatus("Android 系统外部 PCM 失败：" + message);
+                        RootPcmSource source = rootSource;
+                        rootSource = null;
+                        if (source != null) try { source.close(); } catch (Exception ignored) {}
+                        showStatus("安卓内置识别无法读取 ROOT 内部 PCM，已停止。不自动切换引擎。请到设置手动选择。");
                     }
                 }
             });
@@ -259,7 +311,6 @@ public final class RootCallTranslationService extends Service {
 
     private void startFreeOnline(String mode, RootCallProfileStore.Profile profile, boolean autoFallback) {
         closeSystemPcm();
-        closeOnline();
         closeOnline();
         closeVosk();
         closeSherpa();
@@ -284,7 +335,6 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + engineName + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -345,7 +395,6 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + meta.name + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message) {
@@ -419,8 +468,10 @@ public final class RootCallTranslationService extends Service {
                 @Override public void onError(String message) {
                     diagAudio = profile.sourceLabel() + " PCM 失败：" + message;
                     renderDiag();
-                    showStatus(profile.sourceLabel() + " 内部声音捕获失败：" + message
-                        + "\n回通话兼容中心调整同一固定模式的 PCM/采样率/声道后再试；不会自动切换来源。");
+                    showStatus(profile.sourceLabel() + " 内部 PCM 捕获失败：" + message
+                        + (mediaCapture
+                            ? "\n请返回 ROOT 音频测试页确认直播播放/暂停时 PCM 变化；不自动切屏幕共享或麦克风。"
+                            : "\n请返回通话兼容中心调整 PCM/采样率/声道；不自动切换来源。"));
                 }
             });
         rootSource.start();
@@ -447,7 +498,6 @@ public final class RootCallTranslationService extends Service {
         long now = SystemClock.elapsedRealtime();
         diagAsr = "ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned);
         renderDiag();
-        if (showOriginal && original != null) original.setText("原文：" + cleaned);
         if (committed) {
             lastStreamTranslated = "";
             queueTranslate(cleaned, true);
@@ -464,13 +514,64 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void queueTranslate(String text, boolean finalResult, String language) {
-        if (!running || text == null || text.trim().isEmpty()) return;
-        if (smartSentenceTranslation) {
-            sentenceAssembler.offer(text.trim(), finalResult, language,
-                (assembled, complete, lang) -> enqueueTranslate(assembled, complete, lang));
+        if (!running || paused || text == null || text.trim().isEmpty()) return;
+        String cleaned = AsrTranscriptGuard.clean(text);
+        if (AsrTranscriptGuard.isLikelyNoise(cleaned)) {
+            filteredSinceLastAccepted++;
+            diagAsr = "ASR：已过滤孤立字符或标点噪声";
+            renderDiag();
             return;
         }
-        enqueueTranslate(text.trim(), finalResult, language);
+
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            CustomSpeechLanguageResolver resolver = customSpeechResolver;
+            if (resolver == null) return;
+            final int epoch = speechResolverEpoch;
+            resolver.resolve(cleaned, language, new CustomSpeechLanguageResolver.Callback() {
+                @Override public void onSelected(String selected) {
+                    if (!running || paused || epoch != speechResolverEpoch) return;
+                    diagAsr = "ASR：混合语种 " + selected + " ✓ · " + preview(cleaned);
+                    renderDiag();
+                    acceptSelectedSpeech(cleaned, finalResult, selected);
+                }
+                @Override public void onRejected(String reason) {
+                    if (!running || paused || epoch != speechResolverEpoch) return;
+                    filteredSinceLastAccepted++;
+                    diagAsr = "ASR：自选混合已跳过：" + reason;
+                    renderDiag();
+                }
+            });
+            return;
+        }
+
+        String acceptedLanguage = language;
+        if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
+            if (!SingleLanguageAsrGuard.acceptsLive(cleaned, sourceMlTag, language)) {
+                filteredSinceLastAccepted++;
+                diagAsr = "ASR：单语言 " + sourceMlTag + " · 已过滤错误文字体系";
+                renderDiag();
+                return;
+            }
+            acceptedLanguage = sourceMlTag;
+        }
+
+        acceptSelectedSpeech(cleaned, finalResult, acceptedLanguage);
+    }
+
+    private void acceptSelectedSpeech(String cleaned, boolean finalResult, String acceptedLanguage) {
+        if (!running || paused) return;
+        lastAcceptedSpeechAt = SystemClock.elapsedRealtime();
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
+        if (showOriginal) main.post(() -> {
+            if (running && original != null) original.setText("原文：" + cleaned);
+        });
+        if (smartSentenceTranslation) {
+            sentenceAssembler.offer(cleaned, finalResult, acceptedLanguage,
+                (assembled, complete, lang) -> enqueueTranslate(assembled, complete, lang));
+        } else {
+            enqueueTranslate(cleaned, finalResult, acceptedLanguage);
+        }
     }
 
     private void enqueueTranslate(String text, boolean complete, String language) {
@@ -489,7 +590,7 @@ public final class RootCallTranslationService extends Service {
         translateBusy = true;
         diagTranslation = "翻译中";
         renderDiag();
-        current.translate(cleaned, next.language, new OfflineFirstTranslationRouter.Callback() {
+        OfflineFirstTranslationRouter.Callback callback = new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String out, String engineName) {
                 if (!running || translator != current) return;
                 diagTranslation = engineName;
@@ -508,7 +609,12 @@ public final class RootCallTranslationService extends Service {
                 if (!translationOnlyOverlay && translated != null) translated.setText("翻译失败：" + message);
                 finishTranslate();
             }
-        });
+        };
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            current.translateExplicitSource(cleaned, next.language, callback);
+        } else {
+            current.translate(cleaned, next.language, callback);
+        }
     }
 
     private void finishTranslate() {
@@ -543,7 +649,6 @@ public final class RootCallTranslationService extends Service {
                 if (text.isEmpty()) return;
                 diagAsr = "ASR：有道云 · " + preview(text);
                 renderDiag();
-                if (showOriginal && original != null) original.setText("原文：" + text);
                 queueTranslate(text, true);
             }
             @Override public void onError(String message) {
@@ -698,19 +803,14 @@ public final class RootCallTranslationService extends Service {
     }
 
     private String normalizeAsr(String value) {
-        if (TranslationService.ASR_VOSK.equals(value) || TranslationService.ASR_SYSTEM.equals(value)
-            || TranslationService.ASR_YOUDAO.equals(value)
-            || TranslationService.ASR_FREE_ONLINE.equals(value)
-            || TranslationService.ASR_GROQ_LARGE.equals(value)
-            || TranslationService.ASR_GROQ_TURBO.equals(value)
-            || TranslationService.ASR_CLOUDFLARE.equals(value)
-            || OfflineAsrModelCatalog.find(value) != null) return value;
-        return TranslationService.ASR_AUTO;
+        return TranslationService.strictAsrMode(value);
     }
 
     private String normalizeLanguageMode(String value) {
         if (SherpaSpeechEngine.LANG_JA_EN.equals(value) || SherpaSpeechEngine.LANG_ZH_EN.equals(value)
-            || SherpaSpeechEngine.LANG_KO_EN.equals(value) || SherpaSpeechEngine.LANG_AUTO.equals(value)) return value;
+            || SherpaSpeechEngine.LANG_KO_EN.equals(value)
+            || SherpaSpeechEngine.LANG_AUTO.equals(value)
+            || SelectedSpeechLanguages.MODE_CUSTOM.equals(value)) return value;
         return SherpaSpeechEngine.LANG_SINGLE;
     }
 
@@ -752,9 +852,20 @@ public final class RootCallTranslationService extends Service {
 
     private void stopPipeline() {
         running = false;
+        speechResolverEpoch++;
+        CustomSpeechLanguageResolver resolver = customSpeechResolver;
+        customSpeechResolver = null;
+        if (resolver != null) resolver.close();
+        customSpeechLanguages = new ArrayList<>();
+        main.removeCallbacks(staleSubtitleMonitor);
+        lastAcceptedSpeechAt = 0L;
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
         RootPcmSource r = rootSource;
         rootSource = null;
         if (r != null) try { r.close(); } catch (Exception ignored) {}
+        closeSystemPcm();
+        closeOnline();
         closeVosk();
         closeSherpa();
         if (translator != null) {

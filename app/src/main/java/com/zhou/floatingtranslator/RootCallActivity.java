@@ -38,7 +38,10 @@ import rikka.shizuku.Shizuku;
 
 /** Fixed ROOT/Shizuku VoIP/call compatibility center. No system audio policy files are modified. */
 public final class RootCallActivity extends Activity {
+    public static final String EXTRA_MEDIA_MODE = "root_media_mode";
     private static final String PREFS = "floating_translator";
+    private boolean mediaMode;
+    private String lastSuccessfulTestFingerprint = "";
     private static final Pattern PCM = Pattern.compile("(?m)^\\s*(\\d+)-(\\d+):[^\\n]*capture[^\\n]*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern COMPONENT = Pattern.compile("([A-Za-z0-9_]+(?:\\.[A-Za-z0-9_$]+)+)/[A-Za-z0-9_.$]+");
 
@@ -55,6 +58,11 @@ public final class RootCallActivity extends Activity {
         new CommonApp("Microsoft Teams", "com.microsoft.teams"),
         new CommonApp("Zoom", "us.zoom.videomeetings"),
         new CommonApp("Google Meet", "com.google.android.apps.tachyon"),
+        new CommonApp("抖音", "com.ss.android.ugc.aweme"),
+        new CommonApp("快手", "com.smile.gifmaker"),
+        new CommonApp("TikTok", "com.zhiliaoapp.musically"),
+        new CommonApp("YouTube", "com.google.android.youtube"),
+        new CommonApp("哔哩哔哩", "tv.danmaku.bili"),
         new CommonApp("其他 App：手动填写包名", "")
     };
 
@@ -92,7 +100,9 @@ public final class RootCallActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         Shizuku.addRequestPermissionResultListener(shizukuPermissionListener);
-        setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 通话内部声音");
+        mediaMode = getIntent().getBooleanExtra(EXTRA_MEDIA_MODE, false);
+        setTitle("浮译 " + BuildConfig.VERSION_NAME
+            + (mediaMode ? " · ROOT 直播/视频音频测试" : " · 通话内部声音"));
         setContentView(buildUi());
     }
 
@@ -105,14 +115,21 @@ public final class RootCallActivity extends Activity {
         root.setPadding(dp(18), dp(22), dp(18), dp(30));
         scroll.addView(root);
 
-        TextView title = text("通话内部声音 / VoIP 翻译", 28, Color.WHITE);
+        TextView title = text(mediaMode ? "ROOT 直播/视频音频（实验）" : "通话内部声音 / VoIP 翻译",
+            28, Color.WHITE);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
 
-        TextView intro = text(
-            "这里提供两个固定内部声音后端：ROOT（uid=0，兼容性最高）和 Shizuku（ADB shell，免 ROOT 实验）。" +
-            "两者都按 App 保存 ALSA card/device/采样率/声道，不会失败后偷偷切换权限来源或 PCM。\n\n" +
-            "Shizuku 是否能读微信/Telegram/WhatsApp 通话 PCM 取决于 ROM、shell 权限和 SELinux。只要测试能读到明显 PCM，自动 ASR 会先尝试把它直接送给 Android 系统 SpeechRecognizer；系统不支持外部 PCM 时再回退免费在线/本地。",
+        TextView intro = text(mediaMode
+            ? "此模式只通过 ROOT/tinycap 尝试读取设备内部 PCM，不调用 MediaProjection，"
+                + "不申请屏幕共享授权、不读取画面；本应用不主动启动系统麦克风，但部分 ALSA PCM 可能包含麦克风。\n\n"
+                + "必须先在目标视频/直播播放期间测试 PCM，再播放/暂停做对照。"
+                + "并非所有 ColorOS 设备都暴露媒体混音 PCM；设备可录音不代表抓到的是指定 App。"
+                + "不支持就明确失败，不自动切到麦克风或屏幕共享。"
+            : "这里提供两个固定内部声音后端：ROOT（uid=0）和 Shizuku（ADB shell，实验）。"
+                + "两者都按 App 保存 ALSA card/device/采样率/声道，失败不会偷偷切换来源。\n\n"
+                + "若选择系统内置 ASR，系统服务仍需支持 16k 外部 PCM 输入；"
+                + "不支持时会报错而不会切换其它识别引擎。",
             14, Color.rgb(210, 200, 225));
         intro.setPadding(0, dp(7), 0, dp(13));
         root.addView(intro);
@@ -121,8 +138,11 @@ public final class RootCallActivity extends Activity {
         detectCard.addView(section("① 固定权限来源 / 音频设备扫描"));
         transportSpinner = new Spinner(this);
         transportSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
-            new String[]{"固定 ROOT｜uid=0", "固定 Shizuku｜ADB shell（实验）"}));
-        RootCallProfileStore.Profile savedTransport = RootCallProfileStore.loadSelected(this);
+            mediaMode
+                ? new String[]{"固定 ROOT｜uid=0（直播/视频音频实验）"}
+                : new String[]{"固定 ROOT｜uid=0", "固定 Shizuku｜ADB shell（实验）"}));
+        RootCallProfileStore.Profile savedTransport = mediaMode
+            ? RootCallProfileStore.loadSelectedMedia(this) : RootCallProfileStore.loadSelected(this);
         if (savedTransport != null && RootCallProfileStore.TRANSPORT_SHIZUKU.equals(savedTransport.transport)) {
             transportSpinner.setSelection(1);
         }
@@ -136,7 +156,7 @@ public final class RootCallActivity extends Activity {
         detectCard.addView(rootStatus);
 
         LinearLayout appCard = card(root);
-        appCard.addView(section("② 选择要翻译通话的 App"));
+        appCard.addView(section(mediaMode ? "② 选择直播/视频 App" : "② 选择要翻译通话的 App"));
         appSpinner = new Spinner(this);
         String[] names = new String[COMMON_APPS.length];
         for (int i = 0; i < names.length; i++) names[i] = COMMON_APPS[i].label;
@@ -150,7 +170,10 @@ public final class RootCallActivity extends Activity {
         packageInput.setHintTextColor(Color.rgb(145, 135, 165));
         packageInput.setSingleLine(true);
         appCard.addView(packageInput, params());
-        String selected = RootCallProfileStore.selectedPackage(this);
+        String selected = mediaMode
+            ? (RootCallProfileStore.loadSelectedMedia(this) == null ? ""
+                : RootCallProfileStore.loadSelectedMedia(this).packageName)
+            : RootCallProfileStore.selectedPackage(this);
         if (!selected.isEmpty()) packageInput.setText(selected);
 
         appSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -168,7 +191,7 @@ public final class RootCallActivity extends Activity {
         appCard.addView(appTip);
 
         LinearLayout pcmCard = card(root);
-        pcmCard.addView(section("③ 选择并测试固定内部 PCM"));
+        pcmCard.addView(section("③ 选择并测试固定内部 PCM（必须有播放中的声音）"));
         pcmSpinner = new Spinner(this);
         pcmAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, candidates);
         pcmSpinner.setAdapter(pcmAdapter);
@@ -187,11 +210,13 @@ public final class RootCallActivity extends Activity {
         channelSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         pcmCard.addView(channelSpinner, params());
 
-        testButton = button("通话中测试 5 秒内部声音");
+        testButton = button(mediaMode
+            ? "直播/视频播放中测试约 6 秒 PCM" : "通话中测试约 6 秒内部声音");
         testButton.setOnClickListener(v -> testSelectedPcm());
         pcmCard.addView(testButton, params());
 
-        Button save = primaryButton("保存为这个 App 的固定内部声音配置");
+        Button save = primaryButton(mediaMode
+            ? "保存直播音频配置（需先测试成功）" : "保存为这个 App 的通话 PCM 配置");
         save.setOnClickListener(v -> saveSelectedProfile());
         pcmCard.addView(save, params());
 
@@ -203,11 +228,14 @@ public final class RootCallActivity extends Activity {
         launchCard.addView(section("④ 开始使用"));
         Button console = primaryButton("打开实时翻译控制台");
         console.setOnClickListener(v -> {
-            if (!RootCallProfileStore.hasSelected(this)) {
-                toast("请先保存一个 ROOT / Shizuku 通话配置");
+            boolean available = mediaMode
+                ? RootCallProfileStore.hasSelectedMedia(this) : RootCallProfileStore.hasSelected(this);
+            if (!available) {
+                toast(mediaMode ? "请先测试并保存直播音频配置" : "请先保存通话配置");
                 return;
             }
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("input_mode", 2).apply();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putInt("input_mode", mediaMode ? 3 : 2).apply();
             startActivity(new Intent(this, MainActivity.class));
         });
         launchCard.addView(console, params());
@@ -223,9 +251,12 @@ public final class RootCallActivity extends Activity {
         copy.setOnClickListener(v -> copyReport());
         launchCard.addView(copy, params());
 
-        TextView warning = text(
-            "测试时要让目标 App 正在通话并持续有人说话。ROOT 成功率通常高于 Shizuku；Shizuku 只有在 shell/SELinux 允许读取目标 PCM 时才会接近 ROOT。保存成功后建议 ASR 选“自动推荐”，会先测试 Android 系统外部 PCM。" +
-            "两种内部模式都可能被厂商 HAL/硬件路由限制。录音或翻译通话请遵守所在地法律并尊重通话参与者隐私。",
+        TextView warning = text(mediaMode
+            ? "注意：ALSA capture 设备并非 Android 应用音频混音总线。"
+                + "测试能收到 PCM 也可能是麦克风/其它来源；必须用直播播放与暂停对照检验。"
+                + "若音频通道没有暴露，ROOT 也不能保证跳过系统权限读取任意 App 的声音。"
+            : "测试时保持目标 App 通话并有人说话。ROOT/Shizuku 都受 HAL/SELinux 限制。"
+                + "语音识别引擎需在设置中手动选择，失败不会自动切换。请尊重通话参与者隐私。",
             12, Color.rgb(180, 170, 205));
         warning.setPadding(dp(2), dp(8), dp(2), 0);
         root.addView(warning);
@@ -318,12 +349,16 @@ public final class RootCallActivity extends Activity {
         int channels = selectedChannels();
         testPeak = 0;
         testBytes = 0;
+        lastSuccessfulTestFingerprint = "";
         testButton.setEnabled(false);
-        rootStatus.setText("测试中：请保持目标 App 通话，并让对方持续说话约 5 秒……");
+        rootStatus.setText(mediaMode
+            ? "测试中：请让直播/视频持续播放声音，并观察当前 PCM 数值。"
+            : "测试中：请保持目标 App 通话，并让对方持续说话约 6 秒……");
         RootPcmSource source = new RootPcmSource(this, selectedTransport(), pcm.card, pcm.device, rate, channels,
             new RootPcmSource.Callback() {
                 @Override public void onStatus(String message) {
-                    runOnUiThread(() -> rootStatus.setText(message + "\n请保持通话有声音……"));
+                    runOnUiThread(() -> rootStatus.setText(message +
+                        (mediaMode ? "\n请保持直播/视频播放……" : "\n请保持通话有声音……")));
                 }
                 @Override public void onPcm(byte[] pcmBytes, int length, int peak) {
                     testBytes += length;
@@ -344,15 +379,20 @@ public final class RootCallActivity extends Activity {
             long bytes = testBytes;
             String level;
             if (bytes < 8000) level = "❌ 几乎没有读到 PCM 数据，换设备/采样率/声道";
-            else if (peak < 80) level = "⚠ 读到了 PCM，但接近静音；这个设备大概率不是通话声音";
+            else if (peak < 80) level = "⚠ 读到了 PCM，但接近静音；当前 PCM 接近静音，可能不是所需声音";
             else if (peak < 500) level = "⚠ 有弱信号；可以再测试别的 PCM 对比";
-            else level = "✅ 检测到明显内部音频，可以保存这个配置继续实测翻译";
+            else level = mediaMode
+                ? "✅ PCM 有明显声音（仍需通过播放/暂停对照确认来源）"
+                : "✅ PCM 有明显声音，可以保存并实测翻译";
+            if (mediaMode && bytes >= 8000 && peak >= 500)
+                lastSuccessfulTestFingerprint = testFingerprint();
             rootStatus.setText(level + "\n峰值=" + peak + " · 已转换 16k PCM=" + human(bytes));
             testButton.setEnabled(true);
         }, 6500L);
     }
 
     private void finishTest(String message) {
+        lastSuccessfulTestFingerprint = "";
         RootPcmSource current = testCapture;
         testCapture = null;
         if (current != null) current.close();
@@ -373,18 +413,32 @@ public final class RootCallActivity extends Activity {
             toast("请先扫描并选择一个 PCM 设备");
             return;
         }
+        if (mediaMode && !testFingerprint().equals(lastSuccessfulTestFingerprint)) {
+            toast("直播音频模式必须先用当前 PCM 参数测试到明显声音，且不可在测试后换设备");
+            return;
+        }
         String label = appLabel(pkg);
         RootCallProfileStore.Profile profile = new RootCallProfileStore.Profile(
             pkg, label, selectedTransport(), pcm.card, pcm.device, selectedRate(), selectedChannels());
-        RootCallProfileStore.save(this, profile);
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("input_mode", 2).apply();
-        savedStatus.setText("✅ 已保存并设为当前固定通话来源\n" + profile.summary());
-        toast(profile.sourceLabel() + " 通话配置已保存");
+        if (mediaMode) RootCallProfileStore.saveMedia(this, profile);
+        else RootCallProfileStore.save(this, profile);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putInt("input_mode", mediaMode ? 3 : 2).apply();
+        savedStatus.setText("✅ 已保存" + (mediaMode ? "直播/视频音频" : "通话")
+            + "配置\n" + profile.summary());
+        toast(profile.sourceLabel() + (mediaMode ? " 直播" : " 通话") + " PCM 配置已保存");
     }
 
     private String savedProfileText() {
-        RootCallProfileStore.Profile p = RootCallProfileStore.loadSelected(this);
-        return p == null ? "当前没有保存内部通话配置" : "当前固定配置：\n" + p.summary();
+        RootCallProfileStore.Profile p = mediaMode
+            ? RootCallProfileStore.loadSelectedMedia(this) : RootCallProfileStore.loadSelected(this);
+        return p == null ? "当前没有保存内部音频配置" : "当前固定配置：\n" + p.summary();
+    }
+
+    private String testFingerprint() {
+        PcmCandidate pcm = selectedPcm();
+        return pcm == null ? "" : packageInput.getText().toString().trim() + "|" + selectedTransport()
+            + "|" + pcm.card + "|" + pcm.device + "|" + selectedRate() + "|" + selectedChannels();
     }
 
     private PcmCandidate selectedPcm() {

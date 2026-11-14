@@ -18,6 +18,9 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
+import java.util.ArrayList;
+import java.util.List;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
@@ -41,9 +44,12 @@ public final class MainActivity extends Activity {
     private SharedPreferences preferences;
     private Spinner inputModeSpinner;
     private Spinner micProcessingSpinner;
-    private Spinner asrModeSpinner;
     private Spinner languageModeSpinner;
+    private Button customLanguageButton;
+    private List<String> chosenCustomLanguages = new ArrayList<>();
     private Spinner sourceSpinner;
+    private TextView singleSourceLabel;
+    private Button swapLanguageButton;
     private Spinner targetSpinner;
     private CheckBox showOriginal;
     private CheckBox showDiagnostics;
@@ -52,6 +58,7 @@ public final class MainActivity extends Activity {
     private CheckBox preferOffline;
     private CheckBox enableOcr;
     private SeekBar fontSize;
+    private TextView currentAsr;
     private TextView summary;
     private TextView status;
     private TextView recent;
@@ -60,6 +67,9 @@ public final class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        chosenCustomLanguages = SelectedSpeechLanguages.forLegacy(
+            preferences.getString("language_mode", SherpaSpeechEngine.LANG_SINGLE),
+            preferences.getString(SelectedSpeechLanguages.PREF_CUSTOM_CODES, ""));
         setContentView(buildUi());
         requestRuntimePermissions();
     }
@@ -88,6 +98,9 @@ public final class MainActivity extends Activity {
         Button rootLab = secondaryButton("☎ 通话内部声音兼容中心｜ROOT / Shizuku");
         rootLab.setOnClickListener(v -> startActivity(new Intent(this, RootCallActivity.class)));
         quick.addView(rootLab, params());
+        Button mediaLab = secondaryButton("🎧 ROOT 直播/视频音频｜无屏幕共享授权（实验）");
+        mediaLab.setOnClickListener(v -> openRootAudioSettings(true));
+        quick.addView(mediaLab, params());
         Button models = secondaryButton("📦 离线模型中心");
         models.setOnClickListener(v -> startActivity(new Intent(this, ModelManagerActivity.class)));
         quick.addView(models, params());
@@ -98,13 +111,19 @@ public final class MainActivity extends Activity {
         inputModeSpinner = new Spinner(this);
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "系统内部声音｜直播/视频",
+                "系统内部声音｜仅音频（仍需系统共享授权）",
                 "麦克风｜通话外放兼容",
-                "ROOT / Shizuku 内部通话/VoIP｜按 App 保存 PCM"
+                "ROOT / Shizuku 内部通话/VoIP｜按 App 保存 PCM",
+                "ROOT 直播/视频内部声音｜无屏幕授权（需先实测 PCM）"
             }));
-        inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
+        inputModeSpinner.setSelection(Math.min(3, preferences.getInt("input_mode", 0)));
         inputModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(inputModeSpinner, params());
+        audioCard.addView(label(
+            "直播/视频：普通系统内部声音模式只抓取音频；OCR 关闭时不读取屏幕画面，但 Android 仍会显示屏幕共享授权。"
+            + " ROOT 直播模式不申请 MediaProjection，但仅限通过 tinycap 实机测试可读取声音的设备，"
+            + " 不保证当前 PCM 属于指定 App。请用播放/暂停对照验证。"
+        ));
 
         audioCard.addView(label("麦克风通话处理｜仅麦克风 + 本地/有道 PCM ASR"));
         micProcessingSpinner = new Spinner(this);
@@ -119,59 +138,60 @@ public final class MainActivity extends Activity {
         micProcessingSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(micProcessingSpinner, params());
         TextView micTip = text(
-            "自动模式下，麦克风直接用 Android SpeechRecognizer；系统内部声音和 ROOT/Shizuku PCM 会先尝试 Android 13+ 的 EXTRA_AUDIO_SOURCE 外部 PCM 注入。厂商识别服务若不支持，再自动切免费在线和本地；付费 ASR 只在你显式开启后最后兜底。",
+            "语音识别引擎由设置页手动指定。安卓内置识别麦克风可直接使用；系统内部声音需要厂商支持外部 PCM。失败不会自动切换其他识别引擎。",
             12, Color.rgb(184, 174, 207));
         audioCard.addView(micTip);
 
-        audioCard.addView(label("ASR 语音识别"));
-        asrModeSpinner = new Spinner(this);
-        asrModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
-            new String[]{
-                "自动推荐｜安卓内置（含内部PCM）→ 免费在线 → 本地 → 付费最后",
-                "免费在线自动｜Groq Free → Cloudflare Free → 本地",
-                "Groq Free｜Whisper Large V3｜在线高精度",
-                "Groq Free｜Whisper Large V3 Turbo｜在线低延迟",
-                "Cloudflare Workers AI Free｜Whisper Large V3 Turbo",
-                "Vosk｜省电/小模型",
-                "SenseVoice INT8｜中英日韩粤",
-                "ReazonSpeech｜日语直播优先",
-                "Parakeet 日语 0.6B INT8｜快语速/长句",
-                "Whisper Small INT8｜多语言混合",
-                "Whisper Medium INT8｜高精度/高占用",
-                "Qwen3-ASR 0.6B INT8｜日英混合优先",
-                "Omnilingual ASR 300M INT8｜小语种",
-                "Android 系统 SpeechRecognizer｜首选｜麦克风 / 内部PCM",
-                "有道云 ASR｜付费/旧兼容｜只做最后兜底"
-            }));
-        asrModeSpinner.setSelection(asrIndex(preferences.getString("asr_mode", TranslationService.ASR_AUTO)));
-        asrModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
-        audioCard.addView(asrModeSpinner, params());
+        audioCard.addView(label("ASR 识别引擎｜仅在设置中切换"));
+        currentAsr = text(
+            "当前：" + asrLabel(selectedAsrMode()) + "（固定，不自动回退）",
+            14, Color.rgb(220, 212, 235));
+        audioCard.addView(currentAsr, params());
+        Button asrSettings = secondaryButton("⚙ 设置 / 手动选择语音识别引擎");
+        asrSettings.setOnClickListener(v ->
+            startActivity(new Intent(this, AsrEngineSettingsActivity.class)));
+        audioCard.addView(asrSettings, params());
 
-        audioCard.addView(label("识别语言模式"));
+        audioCard.addView(label("语音识别语言模式（自主选择）"));
         languageModeSpinner = new Spinner(this);
         languageModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "单语言",
-                "日语 + 英语（混合）",
-                "中文 + 英语（混合）",
-                "韩语 + 英语（混合）",
-                "自动多语言"
+                "单语言｜从全部语言中选择一种",
+                "自选混合｜选择 2、3 或更多种语言"
             }));
         languageModeSpinner.setSelection(languageModeIndex(preferences.getString(
             "language_mode", SherpaSpeechEngine.LANG_SINGLE)));
         languageModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(languageModeSpinner, params());
+        customLanguageButton = secondaryButton("");
+        customLanguageButton.setOnClickListener(v -> chooseCustomLanguages());
+        audioCard.addView(customLanguageButton, params());
+        updateCustomLanguageButton();
+        languageModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view,
+                                                  int position, long id) {
+                updateCustomLanguageButton();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        audioCard.addView(label(
+            "单语言：下面的「原语言」下拉列表可选择全部支持的语言。\n"
+            + "混合：点击上方按钮，自选英语+日语、英语+马来语+越南语等任意组合；"
+            + "只把选定语种送去翻译，无法判断的片段直接提示，不擅自猜其他语种。"
+            + "注意 Omnilingual 等多语言 ASR 不支持在模型内部锁定这些语言。"
+        ));
 
         TextView rootTip = text(
             "内部通话模式：在兼容中心明确选择固定 ROOT 或固定 Shizuku，再扫描/测试 PCM 并按 App 保存。" +
-            "一旦读到 PCM，自动 ASR 会先尝试把 16k PCM 注入 Android 系统 SpeechRecognizer；不支持时再走免费在线/本地。Shizuku 仍受 shell/SELinux 限制。",
+            "选安卓内置时才会尝试把 16k PCM 送给系统识别器；不支持则报告错误，不切免费在线/本地。Shizuku 仍受 shell/SELinux 限制。",
             12, Color.rgb(184, 174, 207));
         rootTip.setPadding(0, dp(6), 0, 0);
         audioCard.addView(rootTip);
 
         LinearLayout languageCard = card(root);
         languageCard.addView(section("翻译语言"));
-        languageCard.addView(label("原语言"));
+        singleSourceLabel = label("原语言（单语言模式可选择全部语言）");
+        languageCard.addView(singleSourceLabel);
         sourceSpinner = languageSpinner();
         sourceSpinner.setSelection(preferences.getInt("source_index", 2));
         languageCard.addView(sourceSpinner, params());
@@ -179,14 +199,15 @@ public final class MainActivity extends Activity {
         targetSpinner = languageSpinner();
         targetSpinner.setSelection(preferences.getInt("target_index", 0));
         languageCard.addView(targetSpinner, params());
-        Button swap = secondaryButton("⇄ 互换语言");
-        swap.setOnClickListener(v -> {
+        swapLanguageButton = secondaryButton("⇄ 互换语言");
+        swapLanguageButton.setOnClickListener(v -> {
             int s = sourceSpinner.getSelectedItemPosition();
             sourceSpinner.setSelection(targetSpinner.getSelectedItemPosition());
             targetSpinner.setSelection(s);
             saveSettings(false);
         });
-        languageCard.addView(swap, params());
+        languageCard.addView(swapLanguageButton, params());
+        updateCustomLanguageButton();
 
         LinearLayout displayCard = card(root);
         displayCard.addView(section("字幕与显示"));
@@ -197,7 +218,7 @@ public final class MainActivity extends Activity {
             preferences.getBoolean("translation_only_overlay", false));
         smartSentenceTranslation = check("智能拼句修正（不使用 AI；先立即翻译，后续片段可自动合并重译）",
             preferences.getBoolean("smart_sentence_translation", true));
-        enableOcr = check("屏幕 OCR（ROOT 通话模式会忽略）",
+        enableOcr = check("屏幕 OCR（默认关闭；ROOT 内部音频模式忽略）",
             preferences.getBoolean("enable_ocr", false));
         preferOffline = check("手动选择系统 SpeechRecognizer 时强制请求离线（自动模式忽略此项，优先在线质量）",
             preferences.getBoolean("prefer_offline", false));
@@ -282,19 +303,45 @@ public final class MainActivity extends Activity {
 
         LanguageOption source = (LanguageOption) sourceSpinner.getSelectedItem();
         LanguageOption target = (LanguageOption) targetSpinner.getSelectedItem();
-        if (source.mlKitTag.equals(target.mlKitTag)) {
-            toast("原语言和目标语言不能相同");
+        if (!SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && source.mlKitTag.equals(target.mlKitTag)) {
+            toast("单语言原语言和目标语言不能相同");
             return;
         }
 
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && chosenCustomLanguages.size() < 2) {
+            toast("混合模式至少选两种语言");
+            chooseCustomLanguages();
+            return;
+        }
         int mode = inputModeSpinner.getSelectedItemPosition();
         boolean mic = mode == 1;
-        boolean root = mode == 2;
+        boolean root = mode == 2 || mode == 3;
+        boolean rootMedia = mode == 3;
         String asr = selectedAsrMode();
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && (TranslationService.ASR_VOSK.equals(asr)
+                || TranslationService.ASR_REAZON.equals(asr)
+                || TranslationService.ASR_PARAKEET.equals(asr))) {
+            toast("当前 ASR 只有单语种模型；自选混合请使用 Whisper、Omnilingual 等多语种模型");
+            return;
+        }
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && TranslationService.ASR_SENSEVOICE.equals(asr)) {
+            for (String lang : chosenCustomLanguages) {
+                if (!("zh".equals(lang) || "en".equals(lang) || "ja".equals(lang)
+                    || "ko".equals(lang) || "yue".equals(lang))) {
+                    toast("SenseVoice 只适合中/英/日/韩/粤；所选混合含其它语言，请换识别模型");
+                    return;
+                }
+            }
+        }
 
-        if (root && !RootCallProfileStore.hasSelected(this)) {
-            toast("内部通话模式还没有保存 PCM 配置，先去 ROOT / Shizuku 兼容中心");
-            startActivity(new Intent(this, RootCallActivity.class));
+        if (root && !(rootMedia
+            ? RootCallProfileStore.hasSelectedMedia(this) : RootCallProfileStore.hasSelected(this))) {
+            toast(rootMedia ? "请先测试并保存直播内部 PCM 配置" : "请先保存通话 PCM 配置");
+            openRootAudioSettings(rootMedia);
             return;
         }
         if ((TranslationService.ASR_FREE_ONLINE.equals(asr)
@@ -320,10 +367,12 @@ public final class MainActivity extends Activity {
         }
 
         if (root) {
-            if (enableOcr.isChecked()) toast("ROOT / Shizuku 通话模式暂不使用 OCR，已只启动通话声音翻译");
-            startRootTranslationService();
-            RootCallProfileStore.Profile p = RootCallProfileStore.loadSelected(this);
-            status.setText("正在启动 " + (p == null ? "内部" : p.sourceLabel()) + " 通话翻译；保持目标 App 通话即可。");
+            if (enableOcr.isChecked()) toast("ROOT 内部音频模式只采声音，不使用 OCR");
+            startRootTranslationService(rootMedia);
+            RootCallProfileStore.Profile p = rootMedia ? RootCallProfileStore.loadSelectedMedia(this)
+                : RootCallProfileStore.loadSelected(this);
+            status.setText("正在启动 " + (p == null ? "内部" : p.sourceLabel())
+                + (rootMedia ? " 直播音频翻译；不请求屏幕共享权限。" : " 通话翻译；保持通话即可。"));
             return;
         }
 
@@ -338,7 +387,9 @@ public final class MainActivity extends Activity {
         Intent captureIntent = Build.VERSION.SDK_INT >= 34
             ? manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
             : manager.createScreenCaptureIntent();
-        status.setText("请允许共享整个屏幕；系统内部声音/OCR 需要此授权。");
+        status.setText(enableOcr.isChecked()
+            ? "已开启 OCR：系统需要屏幕共享授权，并且会读取画面中的文字。"
+            : "音频专用：只采集直播音频，不抓取屏幕画面。Android 仍要求显示屏幕共享授权。");
         startActivityForResult(captureIntent, REQUEST_CAPTURE);
     }
 
@@ -360,6 +411,8 @@ public final class MainActivity extends Activity {
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_ASR_MODE, selectedAsrMode())
             .putExtra(TranslationService.EXTRA_LANGUAGE_MODE, selectedLanguageMode())
+            .putExtra(SelectedSpeechLanguages.EXTRA_CUSTOM_CODES,
+                SelectedSpeechLanguages.serialize(chosenCustomLanguages))
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
@@ -376,11 +429,16 @@ public final class MainActivity extends Activity {
             .putExtra(TranslationService.EXTRA_FONT_SIZE, 16 + fontSize.getProgress());
     }
 
-    private void startRootTranslationService() {
+    private void openRootAudioSettings(boolean media) {
+        startActivity(new Intent(this, RootCallActivity.class)
+            .putExtra(RootCallActivity.EXTRA_MEDIA_MODE, media));
+    }
+
+    private void startRootTranslationService(boolean media) {
         stopService(new Intent(this, TranslationService.class));
         Intent service = baseServiceIntent(RootCallTranslationService.class)
             .putExtra(TranslationService.EXTRA_ENABLE_OCR, false)
-            .putExtra(TranslationService.EXTRA_INPUT_MODE, "root");
+            .putExtra(TranslationService.EXTRA_INPUT_MODE, media ? "root_media" : "root");
         startForegroundService(service);
     }
 
@@ -487,8 +545,9 @@ public final class MainActivity extends Activity {
         if (sourceSpinner == null) return;
         preferences.edit()
             .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
-            .putString("asr_mode", selectedAsrMode())
             .putString("language_mode", selectedLanguageMode())
+            .putString(SelectedSpeechLanguages.PREF_CUSTOM_CODES,
+                SelectedSpeechLanguages.serialize(chosenCustomLanguages))
             .putInt("source_index", sourceSpinner.getSelectedItemPosition())
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
             .putBoolean("show_original", showOriginal.isChecked())
@@ -509,12 +568,18 @@ public final class MainActivity extends Activity {
         if (summary == null) return;
         int mode = inputModeSpinner == null ? preferences.getInt("input_mode", 0) : inputModeSpinner.getSelectedItemPosition();
         RootCallProfileStore.Profile profile = RootCallProfileStore.loadSelected(this);
-        String source = mode == 2 ? ((profile == null ? "ROOT/Shizuku" : profile.sourceLabel()) + " 通话/VoIP")
-            : mode == 1 ? "麦克风" : "系统内部声音";
-        String internal = profile == null ? "" : "\n内部 App：" + profile.packageName + " · " + profile.sourceLabel();
+        if (mode == 3) profile = RootCallProfileStore.loadSelectedMedia(this);
+        String source = mode == 3 ? "ROOT 直播内部声音（无屏幕授权·实验）"
+            : mode == 2 ? ((profile == null ? "ROOT/Shizuku" : profile.sourceLabel()) + " 通话/VoIP")
+            : mode == 1 ? "麦克风" : "系统内部声音（授权后仅采音频）";
+        String internal = mode < 2 || profile == null ? "" : "\n内部 PCM 配置：" + profile.packageName
+            + " · " + profile.sourceLabel();
         String mic = mode == 1 ? "\n麦克风处理：" + micProcessingLabel(preferences.getString(
             "mic_processing", MicAudioEffects.MODE_REMOTE)) : "";
-        summary.setText("声音：" + source + "\nASR：" + asrLabel(preferences.getString("asr_mode", TranslationService.ASR_AUTO))
+        summary.setText("声音：" + source + "\nASR：" + asrLabel(TranslationService.strictAsrMode(preferences.getString("asr_mode", TranslationService.ASR_SYSTEM)))
+            + "\n语言：" + (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+                ? "自选混合 " + SelectedSpeechLanguages.display(chosenCustomLanguages)
+                : "单语言 " + (((LanguageOption) sourceSpinner.getSelectedItem()).label))
             + "\n历史：" + HistoryStore.count(this) + " 条" + internal + mic);
     }
 
@@ -532,42 +597,9 @@ public final class MainActivity extends Activity {
         toast("已复制");
     }
 
-    private int asrIndex(String mode) {
-        if (TranslationService.ASR_FREE_ONLINE.equals(mode)) return 1;
-        if (TranslationService.ASR_GROQ_LARGE.equals(mode)) return 2;
-        if (TranslationService.ASR_GROQ_TURBO.equals(mode)) return 3;
-        if (TranslationService.ASR_CLOUDFLARE.equals(mode)) return 4;
-        if (TranslationService.ASR_VOSK.equals(mode)) return 5;
-        if (TranslationService.ASR_SENSEVOICE.equals(mode)) return 6;
-        if (TranslationService.ASR_REAZON.equals(mode)) return 7;
-        if (TranslationService.ASR_PARAKEET.equals(mode)) return 8;
-        if (TranslationService.ASR_WHISPER_SMALL.equals(mode)) return 9;
-        if (TranslationService.ASR_WHISPER_MEDIUM.equals(mode)) return 10;
-        if (TranslationService.ASR_QWEN3.equals(mode)) return 11;
-        if (TranslationService.ASR_OMNILINGUAL.equals(mode)) return 12;
-        if (TranslationService.ASR_SYSTEM.equals(mode)) return 13;
-        if (TranslationService.ASR_YOUDAO.equals(mode)) return 14;
-        return 0;
-    }
-
     private String selectedAsrMode() {
-        switch (asrModeSpinner.getSelectedItemPosition()) {
-            case 1: return TranslationService.ASR_FREE_ONLINE;
-            case 2: return TranslationService.ASR_GROQ_LARGE;
-            case 3: return TranslationService.ASR_GROQ_TURBO;
-            case 4: return TranslationService.ASR_CLOUDFLARE;
-            case 5: return TranslationService.ASR_VOSK;
-            case 6: return TranslationService.ASR_SENSEVOICE;
-            case 7: return TranslationService.ASR_REAZON;
-            case 8: return TranslationService.ASR_PARAKEET;
-            case 9: return TranslationService.ASR_WHISPER_SMALL;
-            case 10: return TranslationService.ASR_WHISPER_MEDIUM;
-            case 11: return TranslationService.ASR_QWEN3;
-            case 12: return TranslationService.ASR_OMNILINGUAL;
-            case 13: return TranslationService.ASR_SYSTEM;
-            case 14: return TranslationService.ASR_YOUDAO;
-            default: return TranslationService.ASR_AUTO;
-        }
+        return TranslationService.strictAsrMode(
+            preferences.getString("asr_mode", TranslationService.ASR_SYSTEM));
     }
 
     private int micProcessingIndex(String mode) {
@@ -594,21 +626,55 @@ public final class MainActivity extends Activity {
     }
 
     private int languageModeIndex(String mode) {
-        if (SherpaSpeechEngine.LANG_JA_EN.equals(mode)) return 1;
-        if (SherpaSpeechEngine.LANG_ZH_EN.equals(mode)) return 2;
-        if (SherpaSpeechEngine.LANG_KO_EN.equals(mode)) return 3;
-        if (SherpaSpeechEngine.LANG_AUTO.equals(mode)) return 4;
-        return 0;
+        return SelectedSpeechLanguages.MODE_CUSTOM.equals(mode)
+            || SherpaSpeechEngine.LANG_JA_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_ZH_EN.equals(mode)
+            || SherpaSpeechEngine.LANG_KO_EN.equals(mode) ? 1 : 0;
     }
 
     private String selectedLanguageMode() {
-        switch (languageModeSpinner.getSelectedItemPosition()) {
-            case 1: return SherpaSpeechEngine.LANG_JA_EN;
-            case 2: return SherpaSpeechEngine.LANG_ZH_EN;
-            case 3: return SherpaSpeechEngine.LANG_KO_EN;
-            case 4: return SherpaSpeechEngine.LANG_AUTO;
-            default: return SherpaSpeechEngine.LANG_SINGLE;
+        return languageModeSpinner != null && languageModeSpinner.getSelectedItemPosition() == 1
+            ? SelectedSpeechLanguages.MODE_CUSTOM : SherpaSpeechEngine.LANG_SINGLE;
+    }
+
+    private void updateCustomLanguageButton() {
+        if (customLanguageButton == null) return;
+        boolean mixed = SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode());
+        customLanguageButton.setVisibility(mixed ? View.VISIBLE : View.GONE);
+        customLanguageButton.setText("＋ 选择混合识别语言："
+            + SelectedSpeechLanguages.display(chosenCustomLanguages));
+        if (singleSourceLabel != null) singleSourceLabel.setVisibility(mixed ? View.GONE : View.VISIBLE);
+        if (sourceSpinner != null) sourceSpinner.setVisibility(mixed ? View.GONE : View.VISIBLE);
+        if (swapLanguageButton != null) swapLanguageButton.setVisibility(mixed ? View.GONE : View.VISIBLE);
+    }
+
+    private void chooseCustomLanguages() {
+        final LanguageOption[] options = LanguageOption.ALL;
+        final String[] names = new String[options.length];
+        final boolean[] checked = new boolean[options.length];
+        for (int i = 0; i < options.length; i++) {
+            names[i] = options[i].label;
+            checked[i] = chosenCustomLanguages.contains(options[i].mlKitTag);
         }
+        new AlertDialog.Builder(this)
+            .setTitle("选择 2 种或更多语言｜仅翻译选中的语种")
+            .setMultiChoiceItems(names, checked, (dialog, which, isChecked) ->
+                checked[which] = isChecked)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存", (dialog, which) -> {
+                List<String> selected = new ArrayList<>();
+                for (int i = 0; i < options.length; i++) {
+                    if (checked[i]) selected.add(options[i].mlKitTag);
+                }
+                if (selected.size() < 2) {
+                    toast("至少选择两种语言，再点击保存");
+                    return;
+                }
+                chosenCustomLanguages = selected;
+                updateCustomLanguageButton();
+                saveSettings(false);
+            })
+            .show();
     }
 
     private String asrLabel(String mode) {
@@ -719,7 +785,9 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(2, preferences.getInt("input_mode", 0)));
+        if (currentAsr != null) currentAsr.setText(
+            "当前：" + asrLabel(selectedAsrMode()) + "（固定，不自动回退）");
+        if (inputModeSpinner != null) inputModeSpinner.setSelection(Math.min(3, preferences.getInt("input_mode", 0)));
         if (micProcessingSpinner != null) micProcessingSpinner.setSelection(micProcessingIndex(
             preferences.getString("mic_processing", MicAudioEffects.MODE_REMOTE)));
         refreshSummary();
