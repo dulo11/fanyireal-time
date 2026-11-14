@@ -21,6 +21,18 @@ public class SingleLanguageAsrGuardTest {
         assertTrue(SingleLanguageAsrGuard.accepts("Apa khabar?", "ms", ""));
     }
 
+    @Test public void liveLatinSpeechIgnoresUnreliableModelLanguageTags() {
+        // Omnilingual's language label is not a reliable basis for dropping
+        // a clearly Latin-script English transcript. Text language ID follows.
+        assertTrue(SingleLanguageAsrGuard.acceptsLive(
+            "Just look around and say the names of objects in English", "en", "es"));
+        assertTrue(SingleLanguageAsrGuard.acceptsLive(
+            "I will show you how to fix them", "en", "ar"));
+        assertFalse(SingleLanguageAsrGuard.acceptsLive("ايسلوي", "en", "ar"));
+        assertFalse(SingleLanguageAsrGuard.acceptsLive("こんにちは", "en", "ja"));
+        assertFalse(SingleLanguageAsrGuard.acceptsLive("Bonjour", "ja", "fr"));
+    }
+
     @Test public void otherLanguageScriptsRemainAvailableWhenSelected() {
         assertTrue(SingleLanguageAsrGuard.accepts("こんにちは東京", "ja", ""));
         assertTrue(SingleLanguageAsrGuard.accepts("你好", "zh", ""));
