@@ -109,6 +109,15 @@ final class SelectedSpeechLanguages {
             if (matching.size() != 1) return "";
             if (sameScriptFamily(best.language, matching.get(0))) return "";
         }
+        // If the model explicitly labels a same-script language that the
+        // user did NOT select (e.g. Spanish when only English+Japanese are
+        // allowed), demand strong independent textual evidence before
+        // accepting it as English. Wrong-script model tags are less credible.
+        if (isSupported(reportedTag) && !allowed.contains(reportedTag)
+            && matching.size() == 1
+            && sameScriptFamily(reportedTag, matching.get(0))
+            && (bestMatching == null || bestMatching.confidence < 0.80f)) return "";
+
         if (bestMatching != null && bestMatching.confidence >= 0.55f) return bestMatching.language;
 
         // Short one-script utterances can still be translated immediately.
