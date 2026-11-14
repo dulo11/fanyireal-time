@@ -72,8 +72,10 @@ final class AsrTranscriptGuard {
 
         if (letters == 0 && digits == 0) return true;
         if (letters == 1 && digits == 0) {
-            // Keep legitimate single-character CJK words; reject stray Latin/
-            // Arabic/etc. glyphs such as "ا", "!" or a single bogus "l".
+            // English "I" / "a" are valid words, unlike the spurious
+            // Arabic "ا" or a lone lowercase "l" emitted by noisy ASR.
+            if (text.equalsIgnoreCase("I") || text.equalsIgnoreCase("a")) return false;
+            // Keep legitimate single-character CJK words.
             return firstScript != Character.UnicodeScript.HAN
                 && firstScript != Character.UnicodeScript.HIRAGANA
                 && firstScript != Character.UnicodeScript.KATAKANA
