@@ -1,5 +1,7 @@
 package com.zhou.floatingtranslator;
 
+import android.content.Context;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -35,6 +37,9 @@ public final class OfflineAsrModelCatalog {
         public final String family;
         public final boolean supportsFp32;
         public final boolean supportsInt8;
+        /** Built-in decoder family used for imported model files. */
+        public final String runtimeModelId;
+        private final String parameterOverride;
 
         Model(String id, String name, String remark, String url,
               String archiveRootHint, String approximateSize, String family,
@@ -48,6 +53,25 @@ public final class OfflineAsrModelCatalog {
             this.family = family;
             this.supportsFp32 = supportsFp32;
             this.supportsInt8 = supportsInt8;
+            this.runtimeModelId = id;
+            this.parameterOverride = null;
+        }
+
+        Model(String id, String name, String remark, String url,
+              String archiveRootHint, String approximateSize, String family,
+              boolean supportsFp32, boolean supportsInt8,
+              String runtimeModelId, String parameterOverride) {
+            this.id = id;
+            this.name = name;
+            this.remark = remark;
+            this.url = url;
+            this.archiveRootHint = archiveRootHint;
+            this.approximateSize = approximateSize;
+            this.family = family;
+            this.supportsFp32 = supportsFp32;
+            this.supportsInt8 = supportsInt8;
+            this.runtimeModelId = runtimeModelId;
+            this.parameterOverride = parameterOverride;
         }
 
         public String precisionText() {
@@ -57,7 +81,8 @@ public final class OfflineAsrModelCatalog {
         }
 
         public String parameterText() {
-            return OfflineAsrModelCatalog.parameterText(id);
+            return parameterOverride == null
+                ? OfflineAsrModelCatalog.parameterText(id) : parameterOverride;
         }
 
         public String optionLabel() {
@@ -311,6 +336,31 @@ public final class OfflineAsrModelCatalog {
             if (model.id.equals(id)) return model;
         }
         return null;
+    }
+
+    /** Includes locally imported archives without changing the published catalog. */
+    public static List<Model> all(Context context) {
+        List<Model> list = new ArrayList<>(MODELS);
+        list.addAll(ImportedAsrModels.all(context));
+        return list;
+    }
+
+    public static Model find(Context context, String id) {
+        Model builtIn = find(id);
+        return builtIn != null ? builtIn : ImportedAsrModels.find(context, id);
+    }
+
+    public static String runtimeId(Context context, String id) {
+        Model model = find(context, id);
+        return model == null ? id : model.runtimeModelId;
+    }
+
+    public static boolean supportsLanguage(Context context, String id, String tag) {
+        return supportsLanguage(runtimeId(context, id), tag);
+    }
+
+    public static boolean supportsMixedLanguages(Context context, String id, List<String> tags) {
+        return supportsMixedLanguages(runtimeId(context, id), tags);
     }
 
     public static boolean supportsFp32(String id) {
