@@ -105,6 +105,10 @@ public final class HomeActivity extends Activity {
         Button asrEngine = secondaryButton("🎤 语音识别引擎（手动固定）");
         asrEngine.setOnClickListener(v -> startActivity(new Intent(this, AsrEngineSettingsActivity.class)));
         toolsCard.addView(asrEngine, matchWrap());
+        Button rootMedia = secondaryButton("🎧 ROOT 直播音频｜无屏幕共享（实验）");
+        rootMedia.setOnClickListener(v -> startActivity(new Intent(this, RootCallActivity.class)
+            .putExtra(RootCallActivity.EXTRA_MEDIA_MODE, true)));
+        toolsCard.addView(rootMedia, matchWrap());
         Button update = secondaryButton("⬆ 检查更新 / ↩ 稳定回滚");
         update.setOnClickListener(v -> checkUpdate());
         toolsCard.addView(update, matchWrap());
@@ -174,12 +178,14 @@ public final class HomeActivity extends Activity {
             preferences.getString("asr_mode", TranslationService.ASR_SYSTEM));
         String precision = preferences.getString("asr_precision", SherpaSpeechEngine.PRECISION_AUTO);
         String conversation = preferences.getString("asr_conversation_profile", SherpaSpeechEngine.PROFILE_ACCURACY);
-        int input = Math.min(2, preferences.getInt("input_mode", 0));
+        int input = Math.min(3, preferences.getInt("input_mode", 0));
         boolean overlay = Settings.canDrawOverlays(this);
         boolean screenTranslation = ScreenTranslationAccessibilityService.isEnabled(this);
         boolean screenContinuous = preferences.getBoolean(
             ScreenTranslationAccessibilityService.PREF_SCREEN_CONTINUOUS, false);
-        String source = input == 2 ? "ROOT 通话/VoIP" : input == 1 ? "麦克风" : "系统内部声音";
+        String source = input == 3 ? "ROOT 直播音频（无屏幕授权·实验）"
+            : input == 2 ? "ROOT 通话/VoIP" : input == 1 ? "麦克风"
+            : "系统内部声音（仅音频，仍需系统授权）";
         int sourceIndex = clampLanguageIndex(preferences.getInt("source_index", 2));
         int targetIndex = clampLanguageIndex(preferences.getInt("target_index", 0));
         RuntimeMemory.Snapshot memory = RuntimeMemory.read(this);
