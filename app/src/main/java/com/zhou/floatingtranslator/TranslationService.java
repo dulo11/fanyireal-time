@@ -108,6 +108,7 @@ public class TranslationService extends Service implements RecognitionListener {
     private static final long STREAM_TRANSLATE_INTERVAL_MS = 1200L;
     private static final long CLOUD_CHUNK_MS = 3600L;
     private static final int TRANSLATE_CHUNK_CHARS = 180;
+    private static final long STALE_SUBTITLE_MS = 11000L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService audioWorker = Executors.newSingleThreadExecutor();
@@ -124,6 +125,28 @@ public class TranslationService extends Service implements RecognitionListener {
     private OfflineFirstTranslationRouter translator;
     private LanguageIdentifier fixedSpeechIdentifier;
     private int speechGuardEpoch;
+    private volatile long lastAcceptedSpeechAt;
+    private boolean staleSubtitleHidden;
+    private int filteredSinceLastAccepted;
+    private final Runnable staleSubtitleMonitor = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            if (!paused && !staleSubtitleHidden && lastAcceptedSpeechAt > 0
+                && SystemClock.elapsedRealtime() - lastAcceptedSpeechAt >= STALE_SUBTITLE_MS) {
+                staleSubtitleHidden = true;
+                if (originalText != null) originalText.setText("");
+                if (translatedText != null) translatedText.setText(
+                    translationOnlyOverlay ? "" : "等待新的 " + sourceMlTag + " 语音识别…");
+                if (filteredSinceLastAccepted > 0) {
+                    setDiagSpeech("ASR：过去 11 秒未得到有效 " + sourceMlTag
+                        + " 语音 · 已过滤 " + filteredSinceLastAccepted + " 段");
+                } else {
+                    setDiagSpeech("ASR：过去 11 秒未得到新语音文字，请检查麦克风/模型状态");
+                }
+            }
+            main.postDelayed(this, 1200L);
+        }
+    };
     private OcrCapture ocrCapture;
 
     private volatile boolean running;
@@ -258,6 +281,11 @@ public class TranslationService extends Service implements RecognitionListener {
         speechTranslationBusy = false;
         speechQueue.clear();
         sentenceAssembler.reset();
+        lastAcceptedSpeechAt = 0L;
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
+        main.removeCallbacks(staleSubtitleMonitor);
+        main.postDelayed(staleSubtitleMonitor, 1200L);
         synchronized (cloudPcm) { cloudPcm.reset(); }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
@@ -793,6 +821,7 @@ public class TranslationService extends Service implements RecognitionListener {
         if (!running || paused || text == null || text.trim().isEmpty()) return;
         String cleaned = AsrTranscriptGuard.clean(text);
         if (AsrTranscriptGuard.isLikelyNoise(cleaned)) {
+            filteredSinceLastAccepted++;
             setDiagSpeech("ASR：已过滤孤立字符或标点噪声");
             return;
         }
@@ -803,8 +832,9 @@ public class TranslationService extends Service implements RecognitionListener {
 
         // Omnilingual CTC does not have a language-conditioning option.
         // Block obviously wrong scripts / explicit mismatched ASR language tags.
-        if (!SingleLanguageAsrGuard.accepts(cleaned, sourceMlTag, language)) {
-            setDiagSpeech("ASR：单语言 " + sourceMlTag + " · 已过滤其他语言文字");
+        if (!SingleLanguageAsrGuard.acceptsLive(cleaned, sourceMlTag, language)) {
+            filteredSinceLastAccepted++;
+            setDiagSpeech("ASR：单语言 " + sourceMlTag + " · 已过滤其他文字体系");
             return;
         }
 
@@ -833,6 +863,7 @@ public class TranslationService extends Service implements RecognitionListener {
                     }
                     if (SingleLanguageAsrGuard.rejectConfidentOther(sourceMlTag,
                             bestLanguage, bestConfidence, sourceConfidence)) {
+                        filteredSinceLastAccepted++;
                         setDiagSpeech("ASR：单语言 " + sourceMlTag + " · 已过滤识别为 "
                             + bestLanguage + " 的片段");
                         return;
@@ -851,6 +882,9 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void acceptRecognizedSpeech(String text, boolean finalResult, String language) {
         if (!running || paused || text == null || text.isEmpty()) return;
+        lastAcceptedSpeechAt = SystemClock.elapsedRealtime();
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
         if (showOriginal) main.post(() -> {
             if (running && originalText != null) originalText.setText("原文：" + text);
         });
@@ -1336,6 +1370,10 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private void stopPipelineOnly() {
         running = false;
+        main.removeCallbacks(staleSubtitleMonitor);
+        lastAcceptedSpeechAt = 0L;
+        staleSubtitleHidden = false;
+        filteredSinceLastAccepted = 0;
         speechGuardEpoch++;
         LanguageIdentifier languageId = fixedSpeechIdentifier;
         fixedSpeechIdentifier = null;
