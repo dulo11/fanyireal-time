@@ -302,7 +302,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                         main.post(() -> { if (!closed) callback.onText(output, "en"); });
                     }
                     current.release();
-                    streamingStream = active.createStream();
+                    streamingStream = active.createStream("");
                     lastStreamingText = "";
                 } catch (Throwable ex) { postError("流式语音收尾失败：" + safe(ex)); }
             });
@@ -463,7 +463,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 config.setModelConfig(model);
                 config.setEnableEndpoint(true);
                 OnlineRecognizer decoderEngine = new OnlineRecognizer(null, config);
-                OnlineStream stream = decoderEngine.createStream();
+                OnlineStream stream = decoderEngine.createStream("");
                 synchronized (this) {
                     if (closed) {
                         stream.release();
