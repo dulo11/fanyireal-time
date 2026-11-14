@@ -81,6 +81,25 @@ public final class PrivacyAndSourcesActivity extends Activity {
             + "也可以用本机网络抓包工具核实实际连接的域名。"
             + "不应在未经他人知情同意的情况下录制或转写他人的通话。", 14, textColor);
 
+        Button share = new Button(this);
+        share.setText("📤 分享权限/数据说明（不包含任何个人配置）");
+        share.setTextColor(Color.WHITE);
+        share.setAllCaps(false);
+        share.setBackgroundResource(R.drawable.button_secondary);
+        share.setOnClickListener(v -> {
+            String message = "浮译 · 权限与数据去向说明\\n"
+                + "1. 安卓系统内部音频需要系统共享授权，但关闭 OCR 时音频字幕功能不主动采画面。\\n"
+                + "2. 本地 ASR 模型在手机运行；在线 ASR 则向选中的供应商发送语音。\\n"
+                + "3. 微软 Azure 等在线翻译需向供应商发送识别后的文字；ML Kit 离线翻译计算在本机。\\n"
+                + "4. ROOT/无障碍全屏翻译是高权限可选功能，应由设备所有人知情启用。\\n"
+                + "源代码：https://github.com/dulo11/fanyireal-time";
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+            shareIntent.putExtra(Intent.EXTRA_TEXT, message);
+            startActivity(Intent.createChooser(shareIntent, "分享浮译权限说明"));
+        });
+        root.addView(share, new LinearLayout.LayoutParams(-1, -2));
+
         button(root, "🔎 查看浮译完整源代码",
             "https://github.com/dulo11/fanyireal-time");
         button(root, "📘 Android 系统语音识别的公开接口",
