@@ -138,7 +138,9 @@ public class TranslationService extends Service implements RecognitionListener {
                 staleSubtitleHidden = true;
                 if (originalText != null) originalText.setText("");
                 if (translatedText != null) translatedText.setText(
-                    translationOnlyOverlay ? "" : "等待新的 " + sourceMlTag + " 语音识别…");
+                    translationOnlyOverlay ? "" : "等待新的 "
+                        + (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                            ? "已选语种" : sourceMlTag) + " 语音识别…");
                 if (filteredSinceLastAccepted > 0) {
                     setDiagSpeech("ASR：过去 11 秒未得到有效 " + sourceMlTag
                         + " 语音 · 已过滤 " + filteredSinceLastAccepted + " 段");
@@ -305,7 +307,10 @@ public class TranslationService extends Service implements RecognitionListener {
         }
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId,
             SherpaSpeechEngine.LANG_SINGLE.equals(languageMode));
-        setDiagTranslation(translator.selectedEngineName());
+        setDiagTranslation(SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+            ? "自选混合 " + SelectedSpeechLanguages.display(customSpeechLanguages)
+                + " → " + targetMlTag + " · " + TranslationRouter.engineLabel(engineId)
+            : translator.selectedEngineName());
         setDiagAudio(fixedSourceLabel() + " · 等待声音");
         setDiagSpeech("ASR：" + asrLabel(asrMode) + " · " + languageModeLabel() + " · 准备中");
         setDiagScreen(enableOcr ? "等待屏幕捕获" : "OCR 已关闭");
