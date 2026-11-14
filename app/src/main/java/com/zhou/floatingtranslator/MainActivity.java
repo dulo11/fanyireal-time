@@ -101,7 +101,7 @@ public final class MainActivity extends Activity {
         inputModeSpinner = new Spinner(this);
         inputModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "系统内部声音｜直播/视频",
+                "系统内部声音｜仅音频（仍需系统共享授权）",
                 "麦克风｜通话外放兼容",
                 "ROOT / Shizuku 内部通话/VoIP｜按 App 保存 PCM",
                 "ROOT 直播/视频内部声音｜无屏幕授权（需先实测 PCM）"
