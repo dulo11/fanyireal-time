@@ -264,7 +264,8 @@ public class TranslationService extends Service implements RecognitionListener {
 
         if (!Settings.canDrawOverlays(this)
             || (projectionNeeded && resultData == null)
-            || sourceMlTag.equals(targetMlTag)
+            || (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)
+                && sourceMlTag.equals(targetMlTag))
             || (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
                 && customSpeechLanguages.size() < 2)) {
             stopEverything();
