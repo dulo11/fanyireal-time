@@ -38,6 +38,51 @@ final class AsrTranscriptGuard {
         return meaningful ? value : "";
     }
 
+    /**
+     * Detect short ASR hallucinations before the transcript is shown or translated.
+     * In particular, Omnilingual CTC can output stray Arabic/Latin glyphs or
+     * punctuation when listening to silence, music, or an incomplete chunk.
+     * A full phrase is not judged by language here; single-language checks
+     * remain the separate responsibility of SingleLanguageAsrGuard.
+     */
+    static boolean isLikelyNoise(String raw) {
+        String text = clean(raw);
+        if (text.isEmpty()) return true;
+
+        int letters = 0;
+        int digits = 0;
+        int punctuation = 0;
+        int firstLetter = -1;
+        boolean sameLetter = true;
+        Character.UnicodeScript firstScript = null;
+        for (int i = 0; i < text.length();) {
+            int cp = text.codePointAt(i);
+            i += Character.charCount(cp);
+            if (Character.isLetter(cp)) {
+                letters++;
+                if (firstLetter < 0) {
+                    firstLetter = Character.toLowerCase(cp);
+                    firstScript = Character.UnicodeScript.of(cp);
+                } else if (Character.toLowerCase(cp) != firstLetter) {
+                    sameLetter = false;
+                }
+            } else if (Character.isDigit(cp)) digits++;
+            else if (!Character.isWhitespace(cp)) punctuation++;
+        }
+
+        if (letters == 0 && digits == 0) return true;
+        if (letters == 1 && digits == 0) {
+            // Keep legitimate single-character CJK words; reject stray Latin/
+            // Arabic/etc. glyphs such as "ا", "!" or a single bogus "l".
+            return firstScript != Character.UnicodeScript.HAN
+                && firstScript != Character.UnicodeScript.HIRAGANA
+                && firstScript != Character.UnicodeScript.KATAKANA
+                && firstScript != Character.UnicodeScript.HANGUL;
+        }
+        if (letters >= 5 && sameLetter && digits == 0) return true;
+        return letters <= 2 && digits == 0 && punctuation >= 3;
+    }
+
     /** Preserve provider evidence; do not invent English from Latin words or force the user's language. */
     static String stabilizeLanguage(String text, String detected, String myLanguage) {
         String lang = normalizeTag(detected);
