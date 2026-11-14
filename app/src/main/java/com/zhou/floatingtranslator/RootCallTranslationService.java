@@ -267,6 +267,7 @@ public final class RootCallTranslationService extends Service {
         diagAsr = "ASR：正在准备 Android 系统外部 PCM";
         renderDiag();
         pcmSystemSpeech = new AndroidPcmSpeechEngine(this, languageMode, speechLanguage,
+            customSpeechLanguages,
             new AndroidPcmSpeechEngine.Callback() {
                 @Override public void onStatus(String message) {
                     diagAsr = "ASR：" + message;
