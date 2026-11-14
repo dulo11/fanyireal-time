@@ -518,7 +518,12 @@ public final class OfflineModelStore implements AutoCloseable {
     }
 
     private static boolean containsOnnx(File root) {
-        return findFirst(root, f -> f.isFile() && f.getName().toLowerCase(Locale.ROOT).endsWith(".onnx")) != null;
+        // Moonshine v2 native ONNX Runtime models ship in optimized .ort files.
+        return findFirst(root, f -> {
+            if (!f.isFile()) return false;
+            String filename = f.getName().toLowerCase(Locale.ROOT);
+            return filename.endsWith(".onnx") || filename.endsWith(".ort");
+        }) != null;
     }
 
     public interface FileMatcher { boolean matches(File file); }
