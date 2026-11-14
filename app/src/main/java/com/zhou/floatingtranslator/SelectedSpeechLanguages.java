@@ -52,6 +52,21 @@ final class SelectedSpeechLanguages {
         return false;
     }
 
+    /** Locale tags used by optional Android 14+ language detection hints. */
+    static ArrayList<String> speechLocales(List<String> selected) {
+        ArrayList<String> locales = new ArrayList<>();
+        if (selected == null) return locales;
+        for (String code : selected) {
+            for (LanguageOption option : LanguageOption.ALL) {
+                if (code.equals(option.mlKitTag)) {
+                    locales.add(option.speechTag);
+                    break;
+                }
+            }
+        }
+        return locales;
+    }
+
     static String display(List<String> languages) {
         if (languages == null || languages.isEmpty()) return "尚未选择";
         List<String> names = new ArrayList<>();
