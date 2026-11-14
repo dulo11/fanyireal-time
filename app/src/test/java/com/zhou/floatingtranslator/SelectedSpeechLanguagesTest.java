@@ -50,6 +50,18 @@ public class SelectedSpeechLanguagesTest {
             "Good morning everyone", "", selected, Collections.emptyList()));
     }
 
+    @Test public void extendedScriptLanguagesAreNotMistakenForEnglish() {
+        List<String> selected = SelectedSpeechLanguages.parse("en,ta,te,kn,gu,ka,bn");
+        assertEquals("en", SelectedSpeechLanguages.choose(
+            "Hello everyone", "", selected, null));
+        assertEquals("ta", SelectedSpeechLanguages.choose("வணக்கம்", "", selected, null));
+        assertEquals("te", SelectedSpeechLanguages.choose("నమస్కారం", "", selected, null));
+        assertEquals("kn", SelectedSpeechLanguages.choose("ನಮಸ್ಕಾರ", "", selected, null));
+        assertEquals("gu", SelectedSpeechLanguages.choose("નમસ્તે", "", selected, null));
+        assertEquals("ka", SelectedSpeechLanguages.choose("გამარჯობა", "", selected, null));
+        assertEquals("bn", SelectedSpeechLanguages.choose("নমস্কার", "", selected, null));
+    }
+
     @Test public void unambiguousShortWordsHaveAPath() {
         List<String> selected = SelectedSpeechLanguages.parse("en,ja");
         assertEquals("en", SelectedSpeechLanguages.choose("OK", "", selected, null));
