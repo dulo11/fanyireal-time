@@ -12,6 +12,8 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * ASR is selected explicitly here, independently of the translation API.
@@ -20,35 +22,17 @@ import android.widget.Toast;
 public final class AsrEngineSettingsActivity extends Activity {
     private static final String PREFS = "floating_translator";
 
-    private static final String[] IDS = {
-        TranslationService.ASR_SYSTEM,
-        TranslationService.ASR_WHISPER_SMALL,
-        TranslationService.ASR_WHISPER_MEDIUM,
-        TranslationService.ASR_OMNILINGUAL,
-        TranslationService.ASR_QWEN3,
-        TranslationService.ASR_SENSEVOICE,
-        TranslationService.ASR_REAZON,
-        TranslationService.ASR_PARAKEET,
-        TranslationService.ASR_VOSK,
+    private static final String[] CLOUD_IDS = {
         TranslationService.ASR_GROQ_LARGE,
         TranslationService.ASR_GROQ_TURBO,
         TranslationService.ASR_CLOUDFLARE,
         TranslationService.ASR_YOUDAO
     };
-    private static final String[] TITLES = {
-        "安卓系统内置 SpeechRecognizer｜独立模式（默认）",
-        "Whisper Small｜本地模型",
-        "Whisper Medium｜本地模型",
-        "Omnilingual 300M｜本地小语种模型",
-        "Qwen3-ASR 0.6B｜本地模型",
-        "SenseVoice｜本地模型",
-        "ReazonSpeech｜本地日语",
-        "Parakeet｜本地日语",
-        "Vosk｜本地小模型",
-        "Groq Whisper Large V3｜在线（需配置）",
-        "Groq Whisper Large V3 Turbo｜在线（需配置）",
-        "Cloudflare Whisper｜在线（需配置）",
-        "有道云语音｜在线付费（需明确配置）"
+    private static final String[] CLOUD_NAMES = {
+        "Groq Whisper Large V3｜15.5亿参数｜在线（需 API）",
+        "Groq Whisper Large V3 Turbo｜8.09亿参数｜在线（需 API）",
+        "Cloudflare Whisper Turbo｜8.09亿参数｜在线（需 API）",
+        "有道云语音｜参数未公开｜在线付费（需明确配置）"
     };
 
     @Override protected void onCreate(Bundle state) {
@@ -72,15 +56,30 @@ public final class AsrEngineSettingsActivity extends Activity {
         tip.setPadding(0, dp(10), 0, dp(12));
         root.addView(tip);
 
+        final List<String> ids = new ArrayList<>();
+        final List<String> titles = new ArrayList<>();
+        ids.add(TranslationService.ASR_SYSTEM);
+        titles.add("安卓系统内置 SpeechRecognizer｜模型大小由系统决定｜独立模式");
+        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
+            ids.add(model.id);
+            titles.add(model.name + "｜" + model.parameterText() + "｜" + model.remark);
+        }
+        ids.add(TranslationService.ASR_VOSK);
+        titles.add("Vosk｜语言模型参数视所选包｜轻量离线");
+        for (int i = 0; i < CLOUD_IDS.length; i++) {
+            ids.add(CLOUD_IDS[i]);
+            titles.add(CLOUD_NAMES[i]);
+        }
+
         Spinner selector = new Spinner(this);
         selector.setAdapter(new ArrayAdapter<>(this,
-            android.R.layout.simple_spinner_dropdown_item, TITLES));
+            android.R.layout.simple_spinner_dropdown_item, titles));
         selector.setBackgroundColor(Color.rgb(51, 45, 73));
         String old = getSharedPreferences(PREFS, MODE_PRIVATE)
             .getString("asr_mode", TranslationService.ASR_SYSTEM);
         String chosen = TranslationService.strictAsrMode(old);
-        for (int i = 0; i < IDS.length; i++) {
-            if (IDS[i].equals(chosen)) { selector.setSelection(i); break; }
+        for (int i = 0; i < ids.size(); i++) {
+            if (ids.get(i).equals(chosen)) { selector.setSelection(i); break; }
         }
         root.addView(selector, new LinearLayout.LayoutParams(-1, dp(62)));
 
@@ -93,10 +92,10 @@ public final class AsrEngineSettingsActivity extends Activity {
         p.topMargin = dp(18);
         root.addView(save, p);
         save.setOnClickListener(v -> {
-            String mode = IDS[selector.getSelectedItemPosition()];
+            String mode = ids.get(selector.getSelectedItemPosition());
             SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
             prefs.edit().putString("asr_mode", mode).apply();
-            Toast.makeText(this, "已固定为：" + TITLES[selector.getSelectedItemPosition()]
+            Toast.makeText(this, "已固定为：" + titles.get(selector.getSelectedItemPosition())
                 + "。请重新启动实时翻译。", Toast.LENGTH_LONG).show();
             finish();
         });
