@@ -95,6 +95,29 @@ public final class OfflineFirstTranslationRouter implements AutoCloseable {
         translate(text, "", callback);
     }
 
+    /**
+     * Custom mixed-language speech has already passed the user's whitelist and
+     * received an explicit source language. Never re-detect it as an
+     * unrestricted language or change the selected target.
+     */
+    public void translateExplicitSource(String text, String sourceCode, Callback callback) {
+        if (closed) {
+            callback.onError("翻译引擎已关闭");
+            return;
+        }
+        if (text == null || text.trim().isEmpty()) {
+            callback.onError("没有可翻译文字");
+            return;
+        }
+        String from = normalizeTag(sourceCode);
+        if (!isSupportedTranslationLanguage(from)) {
+            callback.onError("混合模式没有确认原语言");
+            return;
+        }
+        lastDetectedLanguage = from;
+        translatePair(text.trim(), from, target, " · 手选混合 " + from + "→" + target, callback);
+    }
+
     /** Prefer ASR language when available; otherwise identify text locally. */
     public void translate(String text, String asrDetectedLanguage, Callback callback) {
         if (closed) {
