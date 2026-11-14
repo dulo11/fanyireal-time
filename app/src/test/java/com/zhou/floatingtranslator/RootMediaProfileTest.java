@@ -26,5 +26,14 @@ public class RootMediaProfileTest {
         assertEquals("com.example.call", RootCallProfileStore.loadSelected(app).packageName);
         assertEquals("com.example.video", RootCallProfileStore.loadSelectedMedia(app).packageName);
         assertEquals(3, RootCallProfileStore.loadSelectedMedia(app).card);
+        // Saving a media PCM profile for the same app must NOT mutate its call PCM.
+        RootCallProfileStore.Profile mediaSameApp = new RootCallProfileStore.Profile(
+            "com.example.call", "同一 App 直播", RootCallProfileStore.TRANSPORT_ROOT,
+            7, 8, 16000, 1);
+        RootCallProfileStore.saveMedia(app, mediaSameApp);
+        assertEquals(1, RootCallProfileStore.loadSelected(app).card);
+        assertEquals(7, RootCallProfileStore.loadSelectedMedia(app).card);
+        assertEquals(48000, RootCallProfileStore.loadSelected(app).rate);
+        assertEquals(16000, RootCallProfileStore.loadSelectedMedia(app).rate);
     }
 }
