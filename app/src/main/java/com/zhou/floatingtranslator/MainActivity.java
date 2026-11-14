@@ -18,6 +18,9 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
+import java.util.ArrayList;
+import java.util.List;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
@@ -42,6 +45,8 @@ public final class MainActivity extends Activity {
     private Spinner inputModeSpinner;
     private Spinner micProcessingSpinner;
     private Spinner languageModeSpinner;
+    private Button customLanguageButton;
+    private List<String> chosenCustomLanguages = new ArrayList<>();
     private Spinner sourceSpinner;
     private Spinner targetSpinner;
     private CheckBox showOriginal;
@@ -60,6 +65,9 @@ public final class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        chosenCustomLanguages = SelectedSpeechLanguages.forLegacy(
+            preferences.getString("language_mode", SherpaSpeechEngine.LANG_SINGLE),
+            preferences.getString(SelectedSpeechLanguages.PREF_CUSTOM_CODES, ""));
         setContentView(buildUi());
         requestRuntimePermissions();
     }
@@ -142,24 +150,33 @@ public final class MainActivity extends Activity {
             startActivity(new Intent(this, AsrEngineSettingsActivity.class)));
         audioCard.addView(asrSettings, params());
 
-        audioCard.addView(label("识别语言模式"));
+        audioCard.addView(label("语音识别语言模式（自主选择）"));
         languageModeSpinner = new Spinner(this);
         languageModeSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
             new String[]{
-                "单语言｜锁定原语言并过滤其他语言",
-                "日语 + 英语（混合）",
-                "中文 + 英语（混合）",
-                "韩语 + 英语（混合）",
-                "自动多语言"
+                "单语言｜从全部语言中选择一种",
+                "自选混合｜选择 2、3 或更多种语言"
             }));
         languageModeSpinner.setSelection(languageModeIndex(preferences.getString(
             "language_mode", SherpaSpeechEngine.LANG_SINGLE)));
         languageModeSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         audioCard.addView(languageModeSpinner, params());
+        customLanguageButton = secondaryButton("");
+        customLanguageButton.setOnClickListener(v -> chooseCustomLanguages());
+        audioCard.addView(customLanguageButton, params());
+        updateCustomLanguageButton();
+        languageModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view,
+                                                  int position, long id) {
+                updateCustomLanguageButton();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
         audioCard.addView(label(
-            "单语言模式：使用下面选择的原语言进行翻译；过滤明显非该语言的 ASR 结果。" +
-            "Whisper 可设置识别语言；Omnilingual CTC 模型不能强制指定语言，" +
-            "相同文字体系的语言只能尽量辨别，不能保证完全过滤。"
+            "单语言：下面的「原语言」下拉列表可选择全部支持的语言。\\n"
+            + "混合：点击上方按钮，自选英语+日语、英语+马来语+越南语等任意组合；"
+            + "只把选定语种送去翻译，无法判断的片段直接提示，不擅自猜其他语种。"
+            + "注意 Omnilingual 等多语言 ASR 不支持在模型内部锁定这些语言。"
         ));
 
         TextView rootTip = text(
@@ -287,6 +304,12 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+            && chosenCustomLanguages.size() < 2) {
+            toast("混合模式至少选两种语言");
+            chooseCustomLanguages();
+            return;
+        }
         int mode = inputModeSpinner.getSelectedItemPosition();
         boolean mic = mode == 1;
         boolean root = mode == 2 || mode == 3;
@@ -366,6 +389,8 @@ public final class MainActivity extends Activity {
             .setAction(TranslationService.ACTION_START)
             .putExtra(TranslationService.EXTRA_ASR_MODE, selectedAsrMode())
             .putExtra(TranslationService.EXTRA_LANGUAGE_MODE, selectedLanguageMode())
+            .putExtra(SelectedSpeechLanguages.EXTRA_CUSTOM_CODES,
+                SelectedSpeechLanguages.serialize(chosenCustomLanguages))
             .putExtra(TranslationService.EXTRA_SOURCE_SPEECH, source.speechTag)
             .putExtra(TranslationService.EXTRA_SOURCE_MLKIT, source.mlKitTag)
             .putExtra(TranslationService.EXTRA_TARGET_MLKIT, target.mlKitTag)
@@ -499,6 +524,8 @@ public final class MainActivity extends Activity {
         preferences.edit()
             .putInt("input_mode", inputModeSpinner.getSelectedItemPosition())
             .putString("language_mode", selectedLanguageMode())
+            .putString(SelectedSpeechLanguages.PREF_CUSTOM_CODES,
+                SelectedSpeechLanguages.serialize(chosenCustomLanguages))
             .putInt("source_index", sourceSpinner.getSelectedItemPosition())
             .putInt("target_index", targetSpinner.getSelectedItemPosition())
             .putBoolean("show_original", showOriginal.isChecked())
@@ -528,6 +555,9 @@ public final class MainActivity extends Activity {
         String mic = mode == 1 ? "\n麦克风处理：" + micProcessingLabel(preferences.getString(
             "mic_processing", MicAudioEffects.MODE_REMOTE)) : "";
         summary.setText("声音：" + source + "\nASR：" + asrLabel(TranslationService.strictAsrMode(preferences.getString("asr_mode", TranslationService.ASR_SYSTEM)))
+            + "\n语言：" + (SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+                ? "自选混合 " + SelectedSpeechLanguages.display(chosenCustomLanguages)
+                : "单语言 " + (((LanguageOption) sourceSpinner.getSelectedItem()).label))
             + "\n历史：" + HistoryStore.count(this) + " 条" + internal + mic);
     }
 
@@ -574,21 +604,50 @@ public final class MainActivity extends Activity {
     }
 
     private int languageModeIndex(String mode) {
-        if (SherpaSpeechEngine.LANG_JA_EN.equals(mode)) return 1;
-        if (SherpaSpeechEngine.LANG_ZH_EN.equals(mode)) return 2;
-        if (SherpaSpeechEngine.LANG_KO_EN.equals(mode)) return 3;
-        if (SherpaSpeechEngine.LANG_AUTO.equals(mode)) return 4;
-        return 0;
+        return SherpaSpeechEngine.LANG_SINGLE.equals(mode) ? 0 : 1;
     }
 
     private String selectedLanguageMode() {
-        switch (languageModeSpinner.getSelectedItemPosition()) {
-            case 1: return SherpaSpeechEngine.LANG_JA_EN;
-            case 2: return SherpaSpeechEngine.LANG_ZH_EN;
-            case 3: return SherpaSpeechEngine.LANG_KO_EN;
-            case 4: return SherpaSpeechEngine.LANG_AUTO;
-            default: return SherpaSpeechEngine.LANG_SINGLE;
+        return languageModeSpinner != null && languageModeSpinner.getSelectedItemPosition() == 1
+            ? SelectedSpeechLanguages.MODE_CUSTOM : SherpaSpeechEngine.LANG_SINGLE;
+    }
+
+    private void updateCustomLanguageButton() {
+        if (customLanguageButton == null) return;
+        customLanguageButton.setVisibility(
+            SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
+                ? View.VISIBLE : View.GONE);
+        customLanguageButton.setText("＋ 选择混合识别语言："
+            + SelectedSpeechLanguages.display(chosenCustomLanguages));
+    }
+
+    private void chooseCustomLanguages() {
+        final LanguageOption[] options = LanguageOption.ALL;
+        final String[] names = new String[options.length];
+        final boolean[] checked = new boolean[options.length];
+        for (int i = 0; i < options.length; i++) {
+            names[i] = options[i].label;
+            checked[i] = chosenCustomLanguages.contains(options[i].mlKitTag);
         }
+        new AlertDialog.Builder(this)
+            .setTitle("选择 2 种或更多语言｜仅翻译选中的语种")
+            .setMultiChoiceItems(names, checked, (dialog, which, isChecked) ->
+                checked[which] = isChecked)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存", (dialog, which) -> {
+                List<String> selected = new ArrayList<>();
+                for (int i = 0; i < options.length; i++) {
+                    if (checked[i]) selected.add(options[i].mlKitTag);
+                }
+                if (selected.size() < 2) {
+                    toast("至少选择两种语言，再点击保存");
+                    return;
+                }
+                chosenCustomLanguages = selected;
+                updateCustomLanguageButton();
+                saveSettings(false);
+            })
+            .show();
     }
 
     private String asrLabel(String mode) {
