@@ -19,6 +19,7 @@ import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -554,6 +555,7 @@ public class TranslationService extends Service implements RecognitionListener {
         stopRawRecognitionEngines(false);
         setDiagSpeech("ASR：正在准备 Android 系统外部 PCM");
         pcmSystemSpeech = new AndroidPcmSpeechEngine(this, languageMode, speechLanguage,
+            customSpeechLanguages,
             new AndroidPcmSpeechEngine.Callback() {
                 @Override public void onStatus(String message) {
                     setDiagSpeech("ASR：" + message);
@@ -1079,6 +1081,12 @@ public class TranslationService extends Service implements RecognitionListener {
                         ASR_AUTO.equals(asrMode) ? false : preferOffline);
                 if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
                     listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
+                } else if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                    && Build.VERSION.SDK_INT >= 34) {
+                    listen.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
+                    listen.putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
+                        SelectedSpeechLanguages.speechLocales(customSpeechLanguages));
                 }
                 setDiagSpeech("ASR：系统 SpeechRecognizer · 麦克风 · " + languageModeLabel());
                 systemRecognizer.startListening(listen);
