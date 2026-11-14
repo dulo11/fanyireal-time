@@ -162,7 +162,7 @@ public class ModelManagerActivity extends Activity {
         modelLabels.clear();
         modelIds.add(TranslationService.ASR_VOSK);
         modelLabels.add("Vosk｜按语言包大小，参数量不固定｜速度快、省电");
-        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
+        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all(this)) {
             modelIds.add(model.id);
             modelLabels.add(model.optionLabel());
         }
@@ -193,7 +193,7 @@ public class ModelManagerActivity extends Activity {
             return;
         }
 
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         boolean installed = modelStore.isInstalled(id);
         long installedBytes = modelStore.installedBytes(id);
         long readyBytes = modelStore.cachedArchiveBytes(id);
@@ -222,7 +222,7 @@ public class ModelManagerActivity extends Activity {
 
     private void downloadSelected() {
         String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         if (model == null) {
             status.setText("Vosk 语言包会在实际使用时自动下载，不需要从这里重复下载。");
             return;
@@ -292,7 +292,7 @@ public class ModelManagerActivity extends Activity {
 
     private void deleteSelected() {
         String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         if (model == null || downloadInProgress) return;
         status.setText("正在删除 " + model.name + "……");
         worker.execute(() -> {
@@ -310,7 +310,7 @@ public class ModelManagerActivity extends Activity {
 
     private void setDefaultSelected() {
         String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         if (model != null && !modelStore.isInstalled(id)) {
             long readyBytes = modelStore.cachedArchiveBytes(id);
             status.setText(readyBytes > 0L
@@ -334,7 +334,7 @@ public class ModelManagerActivity extends Activity {
             long readyBytes = modelStore.completedDownloadCacheBytes();
             long freeBytes = modelStore.availableBytes();
             int sherpaCount = 0;
-            for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
+            for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all(this)) {
                 if (modelStore.isInstalled(model.id)) sherpaCount++;
             }
             int finalSherpaCount = sherpaCount;
