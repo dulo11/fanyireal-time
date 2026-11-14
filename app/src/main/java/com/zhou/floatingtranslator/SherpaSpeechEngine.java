@@ -18,6 +18,12 @@ import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineStream;
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
+import com.k2fsa.sherpa.onnx.OnlineModelConfig;
+import com.k2fsa.sherpa.onnx.OnlineRecognizer;
+import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig;
+import com.k2fsa.sherpa.onnx.OnlineRecognizerResult;
+import com.k2fsa.sherpa.onnx.OnlineStream;
+import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig;
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig;
 import com.k2fsa.sherpa.onnx.SpeechSegment;
 import com.k2fsa.sherpa.onnx.TenVadModelConfig;
@@ -81,6 +87,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private final float hotwordScore;
 
     private volatile OfflineRecognizer recognizer;
+    private volatile OnlineRecognizer streamingRecognizer;
+    private volatile OnlineStream streamingStream;
+    private String lastStreamingText = "";
+    private long lastStreamingAt;
     private volatile Vad vad;
     private volatile boolean ready;
     private volatile boolean closed;
@@ -111,7 +121,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     public boolean isReady() {
-        return ready && recognizer != null && !closed;
+        return ready && (recognizer != null || streamingRecognizer != null) && !closed;
     }
 
     public void prepare() {
@@ -128,6 +138,10 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         File modelDir = store.modelDir(modelId);
         store.close();
+        if (OfflineAsrModelCatalog.ZIPFORMER_STREAM_EN.equals(modelId)) {
+            prepareStreamingZipformer(meta, modelDir);
+            return;
+        }
         worker.execute(() -> {
             try {
                 postStatus("正在加载 " + meta.name + " · " + requestedPrecisionLabel(meta)
@@ -175,6 +189,15 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     /** Accept 16 kHz, mono, PCM16 little-endian audio plus its observed peak. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
         if (!isReady() || pcm == null || length <= 0) return;
+        if (streamingRecognizer != null) {
+            int safeLength = Math.min(length, pcm.length) & ~1;
+            if (safeLength <= 0) return;
+            byte[] copy = new byte[safeLength];
+            System.arraycopy(pcm, 0, copy, 0, safeLength);
+            float[] samples = pcm16ToFloat(copy);
+            worker.execute(() -> decodeStreaming(samples));
+            return;
+        }
         if (neuralVad && vad != null) acceptNeuralVad(pcm, length);
         else acceptEnergyFallback(pcm, length, peak);
     }
@@ -265,6 +288,26 @@ public final class SherpaSpeechEngine implements AutoCloseable {
 
     public synchronized void flush() {
         if (closed) return;
+        if (streamingRecognizer != null) {
+            worker.execute(() -> {
+                OnlineRecognizer active = streamingRecognizer;
+                OnlineStream current = streamingStream;
+                if (active == null || current == null || closed) return;
+                try {
+                    current.inputFinished();
+                    while (active.isReady(current)) active.decode(current);
+                    String finalText = active.getResult(current).getText();
+                    if (finalText != null && !finalText.trim().isEmpty()) {
+                        String output = finalText.trim();
+                        main.post(() -> { if (!closed) callback.onText(output, "en"); });
+                    }
+                    current.release();
+                    streamingStream = active.createStream();
+                    lastStreamingText = "";
+                } catch (Throwable ex) { postError("流式语音收尾失败：" + safe(ex)); }
+            });
+            return;
+        }
         Vad localVad = vad;
         if (neuralVad && localVad != null) {
             if (vadWindowFill > 0) {
@@ -393,6 +436,78 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             if (run > best) best = run;
         }
         return best;
+    }
+
+    private void prepareStreamingZipformer(OfflineAsrModelCatalog.Model meta, File modelDir) {
+        worker.execute(() -> {
+            try {
+                File root = OfflineModelStore.findPayloadRoot(modelDir, meta.archiveRootHint);
+                File encoder = require(findNamed(root, "encoder-epoch-99-avg-1.int8.onnx"),
+                    "Zipformer encoder");
+                File decoder = require(findNamed(root, "decoder-epoch-99-avg-1.onnx"),
+                    "Zipformer decoder");
+                File joiner = require(findNamed(root, "joiner-epoch-99-avg-1.int8.onnx"),
+                    "Zipformer joiner");
+                File tokens = require(findTokens(root), "Zipformer tokens");
+
+                OnlineTransducerModelConfig transducer = new OnlineTransducerModelConfig();
+                transducer.setEncoder(encoder.getAbsolutePath());
+                transducer.setDecoder(decoder.getAbsolutePath());
+                transducer.setJoiner(joiner.getAbsolutePath());
+                OnlineModelConfig model = new OnlineModelConfig();
+                model.setTransducer(transducer);
+                model.setModelType("zipformer");
+                model.setTokens(tokens.getAbsolutePath());
+                model.setNumThreads(2);
+                OnlineRecognizerConfig config = new OnlineRecognizerConfig();
+                config.setModelConfig(model);
+                config.setEnableEndpoint(true);
+                OnlineRecognizer decoderEngine = new OnlineRecognizer(null, config);
+                OnlineStream stream = decoderEngine.createStream();
+                synchronized (this) {
+                    if (closed) {
+                        stream.release();
+                        decoderEngine.release();
+                        return;
+                    }
+                    streamingRecognizer = decoderEngine;
+                    streamingStream = stream;
+                    loadedPrecision = "INT8 真流式";
+                    ready = true;
+                }
+                main.post(() -> {
+                    if (!closed) callback.onReady(meta.name + " · 真正流式 · INT8");
+                });
+            } catch (Throwable ex) { postError("Zipformer 流式模型加载失败：" + safe(ex)); }
+        });
+    }
+
+    private void decodeStreaming(float[] samples) {
+        OnlineRecognizer r = streamingRecognizer;
+        OnlineStream st = streamingStream;
+        if (closed || r == null || st == null || samples.length == 0) return;
+        try {
+            st.acceptWaveform(samples, SAMPLE_RATE);
+            while (r.isReady(st)) r.decode(st);
+            OnlineRecognizerResult result = r.getResult(st);
+            String text = result == null || result.getText() == null
+                ? "" : result.getText().trim();
+            if (r.isEndpoint(st)) {
+                if (!text.isEmpty() && !text.equals(lastStreamingText)) {
+                    main.post(() -> { if (!closed) callback.onText(text, "en"); });
+                }
+                r.reset(st);
+                lastStreamingText = "";
+                lastStreamingAt = 0;
+            } else if (!text.isEmpty() && !text.equals(lastStreamingText)
+                && android.os.SystemClock.elapsedRealtime() - lastStreamingAt > 950L) {
+                lastStreamingText = text;
+                lastStreamingAt = android.os.SystemClock.elapsedRealtime();
+                main.post(() -> { if (!closed) callback.onText(text, "en"); });
+            }
+        } catch (Throwable error) {
+            postError("Zipformer 流式解码失败：" + safe(error));
+        }
     }
 
     private OfflineRecognizer buildRecognizer(OfflineAsrModelCatalog.Model meta, File installedDir,
@@ -898,8 +1013,14 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         OfflineRecognizer r = recognizer;
         recognizer = null;
+        OnlineRecognizer online = streamingRecognizer;
+        OnlineStream stream = streamingStream;
+        streamingRecognizer = null;
+        streamingStream = null;
         worker.execute(() -> {
             if (r != null) try { r.release(); } catch (Throwable ignored) {}
+            if (stream != null) try { stream.release(); } catch (Throwable ignored) {}
+            if (online != null) try { online.release(); } catch (Throwable ignored) {}
         });
         worker.shutdown();
     }
