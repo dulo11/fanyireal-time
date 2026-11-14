@@ -81,6 +81,20 @@ final class SingleLanguageAsrGuard {
         return matching > 0;
     }
 
+    /**
+     * A multilingual model's reported language can be unreliable even when
+     * its actual transcript is correct English (or another Latin-script
+     * language). Never drop an entire Latin-script sentence on the model's
+     * language tag alone. The caller then runs ML Kit's conservative text
+     * language identification on longer phrases.
+     */
+    static boolean acceptsLive(String text, String sourceLanguage, String reportedLanguage) {
+        if (!accepts(text, sourceLanguage, "")) return false;
+        String source = AsrTranscriptGuard.normalizeTag(sourceLanguage);
+        if (isLatinLanguage(source)) return true;
+        return accepts(text, sourceLanguage, reportedLanguage);
+    }
+
     static boolean needsLanguageId(String text, String sourceLanguage) {
         if (!isLatinLanguage(AsrTranscriptGuard.normalizeTag(sourceLanguage))) return false;
         int latin = 0;
