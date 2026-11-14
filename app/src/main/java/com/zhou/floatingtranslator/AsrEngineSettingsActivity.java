@@ -60,7 +60,7 @@ public final class AsrEngineSettingsActivity extends Activity {
         final List<String> titles = new ArrayList<>();
         ids.add(TranslationService.ASR_SYSTEM);
         titles.add("安卓系统内置 SpeechRecognizer｜模型大小由系统决定｜独立模式");
-        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
+        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all(this)) {
             ids.add(model.id);
             titles.add(model.name + "｜" + model.parameterText() + "｜" + model.remark);
         }
