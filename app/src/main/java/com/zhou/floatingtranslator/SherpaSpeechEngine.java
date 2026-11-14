@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Non-streaming high-accuracy sherpa-onnx ASR.
@@ -89,6 +90,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private volatile OfflineRecognizer recognizer;
     private volatile OnlineRecognizer streamingRecognizer;
     private volatile OnlineStream streamingStream;
+    private final AtomicInteger pendingStreamingFrames = new AtomicInteger();
     private String lastStreamingText = "";
     private long lastStreamingAt;
     private volatile Vad vad;
@@ -192,10 +194,20 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         if (streamingRecognizer != null) {
             int safeLength = Math.min(length, pcm.length) & ~1;
             if (safeLength <= 0) return;
+            if (pendingStreamingFrames.get() >= 32) {
+                // Do not allow an unbounded audio backlog or memory growth.
+                // A slow CPU may lose frames; show a clear diagnostic.
+                postStatus("流式 ASR 推理速度不足：已限制音频缓存，建议选择轻量模型");
+                return;
+            }
             byte[] copy = new byte[safeLength];
             System.arraycopy(pcm, 0, copy, 0, safeLength);
             float[] samples = pcm16ToFloat(copy);
-            worker.execute(() -> decodeStreaming(samples));
+            pendingStreamingFrames.incrementAndGet();
+            worker.execute(() -> {
+                try { decodeStreaming(samples); }
+                finally { pendingStreamingFrames.decrementAndGet(); }
+            });
             return;
         }
         if (neuralVad && vad != null) acceptNeuralVad(pcm, length);
@@ -493,7 +505,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
             String text = result == null || result.getText() == null
                 ? "" : result.getText().trim();
             if (r.isEndpoint(st)) {
-                if (!text.isEmpty() && !text.equals(lastStreamingText)) {
+                if (!text.isEmpty()) {
+                    // Final endpoint event is needed even when the partial text
+                    // is identical, so SmartSentenceAssembler can commit it.
                     main.post(() -> { if (!closed) callback.onText(text, "en"); });
                 }
                 r.reset(st);
