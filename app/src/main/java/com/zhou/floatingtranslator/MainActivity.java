@@ -358,10 +358,10 @@ public final class MainActivity extends Activity {
         if (modelId != null) {
             boolean mixed = SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode());
             boolean allowed = mixed
-                ? OfflineAsrModelCatalog.supportsMixedLanguages(modelId, chosenCustomLanguages)
-                : OfflineAsrModelCatalog.supportsLanguage(modelId, source.mlKitTag);
+                ? OfflineAsrModelCatalog.supportsMixedLanguages(this, modelId, chosenCustomLanguages)
+                : OfflineAsrModelCatalog.supportsLanguage(this, modelId, source.mlKitTag);
             if (!allowed) {
-                OfflineAsrModelCatalog.Model selected = OfflineAsrModelCatalog.find(modelId);
+                OfflineAsrModelCatalog.Model selected = OfflineAsrModelCatalog.find(this, modelId);
                 toast((selected == null ? "当前模型" : selected.name)
                     + " 不支持所选识别语言；请更换 ASR 或语言，不会自动切换。");
                 return;
@@ -689,7 +689,7 @@ public final class MainActivity extends Activity {
     }
 
     private String asrLabel(String mode) {
-        OfflineAsrModelCatalog.Model localModel = OfflineAsrModelCatalog.find(mode);
+        OfflineAsrModelCatalog.Model localModel = OfflineAsrModelCatalog.find(this, mode);
         if (localModel != null) return localModel.name + "｜" + localModel.parameterText();
         if (TranslationService.ASR_FREE_ONLINE.equals(mode)) return "免费在线自动";
         if (TranslationService.ASR_GROQ_LARGE.equals(mode)) return "Groq Free · Whisper Large V3";
