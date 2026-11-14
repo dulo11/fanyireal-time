@@ -127,7 +127,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     public void prepare() {
-        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
+        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(context, modelId);
         if (meta == null) {
             callback.onError("未知 sherpa-onnx 模型：" + modelId);
             return;
@@ -140,7 +140,7 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         File modelDir = store.modelDir(modelId);
         store.close();
-        if (OfflineAsrModelCatalog.ZIPFORMER_STREAM_EN.equals(modelId)) {
+        if (OfflineAsrModelCatalog.ZIPFORMER_STREAM_EN.equals(meta.runtimeModelId)) {
             prepareStreamingZipformer(meta, modelDir);
             return;
         }
@@ -538,11 +538,11 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         if (root == null) throw new IllegalStateException("模型目录不存在");
 
         OfflineModelConfig model = new OfflineModelConfig();
-        model.setNumThreads(recommendedThreads(modelId));
+        model.setNumThreads(recommendedThreads(meta.runtimeModelId));
         model.setDebug(false);
         model.setProvider("cpu");
 
-        switch (modelId) {
+        switch (meta.runtimeModelId) {
             case OfflineAsrModelCatalog.SENSEVOICE: {
                 File onnx = require(findNamedPreferred(root, "model.onnx", "model.int8.onnx"), "SenseVoice model");
                 markPrecision(onnx);
