@@ -45,6 +45,7 @@ public final class RootCallTranslationService extends Service {
     private final ByteArrayOutputStream cloudPcm = new ByteArrayOutputStream();
 
     private RootPcmSource rootSource;
+    private boolean mediaCapture;
     private OfflineSpeechEngine vosk;
     private SherpaSpeechEngine sherpa;
     private AndroidPcmSpeechEngine pcmSystemSpeech;
@@ -111,7 +112,10 @@ public final class RootCallTranslationService extends Service {
         if (!TranslationService.ACTION_START.equals(action)) return START_NOT_STICKY;
 
         stopPipeline();
-        RootCallProfileStore.Profile profile = RootCallProfileStore.loadSelected(this);
+        mediaCapture = "root_media".equals(intent.getStringExtra(TranslationService.EXTRA_INPUT_MODE));
+        RootCallProfileStore.Profile profile = mediaCapture
+            ? RootCallProfileStore.loadSelectedMedia(this)
+            : RootCallProfileStore.loadSelected(this);
         if (profile == null || !Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -131,7 +135,8 @@ public final class RootCallTranslationService extends Service {
         allowYoudaoSpeech = intent.getBooleanExtra(TranslationService.EXTRA_YOUDAO_SPEECH_FALLBACK, false);
         int fontSize = intent.getIntExtra(TranslationService.EXTRA_FONT_SIZE, 24);
 
-        startForeground(NOTIFICATION_ID, notification("准备 " + profile.sourceLabel() + " 通话翻译"),
+        startForeground(NOTIFICATION_ID, notification("准备 " + profile.sourceLabel()
+                + (mediaCapture ? " 直播/视频音频翻译" : " 通话翻译")),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         running = true;
         paused = false;
@@ -145,12 +150,15 @@ public final class RootCallTranslationService extends Service {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("service_running", true).apply();
 
         createOverlay(fontSize);
-        translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId);
+        translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId,
+            SherpaSpeechEngine.LANG_SINGLE.equals(languageMode));
         diagTranslation = translator.selectedEngineName();
         diagAudio = profile.sourceLabel() + " · " + profile.packageName + " · 等待 PCM";
         diagAsr = "ASR：" + asrLabel(asrMode) + " · 准备中";
         renderDiag();
-        showStatus(profile.sourceLabel() + " 通话来源：" + profile.packageName + "\n正在准备 " + asrLabel(asrMode));
+        showStatus(profile.sourceLabel() + (mediaCapture ? " 直播音频配置：" : " 通话配置：")
+            + profile.packageName + "\n正在准备 " + asrLabel(asrMode)
+            + (mediaCapture ? "\n不使用屏幕共享，也不读取画面；此 PCM 未必属于所选 App。" : ""));
         prepareAsr(profile);
         return START_NOT_STICKY;
     }
@@ -417,8 +425,10 @@ public final class RootCallTranslationService extends Service {
                 @Override public void onError(String message) {
                     diagAudio = profile.sourceLabel() + " PCM 失败：" + message;
                     renderDiag();
-                    showStatus(profile.sourceLabel() + " 内部声音捕获失败：" + message
-                        + "\n回通话兼容中心调整同一固定模式的 PCM/采样率/声道后再试；不会自动切换来源。");
+                    showStatus(profile.sourceLabel() + " 内部 PCM 捕获失败：" + message
+                        + (mediaCapture
+                            ? "\n请返回 ROOT 音频测试页确认直播播放/暂停时 PCM 变化；不自动切屏幕共享或麦克风。"
+                            : "\n请返回通话兼容中心调整 PCM/采样率/声道；不自动切换来源。"));
                 }
             });
         rootSource.start();
