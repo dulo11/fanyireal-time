@@ -149,8 +149,8 @@ public class ModelManagerActivity extends Activity {
         root.addView(status);
 
         TextView translationFuture = text(
-            "文字翻译目前仍是 ML Kit 离线优先。NLLB / OPUS-MT 属于下一步文字翻译大模型，" +
-            "本页不会把尚未接入的模型伪装成可用。",
+            OfflineAsrModelCatalog.pendingModelsText()
+                + "\n\n文字翻译的大模型 NLLB / OPUS-MT 仍未接入，不能当作已支持的模型。",
             13, Color.rgb(180, 170, 205));
         translationFuture.setPadding(0, dp(22), 0, 0);
         root.addView(translationFuture);
@@ -161,7 +161,7 @@ public class ModelManagerActivity extends Activity {
         modelIds.clear();
         modelLabels.clear();
         modelIds.add(TranslationService.ASR_VOSK);
-        modelLabels.add("Vosk｜省电★★★★★｜速度快｜模型小｜日语快语速准确率一般");
+        modelLabels.add("Vosk｜按语言包大小，参数量不固定｜速度快、省电");
         for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
             modelIds.add(model.id);
             modelLabels.add(model.optionLabel());
@@ -210,7 +210,8 @@ public class ModelManagerActivity extends Activity {
             state = "未下载";
         }
 
-        selectedInfo.setText(model.name + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
+        selectedInfo.setText(model.name + "\n参数规模：" + model.parameterText()
+            + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
             + "\n状态：" + state);
         if (downloadButton != null) {
             downloadButton.setText(readyBytes > 0L && !installed ? "↻ 重新解压 / 安装" : "⬇ 下载所选模型");
@@ -299,7 +300,7 @@ public class ModelManagerActivity extends Activity {
             runOnUiThread(() -> {
                 status.setText(ok ? "✅ 已删除 " + model.name : "删除时遇到部分失败");
                 if (id.equals(prefs.getString("asr_mode", ""))) {
-                    prefs.edit().putString("asr_mode", TranslationService.ASR_AUTO).apply();
+                    prefs.edit().putString("asr_mode", TranslationService.ASR_SYSTEM).apply();
                 }
                 updateSelectedInfo();
                 refresh(false);
