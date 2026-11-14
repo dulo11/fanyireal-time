@@ -323,7 +323,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     public static String modelIdForAsr(String mode) {
-        return OfflineAsrModelCatalog.find(mode) == null ? null : mode;
+        return OfflineAsrModelCatalog.find(mode) != null || ImportedAsrModels.isImported(mode) ? mode : null;
     }
 
     /**
@@ -334,7 +334,8 @@ public class TranslationService extends Service implements RecognitionListener {
         if (ASR_VOSK.equals(mode) || ASR_SYSTEM.equals(mode) || ASR_YOUDAO.equals(mode)
             || ASR_GROQ_LARGE.equals(mode) || ASR_GROQ_TURBO.equals(mode)
             || ASR_CLOUDFLARE.equals(mode)
-            || OfflineAsrModelCatalog.find(mode) != null) return mode;
+            || OfflineAsrModelCatalog.find(mode) != null
+            || ImportedAsrModels.isImported(mode)) return mode;
         return ASR_SYSTEM;
     }
 
@@ -359,7 +360,7 @@ public class TranslationService extends Service implements RecognitionListener {
         if (ASR_GROQ_LARGE.equals(mode)) return "Groq Free · Whisper Large V3";
         if (ASR_GROQ_TURBO.equals(mode)) return "Groq Free · Whisper Large V3 Turbo";
         if (ASR_CLOUDFLARE.equals(mode)) return "Cloudflare Workers AI Free";
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(mode);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, mode);
         if (model != null) return model.name;
         return "自动推荐 ASR";
     }
@@ -424,7 +425,7 @@ public class TranslationService extends Service implements RecognitionListener {
                 else startSystemPcm(false);
                 break;
             default:
-                if (OfflineAsrModelCatalog.find(asrMode) != null) startSherpa(asrMode, false);
+                if (OfflineAsrModelCatalog.find(this, asrMode) != null) startSherpa(asrMode, false);
                 else {
                     setDiagSpeech("ASR：选择的识别引擎不存在");
                     showStatus("语音识别引擎不可用，请到设置中手动选择。");
@@ -504,7 +505,7 @@ public class TranslationService extends Service implements RecognitionListener {
     }
 
     private void startSherpa(String modelId, boolean allowAutoFallback) {
-        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
+        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(this, modelId);
         if (meta == null) {
             if (allowAutoFallback) { failedAutoModels.add(modelId); prepareAutoAsr(); }
             return;
