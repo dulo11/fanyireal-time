@@ -38,6 +38,17 @@ public class SelectedSpeechLanguagesTest {
             "مرحبا", "ar", selected, Collections.emptyList()));
     }
 
+    @Test public void unselectedLatinAsrTagNeedsIndependentEvidence() {
+        List<String> selected = SelectedSpeechLanguages.parse("en,ja");
+        assertEquals("", SelectedSpeechLanguages.choose(
+            "Hola buenos dias", "es", selected, Collections.emptyList()));
+        // An ASR mislabel should not suppress a complete English sentence
+        // when independent text identification is strongly English.
+        assertEquals("en", SelectedSpeechLanguages.choose(
+            "Just look around and name objects in English", "es", selected,
+            Arrays.asList(new SelectedSpeechLanguages.Evidence("en", .96f))));
+    }
+
     @Test public void arbitraryThreeWayMixRespectsExplicitEvidence() {
         List<String> selected = SelectedSpeechLanguages.parse("en,ms,vi");
         assertEquals("vi", SelectedSpeechLanguages.choose(
