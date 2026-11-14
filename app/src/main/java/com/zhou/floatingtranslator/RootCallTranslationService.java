@@ -240,7 +240,6 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：Android 系统外部 PCM · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -290,7 +289,6 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + engineName + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message, boolean fatal) {
@@ -351,7 +349,6 @@ public final class RootCallTranslationService extends Service {
                     String cleaned = text.trim();
                     diagAsr = "ASR：" + meta.name + " · " + preview(cleaned);
                     renderDiag();
-                    if (showOriginal && original != null) original.setText("原文：" + cleaned);
                     queueTranslate(cleaned, true, detectedLanguage);
                 }
                 @Override public void onError(String message) {
@@ -455,7 +452,6 @@ public final class RootCallTranslationService extends Service {
         long now = SystemClock.elapsedRealtime();
         diagAsr = "ASR：Vosk " + (committed ? "最终" : "流式") + " · " + preview(cleaned);
         renderDiag();
-        if (showOriginal && original != null) original.setText("原文：" + cleaned);
         if (committed) {
             lastStreamTranslated = "";
             queueTranslate(cleaned, true);
@@ -472,13 +468,33 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void queueTranslate(String text, boolean finalResult, String language) {
-        if (!running || text == null || text.trim().isEmpty()) return;
-        if (smartSentenceTranslation) {
-            sentenceAssembler.offer(text.trim(), finalResult, language,
-                (assembled, complete, lang) -> enqueueTranslate(assembled, complete, lang));
+        if (!running || paused || text == null || text.trim().isEmpty()) return;
+        String cleaned = AsrTranscriptGuard.clean(text);
+        if (AsrTranscriptGuard.isLikelyNoise(cleaned)) {
+            diagAsr = "ASR：已过滤孤立字符或标点噪声";
+            renderDiag();
             return;
         }
-        enqueueTranslate(text.trim(), finalResult, language);
+
+        String acceptedLanguage = language;
+        if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
+            if (!SingleLanguageAsrGuard.accepts(cleaned, sourceMlTag, language)) {
+                diagAsr = "ASR：单语言 " + sourceMlTag + " · 已过滤错误语种或文字";
+                renderDiag();
+                return;
+            }
+            acceptedLanguage = sourceMlTag;
+        }
+
+        if (showOriginal) main.post(() -> {
+            if (running && original != null) original.setText("原文：" + cleaned);
+        });
+        if (smartSentenceTranslation) {
+            sentenceAssembler.offer(cleaned, finalResult, acceptedLanguage,
+                (assembled, complete, lang) -> enqueueTranslate(assembled, complete, lang));
+        } else {
+            enqueueTranslate(cleaned, finalResult, acceptedLanguage);
+        }
     }
 
     private void enqueueTranslate(String text, boolean complete, String language) {
@@ -551,7 +567,6 @@ public final class RootCallTranslationService extends Service {
                 if (text.isEmpty()) return;
                 diagAsr = "ASR：有道云 · " + preview(text);
                 renderDiag();
-                if (showOriginal && original != null) original.setText("原文：" + text);
                 queueTranslate(text, true);
             }
             @Override public void onError(String message) {
