@@ -61,6 +61,24 @@ final class SingleLanguageAsrGuard {
                     case "hi": case "mr":
                         matched = script == Character.UnicodeScript.DEVANAGARI;
                         break;
+                    case "bn":
+                        matched = script == Character.UnicodeScript.BENGALI;
+                        break;
+                    case "gu":
+                        matched = script == Character.UnicodeScript.GUJARATI;
+                        break;
+                    case "ka":
+                        matched = script == Character.UnicodeScript.GEORGIAN;
+                        break;
+                    case "kn":
+                        matched = script == Character.UnicodeScript.KANNADA;
+                        break;
+                    case "ta":
+                        matched = script == Character.UnicodeScript.TAMIL;
+                        break;
+                    case "te":
+                        matched = script == Character.UnicodeScript.TELUGU;
+                        break;
                     case "he":
                         matched = script == Character.UnicodeScript.HEBREW;
                         break;
@@ -132,7 +150,7 @@ final class SingleLanguageAsrGuard {
             case "fr": case "de": case "es": case "pt": case "it": case "nl":
             case "tr": case "pl": case "cs": case "ro": case "sk": case "sl":
             case "hr": case "sq": case "hu": case "sw": case "no": case "sv":
-            case "da": case "fi": case "is": case "et": case "lv": case "lt":
+            case "da": case "fi": case "is": case "et": case "lv": case "lt": case "mt":
             case "ca": case "cy": case "ga": case "gl": case "af": case "ht":
             case "eo":
                 return true;
