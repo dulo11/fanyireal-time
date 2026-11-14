@@ -38,6 +38,8 @@ public final class SettingsHubActivity extends Activity {
         addEntry(root, R.string.settings_asr_engine, R.string.settings_asr_engine_desc, AsrEngineSettingsActivity.class);
         addEntry(root, R.string.settings_screen, R.string.settings_screen_desc, ScreenTranslationActivity.class);
         addEntry(root, R.string.settings_models, R.string.settings_models_desc, ModelManagerActivity.class);
+        addEntry(root, R.string.settings_privacy, R.string.settings_privacy_desc,
+            PrivacyAndSourcesActivity.class);
         addEntry(root, R.string.settings_asr, R.string.settings_asr_desc, AsrPrecisionActivity.class);
         addEntry(root, R.string.settings_root, R.string.settings_root_desc, RootCallActivity.class);
         addEntry(root, R.string.settings_history, R.string.settings_history_desc, HistoryActivity.class);
