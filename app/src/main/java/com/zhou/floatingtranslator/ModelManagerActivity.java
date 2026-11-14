@@ -195,6 +195,154 @@ public class ModelManagerActivity extends Activity {
         }
     }
 
+    private void openSelectedModelOfficialSite() {
+        String id = selectedModelId();
+        if (TranslationService.ASR_VOSK.equals(id)) {
+            ModelSourceLinks.open(this, ModelSourceLinks.speechRecognizerUrl(id));
+            return;
+        }
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
+        if (model != null) ModelSourceLinks.open(this,
+            ModelSourceLinks.officialModelUrl(model.runtimeModelId));
+    }
+
+    private void openSelectedModelPackSource() {
+        OfflineAsrModelCatalog.Model model =
+            OfflineAsrModelCatalog.find(this, selectedModelId());
+        if (model == null || ImportedAsrModels.isImported(model.id)) {
+            toast("自定义模型由用户自行选取，来源地址无法自动验证");
+            return;
+        }
+        ModelSourceLinks.open(this, ModelSourceLinks.packSourceUrl(model));
+    }
+
+    private void chooseImportTemplate() {
+        if (downloadInProgress) {
+            toast("已有模型正在下载或导入");
+            return;
+        }
+        List<OfflineAsrModelCatalog.Model> templates = OfflineAsrModelCatalog.all();
+        String[] names = new String[templates.size()];
+        for (int i = 0; i < templates.size(); i++) {
+            OfflineAsrModelCatalog.Model template = templates.get(i);
+            names[i] = template.name + "｜" + template.parameterText();
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("第一步：选择模型对应的 sherpa-onnx 架构")
+            .setMessage("本机导入是已有架构的模型变体。"
+                + "PyTorch、GGUF、任意 ONNX 权重不能自动转换为可用 ASR。"
+                + "请先确认模型导出格式与所选架构匹配。")
+            .setItems(names, (dialog, index) -> chooseImportName(templates.get(index)))
+            .setNegativeButton("取消", null).show();
+    }
+
+    private void chooseImportName(OfflineAsrModelCatalog.Model template) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("例如：自己的日语直播模型");
+        input.setText(template.name + " · 自备");
+        new AlertDialog.Builder(this)
+            .setTitle("第二步：填写显示名称")
+            .setMessage("之后可在 ASR 设置里手动切换；"
+                + "导入仅复制本机文件，不访问第三方网站。"
+                + "请检查模型许可证和来源是否可信。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("选择本地模型文件", (dialog, which) -> {
+                try {
+                    pendingImportName = ImportedAsrModels.safeName(input.getText().toString());
+                    pendingImportTemplate = template.id;
+                    Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    picker.addCategory(Intent.CATEGORY_OPENABLE);
+                    picker.setType("*/*");
+                    picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    startActivityForResult(picker, REQ_IMPORT_ASR_ARCHIVE);
+                } catch (Exception ex) {
+                    toast("无法选择文件：" + ex.getMessage());
+                }
+            }).show();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putString("pending_import_name", pendingImportName);
+        state.putString("pending_import_type", pendingImportTemplate);
+        super.onSaveInstanceState(state);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMPORT_ASR_ARCHIVE || resultCode != RESULT_OK
+            || data == null || data.getData() == null) return;
+        if (pendingImportName == null || pendingImportTemplate == null) {
+            toast("导入已过期，请重新开始选择");
+            return;
+        }
+        Uri document = data.getData();
+        try {
+            getContentResolver().takePersistableUriPermission(document,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) { /* Files provided by some apps are read-once only. */ }
+
+        String filename = documentName(document);
+        final String importName = pendingImportName;
+        final String templateId = pendingImportTemplate;
+        final String importId = ImportedAsrModels.newId();
+        pendingImportName = null;
+        pendingImportTemplate = null;
+        downloadInProgress = true;
+        updateSelectedInfo();
+        status.setText("正在读取 " + filename + "，仅复制到本机，不联网传输……");
+
+        modelStore.importLocalArchive(document, importId, templateId, filename,
+            new OfflineModelStore.Callback() {
+                @Override public void onStatus(String message) { status.setText(message); }
+                @Override public void onProgress(int percent, long current, long total) {
+                    status.setText("正在导入本地文件：" + OfflineModelStore.human(current));
+                }
+                @Override public void onSuccess(File directory) {
+                    try {
+                        ImportedAsrModels.register(ModelManagerActivity.this,
+                            importId, importName, templateId);
+                        rebuildModelSelector(importId);
+                        status.setText("✅ 模型已导入，仅保存在本机。"
+                            + "请设为默认 ASR 并重启翻译。"
+                            + "使用 Azure 等在线翻译时，识别后的文字仍会发送给该翻译提供商。");
+                    } catch (Exception ex) {
+                        status.setText("模型文件已保存，但登记失败：" + ex.getMessage());
+                    }
+                    downloadInProgress = false;
+                    updateSelectedInfo();
+                    refresh(false);
+                }
+                @Override public void onError(String message) {
+                    downloadInProgress = false;
+                    status.setText(message);
+                    updateSelectedInfo();
+                }
+            });
+    }
+
+    private String documentName(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri,
+                new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null && !name.isEmpty()) return name;
+            }
+        } catch (Exception ignored) {}
+        return uri.getLastPathSegment() == null ? "" : uri.getLastPathSegment();
+    }
+
+    private void rebuildModelSelector(String selectedId) {
+        buildModelOptions();
+        asrModelSpinner.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item, modelLabels));
+        int index = modelIds.indexOf(selectedId);
+        asrModelSpinner.setSelection(Math.max(0, index));
+        updateSelectedInfo();
+    }
+
     private int selectedModelIndex() {
         String selected = prefs.getString("asr_mode", TranslationService.ASR_AUTO);
         if (TranslationService.ASR_AUTO.equals(selected)) return 0;
