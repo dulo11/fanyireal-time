@@ -7,6 +7,8 @@ import android.os.Looper;
 
 import com.k2fsa.sherpa.onnx.OfflineModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineNemoEncDecCtcModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineFunAsrNanoModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineOmnilingualAsrCtcModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineQwen3AsrModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineRecognizer;
@@ -444,7 +446,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 break;
             }
             case OfflineAsrModelCatalog.WHISPER_SMALL:
-            case OfflineAsrModelCatalog.WHISPER_MEDIUM: {
+            case OfflineAsrModelCatalog.WHISPER_MEDIUM:
+            case OfflineAsrModelCatalog.WHISPER_TURBO:
+            case OfflineAsrModelCatalog.WHISPER_LARGE_V3: {
                 File encoder = require(findContainsPreferred(root, "encoder", ".onnx"), "Whisper encoder");
                 File decoder = require(findContainsPreferred(root, "decoder", ".onnx"), "Whisper decoder");
                 markPrecision(encoder);
@@ -459,7 +463,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 model.setModelType("whisper");
                 break;
             }
-            case OfflineAsrModelCatalog.QWEN3_ASR: {
+            case OfflineAsrModelCatalog.QWEN3_ASR:
+            case OfflineAsrModelCatalog.QWEN3_17B: {
                 File conv = require(findContains(root, "conv_frontend", ".onnx", false), "Qwen3 conv_frontend");
                 File encoder = require(findContains(root, "encoder", ".onnx", true), "Qwen3 encoder");
                 File decoder = require(findContains(root, "decoder", ".onnx", true), "Qwen3 decoder");
@@ -474,6 +479,70 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 cfg.setMaxNewTokens(PROFILE_ACCURACY.equals(conversationProfile) ? 260 : 160);
                 model.setQwen3Asr(cfg);
                 model.setModelType("qwen3_asr");
+                break;
+            }
+            case OfflineAsrModelCatalog.PARAKEET_EN_V2: {
+                File encoder = require(findNamed(root, "encoder.int8.onnx"), "Parakeet V2 encoder");
+                File decoder = require(findNamed(root, "decoder.int8.onnx"), "Parakeet V2 decoder");
+                File joiner = require(findNamed(root, "joiner.int8.onnx"), "Parakeet V2 joiner");
+                File tokens = require(findTokens(root), "tokens.txt");
+                markPrecision(encoder);
+                OfflineTransducerModelConfig cfg = new OfflineTransducerModelConfig();
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setDecoder(decoder.getAbsolutePath());
+                cfg.setJoiner(joiner.getAbsolutePath());
+                model.setTransducer(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("nemo_transducer");
+                break;
+            }
+            case OfflineAsrModelCatalog.FUNASR_NANO: {
+                File adapter = require(findNamed(root, "encoder_adaptor.int8.onnx"), "Nano encoder");
+                File llm = require(findNamed(root, "llm.int8.onnx"), "Nano LLM");
+                File embedding = require(findNamed(root, "embedding.int8.onnx"), "Nano embedding");
+                File tokenizer = require(findDirectoryNamed(root, "Qwen3-0.6B"), "Nano tokenizer");
+                markPrecision(llm);
+                OfflineFunAsrNanoModelConfig cfg = new OfflineFunAsrNanoModelConfig();
+                cfg.setEncoderAdaptor(adapter.getAbsolutePath());
+                cfg.setLLM(llm.getAbsolutePath());
+                cfg.setEmbedding(embedding.getAbsolutePath());
+                cfg.setTokenizer(tokenizer.getAbsolutePath());
+                cfg.setMaxNewTokens(PROFILE_ACCURACY.equals(conversationProfile) ? 256 : 160);
+                model.setFunasrNano(cfg);
+                model.setModelType("funasr_nano");
+                break;
+            }
+            case OfflineAsrModelCatalog.MOONSHINE_TINY_EN:
+            case OfflineAsrModelCatalog.MOONSHINE_BASE_EN: {
+                File preprocess = require(findNamed(root, "preprocess.onnx"), "Moonshine preprocess");
+                File encoder = require(findNamed(root, "encode.int8.onnx"), "Moonshine encoder");
+                File uncached = require(findNamed(root, "uncached_decode.int8.onnx"), "Moonshine uncached decoder");
+                File cached = require(findNamed(root, "cached_decode.int8.onnx"), "Moonshine cached decoder");
+                File tokens = require(findTokens(root), "tokens.txt");
+                markPrecision(encoder);
+                OfflineMoonshineModelConfig cfg = new OfflineMoonshineModelConfig();
+                cfg.setPreprocessor(preprocess.getAbsolutePath());
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setUncachedDecoder(uncached.getAbsolutePath());
+                cfg.setCachedDecoder(cached.getAbsolutePath());
+                model.setMoonshine(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("moonshine");
+                break;
+            }
+            case OfflineAsrModelCatalog.MOONSHINE_V2_EN:
+            case OfflineAsrModelCatalog.MOONSHINE_V2_JA:
+            case OfflineAsrModelCatalog.MOONSHINE_V2_VI: {
+                File encoder = require(findNamed(root, "encoder_model.ort"), "Moonshine V2 encoder");
+                File decoder = require(findNamed(root, "decoder_model_merged.ort"), "Moonshine V2 decoder");
+                File tokens = require(findTokens(root), "tokens.txt");
+                markPrecision(encoder);
+                OfflineMoonshineModelConfig cfg = new OfflineMoonshineModelConfig();
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setMergedDecoder(decoder.getAbsolutePath());
+                model.setMoonshine(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("moonshine");
                 break;
             }
             case OfflineAsrModelCatalog.OMNILINGUAL: {
@@ -643,7 +712,12 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private int recommendedThreads(String id) {
         if (PROFILE_ACCURACY.equals(conversationProfile)) return 4;
         if (OfflineAsrModelCatalog.QWEN3_ASR.equals(id)
+            || OfflineAsrModelCatalog.QWEN3_17B.equals(id)
             || OfflineAsrModelCatalog.WHISPER_MEDIUM.equals(id)
+            || OfflineAsrModelCatalog.WHISPER_TURBO.equals(id)
+            || OfflineAsrModelCatalog.WHISPER_LARGE_V3.equals(id)
+            || OfflineAsrModelCatalog.PARAKEET_EN_V2.equals(id)
+            || OfflineAsrModelCatalog.FUNASR_NANO.equals(id)
             || OfflineAsrModelCatalog.PARAKEET_JA.equals(id)) return 4;
         if (PRECISION_FP32.equals(precision)) return 4;
         return 2;
