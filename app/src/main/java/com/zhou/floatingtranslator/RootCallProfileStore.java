@@ -10,7 +10,9 @@ public final class RootCallProfileStore {
 
     private static final String PREFS = "floating_translator";
     private static final String SELECTED = "root_call_selected_package";
+    private static final String SELECTED_MEDIA = "root_media_selected_package";
     private static final String PREFIX = "root_call_profile.";
+    private static final String MEDIA_PREFIX = "root_media_profile.";
 
     private RootCallProfileStore() {}
 
@@ -51,10 +53,20 @@ public final class RootCallProfileStore {
     }
 
     public static void save(Context context, Profile profile) {
+        saveInternal(context, profile, SELECTED, PREFIX);
+    }
+
+    /** Media capture has a separately selected profile; never silently use the call profile. */
+    public static void saveMedia(Context context, Profile profile) {
+        saveInternal(context, profile, SELECTED_MEDIA, MEDIA_PREFIX);
+    }
+
+    private static void saveInternal(Context context, Profile profile, String selectedKey,
+                                     String prefix) {
         if (profile == null || profile.packageName.isEmpty()) return;
-        String base = PREFIX + profile.packageName + ".";
+        String base = prefix + profile.packageName + ".";
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(SELECTED, profile.packageName)
+            .putString(selectedKey, profile.packageName)
             .putString(base + "label", profile.label)
             .putString(base + "transport", profile.transport)
             .putInt(base + "card", profile.card)
@@ -66,16 +78,31 @@ public final class RootCallProfileStore {
     }
 
     public static Profile loadSelected(Context context) {
+        return loadSelectedForKey(context, SELECTED, PREFIX);
+    }
+
+    public static Profile loadSelectedMedia(Context context) {
+        return loadSelectedForKey(context, SELECTED_MEDIA, MEDIA_PREFIX);
+    }
+
+    private static Profile loadSelectedForKey(Context context, String selectedKey, String prefix) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String pkg = prefs.getString(SELECTED, "");
-        return load(context, pkg);
+        return loadForPrefix(context, prefs.getString(selectedKey, ""), prefix);
     }
 
     public static Profile load(Context context, String packageName) {
+        return loadForPrefix(context, packageName, PREFIX);
+    }
+
+    public static Profile loadMedia(Context context, String packageName) {
+        return loadForPrefix(context, packageName, MEDIA_PREFIX);
+    }
+
+    private static Profile loadForPrefix(Context context, String packageName, String prefix) {
         String pkg = packageName == null ? "" : packageName.trim();
         if (pkg.isEmpty()) return null;
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String base = PREFIX + pkg + ".";
+        String base = prefix + pkg + ".";
         if (!prefs.getBoolean(base + "ready", false)) return null;
         return new Profile(pkg,
             prefs.getString(base + "label", ""),
@@ -97,5 +124,9 @@ public final class RootCallProfileStore {
 
     public static boolean hasSelected(Context context) {
         return loadSelected(context) != null;
+    }
+
+    public static boolean hasSelectedMedia(Context context) {
+        return loadSelectedMedia(context) != null;
     }
 }

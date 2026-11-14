@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.media.AudioFormat;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
@@ -18,6 +19,7 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -26,8 +28,8 @@ import java.util.concurrent.Executors;
  *
  * Android 13+ exposes RecognizerIntent.EXTRA_AUDIO_SOURCE for an already-opened audio source.
  * We chunk PCM ourselves, close the pipe after each utterance, and wait for a final result before
- * sending the next chunk. If the OEM recognizer rejects external PCM the caller can fall back to
- * free online/local ASR without changing the audio capture source.
+ * sending the next chunk. An unsupported OEM recognizer reports a clear error;
+ * the engine never substitutes any other speech engine or audio source.
  */
 public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCloseable {
     public interface Callback {
@@ -43,11 +45,12 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private static final long MIN_SEGMENT_MS = 600L;
     private static final long FORCE_SEGMENT_MS = 4800L;
     private static final int MAX_QUEUE = 5;
-    private static final long RESULT_TIMEOUT_MS = 18000L;
+    private static final long RESULT_TIMEOUT_MS = 12000L;
 
     private final Context context;
     private final String languageMode;
     private final String speechLanguage;
+    private final ArrayList<String> allowedLanguageLocales;
     private final Callback callback;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService writer = Executors.newSingleThreadExecutor();
@@ -60,7 +63,9 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private boolean inSpeech;
     private long segmentMs;
     private long silenceMs;
-    private boolean requestBusy;
+    private volatile boolean requestBusy;
+    /** Identifies the currently active PCM request and suppresses stale writer errors. */
+    private volatile int sessionId;
     private int consecutiveFailures;
     private String lastText = "";
     private String detectedLanguage = "";
@@ -70,9 +75,15 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
 
     public AndroidPcmSpeechEngine(Context context, String languageMode, String speechLanguage,
                                   Callback callback) {
+        this(context, languageMode, speechLanguage, null, callback);
+    }
+
+    public AndroidPcmSpeechEngine(Context context, String languageMode, String speechLanguage,
+                                  List<String> selectedLanguages, Callback callback) {
         this.context = context.getApplicationContext();
         this.languageMode = languageMode == null ? SherpaSpeechEngine.LANG_AUTO : languageMode;
         this.speechLanguage = speechLanguage == null ? "" : speechLanguage.trim();
+        this.allowedLanguageLocales = SelectedSpeechLanguages.speechLocales(selectedLanguages);
         this.callback = callback;
     }
 
@@ -164,6 +175,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
         }
         closePipe();
         detectedLanguage = "";
+        final int currentSession = ++sessionId;
         try {
             ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
             readFd = pipe[0];
@@ -183,6 +195,15 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
                 listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
             } else {
                 listen.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
+                if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                    && Build.VERSION.SDK_INT >= 34 && !allowedLanguageLocales.isEmpty()) {
+                    // Android 14+ recognizers may optionally honor the selected
+                    // detection-language whitelist. If ignored, post-ASR still
+                    // restricts translation to the user's choices.
+                    listen.putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
+                        new ArrayList<>(allowedLanguageLocales));
+                }
             }
 
             postStatus("Android 系统识别 · 注入 16k PCM");
@@ -194,7 +215,12 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
                     out.write(chunk);
                     out.flush();
                 } catch (Throwable e) {
-                    if (!closed) main.post(() -> failCurrent("写入系统识别 PCM 失败：" + safe(e), true));
+                    // onResults/onError/timeout may close the pipe while write() is
+                    // in progress. That is an expected teardown, not a new failure.
+                    main.post(() -> {
+                        if (closed || !requestBusy || sessionId != currentSession) return;
+                        failCurrent("系统识别服务未接收内部 PCM：" + safe(e), true);
+                    });
                 } finally {
                     synchronized (AndroidPcmSpeechEngine.this) {
                         if (writeFd == localWrite) writeFd = null;
@@ -202,7 +228,11 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
                 }
             });
 
-            resultTimeout = () -> failCurrent("Android 系统外部 PCM 识别超时", true);
+            resultTimeout = () -> {
+                if (!closed && requestBusy && sessionId == currentSession) {
+                    failCurrent("系统识别服务处理内部 PCM 超时（可能不支持外部音频输入）", true);
+                }
+            };
             main.postDelayed(resultTimeout, RESULT_TIMEOUT_MS);
         } catch (Throwable e) {
             failCurrent("Android 系统外部 PCM 启动失败：" + safe(e), true);
@@ -212,7 +242,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private void emit(Bundle bundle, boolean finalResult) {
         String text = bestText(bundle);
         if (text.isEmpty()) {
-            if (finalResult) finishCurrent(false);
+            if (finalResult) failCurrent("系统识别器未返回文字（内部 PCM 可能不受支持）", true);
             return;
         }
         if (!finalResult) {
@@ -230,20 +260,25 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
         finishCurrent(false);
     }
 
-    private void finishCurrent(boolean fatal) {
+    private void finishCurrent(boolean ignored) {
+        if (!requestBusy || closed) return;
+        // Invalidate the writer before the pipe is closed.
+        requestBusy = false;
+        sessionId++;
         if (resultTimeout != null) {
             main.removeCallbacks(resultTimeout);
             resultTimeout = null;
         }
         closePipe();
         synchronized (this) {
-            requestBusy = false;
             processNextLocked();
         }
     }
 
     private void failCurrent(String message, boolean fatalCandidate) {
-        if (closed) return;
+        if (closed || !requestBusy) return;
+        requestBusy = false;
+        sessionId++;
         if (resultTimeout != null) {
             main.removeCallbacks(resultTimeout);
             resultTimeout = null;
@@ -251,9 +286,9 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
         closePipe();
         consecutiveFailures++;
         boolean fatal = fatalCandidate && consecutiveFailures >= 2;
+        if (fatal) ready = false;
         callback.onError(message, fatal);
         synchronized (this) {
-            requestBusy = false;
             if (!fatal) processNextLocked();
             else pending.clear();
         }
@@ -361,6 +396,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     @Override public void close() {
         closed = true;
         ready = false;
+        sessionId++;
         synchronized (this) {
             pending.clear();
             speech.reset();

@@ -7,6 +7,8 @@ import android.os.Looper;
 
 import com.k2fsa.sherpa.onnx.OfflineModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineNemoEncDecCtcModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineFunAsrNanoModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineOmnilingualAsrCtcModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineQwen3AsrModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineRecognizer;
@@ -16,6 +18,12 @@ import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineStream;
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
+import com.k2fsa.sherpa.onnx.OnlineModelConfig;
+import com.k2fsa.sherpa.onnx.OnlineRecognizer;
+import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig;
+import com.k2fsa.sherpa.onnx.OnlineRecognizerResult;
+import com.k2fsa.sherpa.onnx.OnlineStream;
+import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig;
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig;
 import com.k2fsa.sherpa.onnx.SpeechSegment;
 import com.k2fsa.sherpa.onnx.TenVadModelConfig;
@@ -31,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Non-streaming high-accuracy sherpa-onnx ASR.
@@ -79,6 +88,11 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private final float hotwordScore;
 
     private volatile OfflineRecognizer recognizer;
+    private volatile OnlineRecognizer streamingRecognizer;
+    private volatile OnlineStream streamingStream;
+    private final AtomicInteger pendingStreamingFrames = new AtomicInteger();
+    private String lastStreamingText = "";
+    private long lastStreamingAt;
     private volatile Vad vad;
     private volatile boolean ready;
     private volatile boolean closed;
@@ -109,11 +123,11 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     }
 
     public boolean isReady() {
-        return ready && recognizer != null && !closed;
+        return ready && (recognizer != null || streamingRecognizer != null) && !closed;
     }
 
     public void prepare() {
-        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
+        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(context, modelId);
         if (meta == null) {
             callback.onError("未知 sherpa-onnx 模型：" + modelId);
             return;
@@ -126,15 +140,27 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         File modelDir = store.modelDir(modelId);
         store.close();
+        if (OfflineAsrModelCatalog.ZIPFORMER_STREAM_EN.equals(meta.runtimeModelId)) {
+            prepareStreamingZipformer(meta, modelDir);
+            return;
+        }
         worker.execute(() -> {
             try {
                 postStatus("正在加载 " + meta.name + " · " + requestedPrecisionLabel(meta)
                     + " · " + profileLabel());
                 OfflineRecognizer r;
-                try {
-                    r = buildRecognizer(meta, modelDir, true);
-                } catch (Throwable hotwordFailure) {
-                    postStatus("热词原生偏置暂不可用，继续加载普通识别器");
+                boolean canNativeHotword = OfflineAsrModelCatalog.REAZON_JA.equals(modelId)
+                    && PROFILE_ACCURACY.equals(conversationProfile) && !hotwords.isEmpty();
+                if (canNativeHotword) {
+                    try {
+                        r = buildRecognizer(meta, modelDir, true);
+                    } catch (Throwable hotwordFailure) {
+                        postStatus("Reazon 原生热词不可用，继续加载普通识别器");
+                        r = buildRecognizer(meta, modelDir, false);
+                    }
+                } else {
+                    // Never retry a failed 1.7B/Whisper/FunASR model load as a
+                    // "hotword fallback": it can double memory pressure.
                     r = buildRecognizer(meta, modelDir, false);
                 }
                 Vad preparedVad = null;
@@ -173,6 +199,25 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     /** Accept 16 kHz, mono, PCM16 little-endian audio plus its observed peak. */
     public synchronized void acceptPcm(byte[] pcm, int length, int peak) {
         if (!isReady() || pcm == null || length <= 0) return;
+        if (streamingRecognizer != null) {
+            int safeLength = Math.min(length, pcm.length) & ~1;
+            if (safeLength <= 0) return;
+            if (pendingStreamingFrames.get() >= 32) {
+                // Do not allow an unbounded audio backlog or memory growth.
+                // A slow CPU may lose frames; show a clear diagnostic.
+                postStatus("流式 ASR 推理速度不足：已限制音频缓存，建议选择轻量模型");
+                return;
+            }
+            byte[] copy = new byte[safeLength];
+            System.arraycopy(pcm, 0, copy, 0, safeLength);
+            float[] samples = pcm16ToFloat(copy);
+            pendingStreamingFrames.incrementAndGet();
+            worker.execute(() -> {
+                try { decodeStreaming(samples); }
+                finally { pendingStreamingFrames.decrementAndGet(); }
+            });
+            return;
+        }
         if (neuralVad && vad != null) acceptNeuralVad(pcm, length);
         else acceptEnergyFallback(pcm, length, peak);
     }
@@ -263,6 +308,26 @@ public final class SherpaSpeechEngine implements AutoCloseable {
 
     public synchronized void flush() {
         if (closed) return;
+        if (streamingRecognizer != null) {
+            worker.execute(() -> {
+                OnlineRecognizer active = streamingRecognizer;
+                OnlineStream current = streamingStream;
+                if (active == null || current == null || closed) return;
+                try {
+                    current.inputFinished();
+                    while (active.isReady(current)) active.decode(current);
+                    String finalText = active.getResult(current).getText();
+                    if (finalText != null && !finalText.trim().isEmpty()) {
+                        String output = finalText.trim();
+                        main.post(() -> { if (!closed) callback.onText(output, "en"); });
+                    }
+                    current.release();
+                    streamingStream = active.createStream("");
+                    lastStreamingText = "";
+                } catch (Throwable ex) { postError("流式语音收尾失败：" + safe(ex)); }
+            });
+            return;
+        }
         Vad localVad = vad;
         if (neuralVad && localVad != null) {
             if (vadWindowFill > 0) {
@@ -393,17 +458,91 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         return best;
     }
 
+    private void prepareStreamingZipformer(OfflineAsrModelCatalog.Model meta, File modelDir) {
+        worker.execute(() -> {
+            try {
+                File root = OfflineModelStore.findPayloadRoot(modelDir, meta.archiveRootHint);
+                File encoder = require(findNamed(root, "encoder-epoch-99-avg-1.int8.onnx"),
+                    "Zipformer encoder");
+                File decoder = require(findNamed(root, "decoder-epoch-99-avg-1.onnx"),
+                    "Zipformer decoder");
+                File joiner = require(findNamed(root, "joiner-epoch-99-avg-1.int8.onnx"),
+                    "Zipformer joiner");
+                File tokens = require(findTokens(root), "Zipformer tokens");
+
+                OnlineTransducerModelConfig transducer = new OnlineTransducerModelConfig();
+                transducer.setEncoder(encoder.getAbsolutePath());
+                transducer.setDecoder(decoder.getAbsolutePath());
+                transducer.setJoiner(joiner.getAbsolutePath());
+                OnlineModelConfig model = new OnlineModelConfig();
+                model.setTransducer(transducer);
+                model.setModelType("zipformer");
+                model.setTokens(tokens.getAbsolutePath());
+                model.setNumThreads(2);
+                OnlineRecognizerConfig config = new OnlineRecognizerConfig();
+                config.setModelConfig(model);
+                config.setEnableEndpoint(true);
+                OnlineRecognizer decoderEngine = new OnlineRecognizer(null, config);
+                OnlineStream stream = decoderEngine.createStream("");
+                synchronized (this) {
+                    if (closed) {
+                        stream.release();
+                        decoderEngine.release();
+                        return;
+                    }
+                    streamingRecognizer = decoderEngine;
+                    streamingStream = stream;
+                    loadedPrecision = "INT8 真流式";
+                    ready = true;
+                }
+                main.post(() -> {
+                    if (!closed) callback.onReady(meta.name + " · 真正流式 · INT8");
+                });
+            } catch (Throwable ex) { postError("Zipformer 流式模型加载失败：" + safe(ex)); }
+        });
+    }
+
+    private void decodeStreaming(float[] samples) {
+        OnlineRecognizer r = streamingRecognizer;
+        OnlineStream st = streamingStream;
+        if (closed || r == null || st == null || samples.length == 0) return;
+        try {
+            st.acceptWaveform(samples, SAMPLE_RATE);
+            while (r.isReady(st)) r.decode(st);
+            OnlineRecognizerResult result = r.getResult(st);
+            String text = result == null || result.getText() == null
+                ? "" : result.getText().trim();
+            if (r.isEndpoint(st)) {
+                if (!text.isEmpty()) {
+                    // Final endpoint event is needed even when the partial text
+                    // is identical, so SmartSentenceAssembler can commit it.
+                    main.post(() -> { if (!closed) callback.onText(text, "en"); });
+                }
+                r.reset(st);
+                lastStreamingText = "";
+                lastStreamingAt = 0;
+            } else if (!text.isEmpty() && !text.equals(lastStreamingText)
+                && android.os.SystemClock.elapsedRealtime() - lastStreamingAt > 950L) {
+                lastStreamingText = text;
+                lastStreamingAt = android.os.SystemClock.elapsedRealtime();
+                main.post(() -> { if (!closed) callback.onText(text, "en"); });
+            }
+        } catch (Throwable error) {
+            postError("Zipformer 流式解码失败：" + safe(error));
+        }
+    }
+
     private OfflineRecognizer buildRecognizer(OfflineAsrModelCatalog.Model meta, File installedDir,
                                                boolean allowNativeHotwords) {
         File root = OfflineModelStore.findPayloadRoot(installedDir, meta.archiveRootHint);
         if (root == null) throw new IllegalStateException("模型目录不存在");
 
         OfflineModelConfig model = new OfflineModelConfig();
-        model.setNumThreads(recommendedThreads(modelId));
+        model.setNumThreads(recommendedThreads(meta.runtimeModelId));
         model.setDebug(false);
         model.setProvider("cpu");
 
-        switch (modelId) {
+        switch (meta.runtimeModelId) {
             case OfflineAsrModelCatalog.SENSEVOICE: {
                 File onnx = require(findNamedPreferred(root, "model.onnx", "model.int8.onnx"), "SenseVoice model");
                 markPrecision(onnx);
@@ -444,7 +583,9 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 break;
             }
             case OfflineAsrModelCatalog.WHISPER_SMALL:
-            case OfflineAsrModelCatalog.WHISPER_MEDIUM: {
+            case OfflineAsrModelCatalog.WHISPER_MEDIUM:
+            case OfflineAsrModelCatalog.WHISPER_TURBO:
+            case OfflineAsrModelCatalog.WHISPER_LARGE_V3: {
                 File encoder = require(findContainsPreferred(root, "encoder", ".onnx"), "Whisper encoder");
                 File decoder = require(findContainsPreferred(root, "decoder", ".onnx"), "Whisper decoder");
                 markPrecision(encoder);
@@ -459,7 +600,8 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 model.setModelType("whisper");
                 break;
             }
-            case OfflineAsrModelCatalog.QWEN3_ASR: {
+            case OfflineAsrModelCatalog.QWEN3_ASR:
+            case OfflineAsrModelCatalog.QWEN3_17B: {
                 File conv = require(findContains(root, "conv_frontend", ".onnx", false), "Qwen3 conv_frontend");
                 File encoder = require(findContains(root, "encoder", ".onnx", true), "Qwen3 encoder");
                 File decoder = require(findContains(root, "decoder", ".onnx", true), "Qwen3 decoder");
@@ -474,6 +616,70 @@ public final class SherpaSpeechEngine implements AutoCloseable {
                 cfg.setMaxNewTokens(PROFILE_ACCURACY.equals(conversationProfile) ? 260 : 160);
                 model.setQwen3Asr(cfg);
                 model.setModelType("qwen3_asr");
+                break;
+            }
+            case OfflineAsrModelCatalog.PARAKEET_EN_V2: {
+                File encoder = require(findNamed(root, "encoder.int8.onnx"), "Parakeet V2 encoder");
+                File decoder = require(findNamed(root, "decoder.int8.onnx"), "Parakeet V2 decoder");
+                File joiner = require(findNamed(root, "joiner.int8.onnx"), "Parakeet V2 joiner");
+                File tokens = require(findTokens(root), "tokens.txt");
+                markPrecision(encoder);
+                OfflineTransducerModelConfig cfg = new OfflineTransducerModelConfig();
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setDecoder(decoder.getAbsolutePath());
+                cfg.setJoiner(joiner.getAbsolutePath());
+                model.setTransducer(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("nemo_transducer");
+                break;
+            }
+            case OfflineAsrModelCatalog.FUNASR_NANO: {
+                File adapter = require(findNamed(root, "encoder_adaptor.int8.onnx"), "Nano encoder");
+                File llm = require(findNamed(root, "llm.int8.onnx"), "Nano LLM");
+                File embedding = require(findNamed(root, "embedding.int8.onnx"), "Nano embedding");
+                File tokenizer = require(findDirectoryNamed(root, "Qwen3-0.6B"), "Nano tokenizer");
+                markPrecision(llm);
+                OfflineFunAsrNanoModelConfig cfg = new OfflineFunAsrNanoModelConfig();
+                cfg.setEncoderAdaptor(adapter.getAbsolutePath());
+                cfg.setLlm(llm.getAbsolutePath());
+                cfg.setEmbedding(embedding.getAbsolutePath());
+                cfg.setTokenizer(tokenizer.getAbsolutePath());
+                cfg.setMaxNewTokens(PROFILE_ACCURACY.equals(conversationProfile) ? 256 : 160);
+                model.setFunasrNano(cfg);
+                model.setModelType("funasr_nano");
+                break;
+            }
+            case OfflineAsrModelCatalog.MOONSHINE_TINY_EN:
+            case OfflineAsrModelCatalog.MOONSHINE_BASE_EN: {
+                File preprocess = require(findNamed(root, "preprocess.onnx"), "Moonshine preprocess");
+                File encoder = require(findNamed(root, "encode.int8.onnx"), "Moonshine encoder");
+                File uncached = require(findNamed(root, "uncached_decode.int8.onnx"), "Moonshine uncached decoder");
+                File cached = require(findNamed(root, "cached_decode.int8.onnx"), "Moonshine cached decoder");
+                File tokens = require(findTokens(root), "tokens.txt");
+                markPrecision(encoder);
+                OfflineMoonshineModelConfig cfg = new OfflineMoonshineModelConfig();
+                cfg.setPreprocessor(preprocess.getAbsolutePath());
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setUncachedDecoder(uncached.getAbsolutePath());
+                cfg.setCachedDecoder(cached.getAbsolutePath());
+                model.setMoonshine(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("moonshine");
+                break;
+            }
+            case OfflineAsrModelCatalog.MOONSHINE_V2_EN:
+            case OfflineAsrModelCatalog.MOONSHINE_V2_JA:
+            case OfflineAsrModelCatalog.MOONSHINE_V2_VI: {
+                File encoder = require(findNamed(root, "encoder_model.ort"), "Moonshine V2 encoder");
+                File decoder = require(findNamed(root, "decoder_model_merged.ort"), "Moonshine V2 decoder");
+                File tokens = require(findTokens(root), "tokens.txt");
+                markPrecision(encoder);
+                OfflineMoonshineModelConfig cfg = new OfflineMoonshineModelConfig();
+                cfg.setEncoder(encoder.getAbsolutePath());
+                cfg.setMergedDecoder(decoder.getAbsolutePath());
+                model.setMoonshine(cfg);
+                model.setTokens(tokens.getAbsolutePath());
+                model.setModelType("moonshine");
                 break;
             }
             case OfflineAsrModelCatalog.OMNILINGUAL: {
@@ -643,7 +849,12 @@ public final class SherpaSpeechEngine implements AutoCloseable {
     private int recommendedThreads(String id) {
         if (PROFILE_ACCURACY.equals(conversationProfile)) return 4;
         if (OfflineAsrModelCatalog.QWEN3_ASR.equals(id)
+            || OfflineAsrModelCatalog.QWEN3_17B.equals(id)
             || OfflineAsrModelCatalog.WHISPER_MEDIUM.equals(id)
+            || OfflineAsrModelCatalog.WHISPER_TURBO.equals(id)
+            || OfflineAsrModelCatalog.WHISPER_LARGE_V3.equals(id)
+            || OfflineAsrModelCatalog.PARAKEET_EN_V2.equals(id)
+            || OfflineAsrModelCatalog.FUNASR_NANO.equals(id)
             || OfflineAsrModelCatalog.PARAKEET_JA.equals(id)) return 4;
         if (PRECISION_FP32.equals(precision)) return 4;
         return 2;
@@ -824,8 +1035,14 @@ public final class SherpaSpeechEngine implements AutoCloseable {
         }
         OfflineRecognizer r = recognizer;
         recognizer = null;
+        OnlineRecognizer online = streamingRecognizer;
+        OnlineStream stream = streamingStream;
+        streamingRecognizer = null;
+        streamingStream = null;
         worker.execute(() -> {
             if (r != null) try { r.release(); } catch (Throwable ignored) {}
+            if (stream != null) try { stream.release(); } catch (Throwable ignored) {}
+            if (online != null) try { online.release(); } catch (Throwable ignored) {}
         });
         worker.shutdown();
     }

@@ -1,6 +1,12 @@
 package com.zhou.floatingtranslator;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.widget.EditText;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -30,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** Download/delete/select high-accuracy offline ASR packs. */
 public class ModelManagerActivity extends Activity {
     private static final String PREFS = "floating_translator";
+    private static final int REQ_IMPORT_ASR_ARCHIVE = 5301;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private OfflineModelStore modelStore;
@@ -42,7 +49,11 @@ public class ModelManagerActivity extends Activity {
     private Button downloadButton;
     private Button deleteButton;
     private Button clearPartialButton;
+    private Button officialSourceButton;
+    private Button modelPackButton;
     private volatile boolean downloadInProgress;
+    private String pendingImportName;
+    private String pendingImportTemplate;
 
     private final List<String> modelIds = new ArrayList<>();
     private final List<String> modelLabels = new ArrayList<>();
@@ -53,6 +64,10 @@ public class ModelManagerActivity extends Activity {
         modelStore = new OfflineModelStore(this);
         setTitle("浮译 " + BuildConfig.VERSION_NAME + " · 离线模型中心");
         setContentView(buildUi());
+        if (state != null) {
+            pendingImportName = state.getString("pending_import_name");
+            pendingImportTemplate = state.getString("pending_import_type");
+        }
         refresh(true);
     }
 
@@ -92,10 +107,27 @@ public class ModelManagerActivity extends Activity {
         asrModelSpinner.setBackgroundColor(Color.rgb(51, 45, 73));
         asrModelSpinner.setSelection(selectedModelIndex());
         root.addView(asrModelSpinner, matchWrap());
+        Button importButton = button("＋ 新增自定义 ASR 模型｜从本机导入 ZIP / TAR.BZ2");
+        importButton.setOnClickListener(v -> chooseImportTemplate());
+        root.addView(importButton, matchWrap());
+
+        Button disclosure = button("🔒 查看音频权限、数据去向与浮译源码");
+        disclosure.setOnClickListener(v ->
+            startActivity(new Intent(this, PrivacyAndSourcesActivity.class)));
+        root.addView(disclosure, matchWrap());
 
         selectedInfo = text("", 13, Color.rgb(184, 174, 207));
         selectedInfo.setPadding(dp(4), dp(6), dp(4), dp(8));
         root.addView(selectedInfo);
+
+        officialSourceButton = button("🌐 当前模型研发方官网 / 开源项目");
+        officialSourceButton.setOnClickListener(v -> openSelectedModelOfficialSite());
+        root.addView(officialSourceButton, matchWrap());
+
+        modelPackButton = button("⬇ 查看实际模型包下载地址 / 来源");
+        modelPackButton.setOnClickListener(v -> openSelectedModelPackSource());
+        root.addView(modelPackButton, matchWrap());
+
         asrModelSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 updateSelectedInfo();
@@ -149,8 +181,8 @@ public class ModelManagerActivity extends Activity {
         root.addView(status);
 
         TextView translationFuture = text(
-            "文字翻译目前仍是 ML Kit 离线优先。NLLB / OPUS-MT 属于下一步文字翻译大模型，" +
-            "本页不会把尚未接入的模型伪装成可用。",
+            OfflineAsrModelCatalog.pendingModelsText()
+                + "\n\n文字翻译的大模型 NLLB / OPUS-MT 仍未接入，不能当作已支持的模型。",
             13, Color.rgb(180, 170, 205));
         translationFuture.setPadding(0, dp(22), 0, 0);
         root.addView(translationFuture);
@@ -161,11 +193,159 @@ public class ModelManagerActivity extends Activity {
         modelIds.clear();
         modelLabels.clear();
         modelIds.add(TranslationService.ASR_VOSK);
-        modelLabels.add("Vosk｜省电★★★★★｜速度快｜模型小｜日语快语速准确率一般");
-        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
+        modelLabels.add("Vosk｜按语言包大小，参数量不固定｜速度快、省电");
+        for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all(this)) {
             modelIds.add(model.id);
             modelLabels.add(model.optionLabel());
         }
+    }
+
+    private void openSelectedModelOfficialSite() {
+        String id = selectedModelId();
+        if (TranslationService.ASR_VOSK.equals(id)) {
+            ModelSourceLinks.open(this, ModelSourceLinks.speechRecognizerUrl(id));
+            return;
+        }
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
+        if (model != null) ModelSourceLinks.open(this,
+            ModelSourceLinks.officialModelUrl(model.runtimeModelId));
+    }
+
+    private void openSelectedModelPackSource() {
+        OfflineAsrModelCatalog.Model model =
+            OfflineAsrModelCatalog.find(this, selectedModelId());
+        if (model == null || ImportedAsrModels.isImported(model.id)) {
+            toast("自定义模型由用户自行选取，来源地址无法自动验证");
+            return;
+        }
+        ModelSourceLinks.open(this, ModelSourceLinks.packSourceUrl(model));
+    }
+
+    private void chooseImportTemplate() {
+        if (downloadInProgress) {
+            toast("已有模型正在下载或导入");
+            return;
+        }
+        List<OfflineAsrModelCatalog.Model> templates = OfflineAsrModelCatalog.all();
+        String[] names = new String[templates.size()];
+        for (int i = 0; i < templates.size(); i++) {
+            OfflineAsrModelCatalog.Model template = templates.get(i);
+            names[i] = template.name + "｜" + template.parameterText();
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("第一步：选择模型对应的 sherpa-onnx 架构")
+            .setMessage("本机导入是已有架构的模型变体。"
+                + "PyTorch、GGUF、任意 ONNX 权重不能自动转换为可用 ASR。"
+                + "请先确认模型导出格式与所选架构匹配。")
+            .setItems(names, (dialog, index) -> chooseImportName(templates.get(index)))
+            .setNegativeButton("取消", null).show();
+    }
+
+    private void chooseImportName(OfflineAsrModelCatalog.Model template) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("例如：自己的日语直播模型");
+        input.setText(template.name + " · 自备");
+        new AlertDialog.Builder(this)
+            .setTitle("第二步：填写显示名称")
+            .setMessage("之后可在 ASR 设置里手动切换；"
+                + "导入仅复制本机文件，不访问第三方网站。"
+                + "请检查模型许可证和来源是否可信。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("选择本地模型文件", (dialog, which) -> {
+                try {
+                    pendingImportName = ImportedAsrModels.safeName(input.getText().toString());
+                    pendingImportTemplate = template.id;
+                    Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    picker.addCategory(Intent.CATEGORY_OPENABLE);
+                    picker.setType("*/*");
+                    picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    startActivityForResult(picker, REQ_IMPORT_ASR_ARCHIVE);
+                } catch (Exception ex) {
+                    toast("无法选择文件：" + ex.getMessage());
+                }
+            }).show();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putString("pending_import_name", pendingImportName);
+        state.putString("pending_import_type", pendingImportTemplate);
+        super.onSaveInstanceState(state);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMPORT_ASR_ARCHIVE || resultCode != RESULT_OK
+            || data == null || data.getData() == null) return;
+        if (pendingImportName == null || pendingImportTemplate == null) {
+            toast("导入已过期，请重新开始选择");
+            return;
+        }
+        Uri document = data.getData();
+        try {
+            getContentResolver().takePersistableUriPermission(document,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) { /* Files provided by some apps are read-once only. */ }
+
+        String filename = documentName(document);
+        final String importName = pendingImportName;
+        final String templateId = pendingImportTemplate;
+        final String importId = ImportedAsrModels.newId();
+        pendingImportName = null;
+        pendingImportTemplate = null;
+        downloadInProgress = true;
+        updateSelectedInfo();
+        status.setText("正在读取 " + filename + "，仅复制到本机，不联网传输……");
+
+        modelStore.importLocalArchive(document, importId, templateId, filename,
+            new OfflineModelStore.Callback() {
+                @Override public void onStatus(String message) { status.setText(message); }
+                @Override public void onProgress(int percent, long current, long total) {
+                    status.setText("正在导入本地文件：" + OfflineModelStore.human(current));
+                }
+                @Override public void onSuccess(File directory) {
+                    try {
+                        ImportedAsrModels.register(ModelManagerActivity.this,
+                            importId, importName, templateId);
+                        rebuildModelSelector(importId);
+                        status.setText("✅ 模型已导入，仅保存在本机。"
+                            + "请设为默认 ASR 并重启翻译。"
+                            + "使用 Azure 等在线翻译时，识别后的文字仍会发送给该翻译提供商。");
+                    } catch (Exception ex) {
+                        status.setText("模型文件已保存，但登记失败：" + ex.getMessage());
+                    }
+                    downloadInProgress = false;
+                    updateSelectedInfo();
+                    refresh(false);
+                }
+                @Override public void onError(String message) {
+                    downloadInProgress = false;
+                    status.setText(message);
+                    updateSelectedInfo();
+                }
+            });
+    }
+
+    private String documentName(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri,
+                new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null && !name.isEmpty()) return name;
+            }
+        } catch (Exception ignored) {}
+        return uri.getLastPathSegment() == null ? "" : uri.getLastPathSegment();
+    }
+
+    private void rebuildModelSelector(String selectedId) {
+        buildModelOptions();
+        asrModelSpinner.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item, modelLabels));
+        int index = modelIds.indexOf(selectedId);
+        asrModelSpinner.setSelection(Math.max(0, index));
+        updateSelectedInfo();
     }
 
     private int selectedModelIndex() {
@@ -190,10 +370,16 @@ public class ModelManagerActivity extends Activity {
                 downloadButton.setEnabled(false);
             }
             if (deleteButton != null) deleteButton.setEnabled(false);
+            if (officialSourceButton != null) officialSourceButton.setEnabled(true);
+            if (modelPackButton != null) modelPackButton.setEnabled(false);
             return;
         }
 
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
+        if (model == null) return;
+        boolean imported = ImportedAsrModels.isImported(id);
+        if (officialSourceButton != null) officialSourceButton.setEnabled(true);
+        if (modelPackButton != null) modelPackButton.setEnabled(!imported);
         boolean installed = modelStore.isInstalled(id);
         long installedBytes = modelStore.installedBytes(id);
         long readyBytes = modelStore.cachedArchiveBytes(id);
@@ -210,20 +396,34 @@ public class ModelManagerActivity extends Activity {
             state = "未下载";
         }
 
-        selectedInfo.setText(model.name + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
+        String author = ModelSourceLinks.officialModelUrl(model.runtimeModelId);
+        String deployedPack = ModelSourceLinks.packSourceUrl(model);
+        selectedInfo.setText(model.name + "\n参数规模：" + model.parameterText()
+            + "\n" + model.remark + "\n下载/模型大小：" + model.approximateSize
+            + (imported ? "\n参考架构研发方（不代表导入文件出处）：" : "\n模型研发方：") + author
+            + "\n部署文件来源：" + (deployedPack.isEmpty()
+                ? "本地导入（不会通过导入操作上传）" : deployedPack)
             + "\n状态：" + state);
         if (downloadButton != null) {
-            downloadButton.setText(readyBytes > 0L && !installed ? "↻ 重新解压 / 安装" : "⬇ 下载所选模型");
-            downloadButton.setEnabled(!installed && !downloadInProgress);
+            downloadButton.setText(imported ? "本地导入模型｜不可在线自动下载"
+                : (readyBytes > 0L && !installed ? "↻ 重新解压 / 安装" : "⬇ 下载所选模型"));
+            downloadButton.setEnabled(!imported && !installed && !downloadInProgress);
         }
-        if (deleteButton != null) deleteButton.setEnabled(installed && !downloadInProgress);
+        if (deleteButton != null) {
+            deleteButton.setText(imported ? "删除自定义模型及本机登记" : "删除所选模型");
+            deleteButton.setEnabled((installed || imported) && !downloadInProgress);
+        }
     }
 
     private void downloadSelected() {
         String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         if (model == null) {
             status.setText("Vosk 语言包会在实际使用时自动下载，不需要从这里重复下载。");
+            return;
+        }
+        if (ImportedAsrModels.isImported(id)) {
+            status.setText("自定义模型是本机导入，没有自动下载地址。请先删除后重新导入新文件。");
             return;
         }
         if (downloadInProgress) {
@@ -291,15 +491,19 @@ public class ModelManagerActivity extends Activity {
 
     private void deleteSelected() {
         String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         if (model == null || downloadInProgress) return;
         status.setText("正在删除 " + model.name + "……");
         worker.execute(() -> {
             boolean ok = modelStore.delete(id);
+            if (ok && ImportedAsrModels.isImported(id)) ImportedAsrModels.remove(this, id);
             runOnUiThread(() -> {
+                if (ok && ImportedAsrModels.isImported(id)) {
+                    rebuildModelSelector(TranslationService.ASR_VOSK);
+                }
                 status.setText(ok ? "✅ 已删除 " + model.name : "删除时遇到部分失败");
                 if (id.equals(prefs.getString("asr_mode", ""))) {
-                    prefs.edit().putString("asr_mode", TranslationService.ASR_AUTO).apply();
+                    prefs.edit().putString("asr_mode", TranslationService.ASR_SYSTEM).apply();
                 }
                 updateSelectedInfo();
                 refresh(false);
@@ -309,7 +513,7 @@ public class ModelManagerActivity extends Activity {
 
     private void setDefaultSelected() {
         String id = selectedModelId();
-        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(id);
+        OfflineAsrModelCatalog.Model model = OfflineAsrModelCatalog.find(this, id);
         if (model != null && !modelStore.isInstalled(id)) {
             long readyBytes = modelStore.cachedArchiveBytes(id);
             status.setText(readyBytes > 0L
@@ -333,7 +537,7 @@ public class ModelManagerActivity extends Activity {
             long readyBytes = modelStore.completedDownloadCacheBytes();
             long freeBytes = modelStore.availableBytes();
             int sherpaCount = 0;
-            for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all()) {
+            for (OfflineAsrModelCatalog.Model model : OfflineAsrModelCatalog.all(this)) {
                 if (modelStore.isInstalled(model.id)) sherpaCount++;
             }
             int finalSherpaCount = sherpaCount;
