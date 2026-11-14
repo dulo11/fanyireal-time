@@ -244,7 +244,7 @@ public final class RootCallTranslationService extends Service {
             startVosk(profile, false);
             return;
         }
-        if (OfflineAsrModelCatalog.find(asrMode) != null) {
+        if (OfflineAsrModelCatalog.find(this, asrMode) != null) {
             startSherpa(asrMode, profile, false);
             return;
         }
@@ -370,7 +370,7 @@ public final class RootCallTranslationService extends Service {
     }
 
     private void startSherpa(String modelId, RootCallProfileStore.Profile profile, boolean autoFallback) {
-        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(modelId);
+        OfflineAsrModelCatalog.Model meta = OfflineAsrModelCatalog.find(this, modelId);
         if (meta == null) return;
         closeVosk();
         closeSherpa();
@@ -822,7 +822,7 @@ public final class RootCallTranslationService extends Service {
         if (TranslationService.ASR_GROQ_LARGE.equals(value)) return "Groq Free · Whisper Large V3";
         if (TranslationService.ASR_GROQ_TURBO.equals(value)) return "Groq Free · Whisper Turbo";
         if (TranslationService.ASR_CLOUDFLARE.equals(value)) return "Cloudflare Workers AI Free";
-        OfflineAsrModelCatalog.Model m = OfflineAsrModelCatalog.find(value);
+        OfflineAsrModelCatalog.Model m = OfflineAsrModelCatalog.find(this, value);
         return m == null ? "自动推荐 ASR" : m.name + "｜" + m.parameterText();
     }
 
