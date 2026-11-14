@@ -241,6 +241,55 @@ public final class OfflineAsrModelCatalog {
      * cannot simply load their original checkpoints. They are displayed as
      * unimplemented candidates, NEVER as downloadable working models.
      */
+    /** Device-time language selection must not silently switch model or ASR. */
+    public static boolean supportsLanguage(String modelId, String languageTag) {
+        String lang = AsrTranscriptGuard.normalizeTag(languageTag);
+        if (modelId == null || lang.isEmpty()) return true;
+        switch (modelId) {
+            case PARAKEET_EN_V2:
+            case MOONSHINE_TINY_EN:
+            case MOONSHINE_BASE_EN:
+            case MOONSHINE_V2_EN:
+            case ZIPFORMER_STREAM_EN:
+                return "en".equals(lang);
+            case REAZON_JA:
+            case PARAKEET_JA:
+            case MOONSHINE_V2_JA:
+                return "ja".equals(lang);
+            case MOONSHINE_V2_VI:
+                return "vi".equals(lang);
+            case SENSEVOICE:
+                return "zh".equals(lang) || "en".equals(lang)
+                    || "ja".equals(lang) || "ko".equals(lang) || "yue".equals(lang);
+            case FUNASR_NANO:
+                return "zh".equals(lang) || "en".equals(lang) || "ja".equals(lang);
+            default:
+                return true;
+        }
+    }
+
+    /** Fixed language-specific ASR packs should not masquerade as mixed-language recognizers. */
+    public static boolean supportsMixedLanguages(String modelId, java.util.List<String> languages) {
+        if (languages == null || languages.size() < 2) return false;
+        for (String language : languages) {
+            if (!supportsLanguage(modelId, language)) return false;
+        }
+        switch (modelId) {
+            case REAZON_JA:
+            case PARAKEET_JA:
+            case PARAKEET_EN_V2:
+            case MOONSHINE_TINY_EN:
+            case MOONSHINE_BASE_EN:
+            case MOONSHINE_V2_EN:
+            case MOONSHINE_V2_JA:
+            case MOONSHINE_V2_VI:
+            case ZIPFORMER_STREAM_EN:
+                return false;
+            default:
+                return true;
+        }
+    }
+
     public static String pendingModelsText() {
         return "仍需独立适配（尚不可选，不会假装能下载使用）："
             + "\n• NVIDIA Canary-Qwen 2.5B｜25亿参数｜需新的原生运行时"
