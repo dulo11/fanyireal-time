@@ -154,6 +154,10 @@ public final class OfflineModelStore implements AutoCloseable {
             callback.onError("未知模型");
             return;
         }
+        if (model.requiresIndividualFiles()) {
+            downloadIndividualFiles(model, callback);
+            return;
+        }
         worker.execute(() -> {
             if (closed) return;
             File base = baseDir();
@@ -342,6 +346,93 @@ public final class OfflineModelStore implements AutoCloseable {
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    /**
+     * Qwen3 1.7B's verified community conversion is published as individual
+     * Hugging Face LFS files, not a tar archive. Download each file into a
+     * resumable .part directory, verify nonempty payloads, then atomically
+     * publish .ready. No partial pack will ever be treated as installed.
+     */
+    private void downloadIndividualFiles(OfflineAsrModelCatalog.Model model, Callback callback) {
+        worker.execute(() -> {
+            final File base = baseDir();
+            if (!base.exists() && !base.mkdirs()) {
+                postError(callback, "无法创建模型目录");
+                return;
+            }
+            final File target = modelDir(model.id);
+            final File staging = new File(base, model.id + ".part");
+            final String[] filenames = {
+                "conv_frontend.onnx",
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "tokenizer/merges.txt",
+                "tokenizer/vocab.json",
+                "tokenizer/tokenizer_config.json"
+            };
+            try {
+                if (!staging.exists() && !staging.mkdirs()) {
+                    throw new IllegalStateException("无法创建多文件下载缓存目录");
+                }
+                postStatus(callback, "Qwen3-ASR 1.7B 使用第三方 INT8 ONNX 转换，"
+                    + "需下载 2 GB 以上模型；下载后会以自有标记完整安装。"
+                    + "模型来自 Hugging Face，请先确认可接受第三方来源。");
+                for (int i = 0; i < filenames.length; i++) {
+                    if (closed) throw new IllegalStateException("下载已取消");
+                    String name = filenames[i];
+                    File ready = new File(staging, name);
+                    File partial = new File(staging, name + ".part");
+                    File parent = ready.getParentFile();
+                    if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                        throw new IllegalStateException("无法创建文件目录：" + name);
+                    }
+                    if (ready.isFile() && ready.length() > 0) {
+                        postStatus(callback, "复用已下载文件 " + (i + 1) + "/"
+                            + filenames.length + "：" + name);
+                        continue;
+                    }
+                    postStatus(callback, "下载 Qwen3 1.7B 文件 " + (i + 1) + "/"
+                        + filenames.length + "：" + name + "（支持断点续传）");
+                    downloadFileWithRetry(model.url + name, partial, callback);
+                    if (closed) throw new IllegalStateException("下载已取消");
+                    if (!partial.isFile() || partial.length() <= 0) {
+                        throw new IllegalStateException("下载到的模型文件为空：" + name);
+                    }
+                    if (!partial.renameTo(ready)) {
+                        throw new IllegalStateException("下载完成但无法保存：" + name);
+                    }
+                }
+                if (!containsOnnx(staging)) {
+                    throw new IllegalStateException("完整包没有 ONNX 模型文件");
+                }
+                File backup = new File(base, model.id + ".previous");
+                if (backup.exists() && !deleteRecursively(backup)) {
+                    throw new IllegalStateException("无法清除旧模型备份");
+                }
+                boolean hadOld = target.exists();
+                if (hadOld && !target.renameTo(backup)) {
+                    throw new IllegalStateException("无法备份旧模型");
+                }
+                try {
+                    if (!staging.renameTo(target)) throw new IllegalStateException("模型目录安装失败");
+                    try (OutputStream marker = new FileOutputStream(new File(target, ".ready"))) {
+                        marker.write((model.id + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                    deleteRecursively(backup);
+                    postStatus(callback, "✅ Qwen3 1.7B 第三方 INT8 模型完整安装。"
+                        + "若模型初始化失败，请检查内存和第三方导出兼容性。");
+                    main.post(() -> { if (!closed) callback.onSuccess(target); });
+                } catch (Exception publishing) {
+                    deleteRecursively(target);
+                    if (hadOld) backup.renameTo(target);
+                    throw publishing;
+                }
+            } catch (Exception e) {
+                postError(callback, "Qwen3 1.7B 下载/安装失败：" + safe(e)
+                    + "；分文件缓存保留，可重试。");
+            }
+        });
     }
 
     private void extractTarBz2(File archive, File destination) throws Exception {
