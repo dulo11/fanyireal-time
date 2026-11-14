@@ -124,6 +124,8 @@ public class TranslationService extends Service implements RecognitionListener {
     private SpeechRecognizer systemRecognizer;
     private OfflineFirstTranslationRouter translator;
     private LanguageIdentifier fixedSpeechIdentifier;
+    private CustomSpeechLanguageResolver customSpeechResolver;
+    private List<String> customSpeechLanguages = new ArrayList<>();
     private int speechGuardEpoch;
     private volatile long lastAcceptedSpeechAt;
     private boolean staleSubtitleHidden;
@@ -237,6 +239,8 @@ public class TranslationService extends Service implements RecognitionListener {
         asrMode = normalizeAsr(intent.getStringExtra(EXTRA_ASR_MODE));
         activeAsrMode = asrMode;
         languageMode = normalizeLanguageMode(intent.getStringExtra(EXTRA_LANGUAGE_MODE));
+        customSpeechLanguages = SelectedSpeechLanguages.parse(
+            intent.getStringExtra(SelectedSpeechLanguages.EXTRA_CUSTOM_CODES));
         speechLanguage = value(intent.getStringExtra(EXTRA_SOURCE_SPEECH), "en-US");
         sourceMlTag = value(intent.getStringExtra(EXTRA_SOURCE_MLKIT), "en");
         targetMlTag = value(intent.getStringExtra(EXTRA_TARGET_MLKIT), "zh");
@@ -260,7 +264,9 @@ public class TranslationService extends Service implements RecognitionListener {
 
         if (!Settings.canDrawOverlays(this)
             || (projectionNeeded && resultData == null)
-            || sourceMlTag.equals(targetMlTag)) {
+            || sourceMlTag.equals(targetMlTag)
+            || (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                && customSpeechLanguages.size() < 2)) {
             stopEverything();
             return START_NOT_STICKY;
         }
@@ -292,6 +298,9 @@ public class TranslationService extends Service implements RecognitionListener {
         createOverlay(fontSize);
         if (SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
             fixedSpeechIdentifier = LanguageIdentification.getClient();
+        }
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            customSpeechResolver = new CustomSpeechLanguageResolver(customSpeechLanguages);
         }
         translator = new OfflineFirstTranslationRouter(this, sourceMlTag, targetMlTag, engineId,
             SherpaSpeechEngine.LANG_SINGLE.equals(languageMode));
@@ -330,7 +339,8 @@ public class TranslationService extends Service implements RecognitionListener {
         if (SherpaSpeechEngine.LANG_JA_EN.equals(mode)
             || SherpaSpeechEngine.LANG_ZH_EN.equals(mode)
             || SherpaSpeechEngine.LANG_KO_EN.equals(mode)
-            || SherpaSpeechEngine.LANG_AUTO.equals(mode)) return mode;
+            || SherpaSpeechEngine.LANG_AUTO.equals(mode)
+            || SelectedSpeechLanguages.MODE_CUSTOM.equals(mode)) return mode;
         return SherpaSpeechEngine.LANG_SINGLE;
     }
 
@@ -349,6 +359,8 @@ public class TranslationService extends Service implements RecognitionListener {
 
     private String languageModeLabel() {
         switch (languageMode) {
+            case SelectedSpeechLanguages.MODE_CUSTOM:
+                return "自选混合 " + SelectedSpeechLanguages.display(customSpeechLanguages);
             case SherpaSpeechEngine.LANG_JA_EN: return "日语+英语混合";
             case SherpaSpeechEngine.LANG_ZH_EN: return "中文+英语混合";
             case SherpaSpeechEngine.LANG_KO_EN: return "韩语+英语混合";
@@ -825,6 +837,24 @@ public class TranslationService extends Service implements RecognitionListener {
             setDiagSpeech("ASR：已过滤孤立字符或标点噪声");
             return;
         }
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            CustomSpeechLanguageResolver resolver = customSpeechResolver;
+            if (resolver == null) return;
+            final int epoch = speechGuardEpoch;
+            resolver.resolve(cleaned, language, new CustomSpeechLanguageResolver.Callback() {
+                @Override public void onSelected(String code) {
+                    if (!running || paused || epoch != speechGuardEpoch) return;
+                    setDiagSpeech("ASR：自选混合识别 " + code + " ✓ · " + preview(cleaned));
+                    acceptRecognizedSpeech(cleaned, finalResult, code);
+                }
+                @Override public void onRejected(String reason) {
+                    if (!running || paused || epoch != speechGuardEpoch) return;
+                    filteredSinceLastAccepted++;
+                    setDiagSpeech("ASR：自选混合已跳过：" + reason);
+                }
+            });
+            return;
+        }
         if (!SherpaSpeechEngine.LANG_SINGLE.equals(languageMode)) {
             acceptRecognizedSpeech(cleaned, finalResult, language);
             return;
@@ -930,7 +960,7 @@ public class TranslationService extends Service implements RecognitionListener {
         if (current == null) { finishSpeechTranslation(); return; }
         if (index == 0) setDiagTranslation("翻译中 · " + (finalResult ? "完整句" : "流式片段"));
         String part = parts.get(index);
-        current.translate(part, segmentLanguage, new OfflineFirstTranslationRouter.Callback() {
+        OfflineFirstTranslationRouter.Callback callback = new OfflineFirstTranslationRouter.Callback() {
             @Override public void onSuccess(String translated, String engineName) {
                 if (!running || translator != current) return;
                 if (out.length() > 0) out.append('\n');
@@ -945,7 +975,12 @@ public class TranslationService extends Service implements RecognitionListener {
                 if (!translationOnlyOverlay && translatedText != null) translatedText.setText("翻译失败：" + message);
                 finishSpeechTranslation();
             }
-        });
+        };
+        if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)) {
+            current.translateExplicitSource(part, segmentLanguage, callback);
+        } else {
+            current.translate(part, segmentLanguage, callback);
+        }
     }
 
     private void finishSpeechTranslation() {
@@ -1375,6 +1410,10 @@ public class TranslationService extends Service implements RecognitionListener {
         staleSubtitleHidden = false;
         filteredSinceLastAccepted = 0;
         speechGuardEpoch++;
+        CustomSpeechLanguageResolver custom = customSpeechResolver;
+        customSpeechResolver = null;
+        if (custom != null) custom.close();
+        customSpeechLanguages = new ArrayList<>();
         LanguageIdentifier languageId = fixedSpeechIdentifier;
         fixedSpeechIdentifier = null;
         if (languageId != null) try { languageId.close(); } catch (Exception ignored) {}
