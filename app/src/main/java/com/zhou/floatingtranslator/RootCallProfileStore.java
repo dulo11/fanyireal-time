@@ -10,6 +10,7 @@ public final class RootCallProfileStore {
 
     private static final String PREFS = "floating_translator";
     private static final String SELECTED = "root_call_selected_package";
+    private static final String SELECTED_MEDIA = "root_media_selected_package";
     private static final String PREFIX = "root_call_profile.";
 
     private RootCallProfileStore() {}
@@ -51,10 +52,19 @@ public final class RootCallProfileStore {
     }
 
     public static void save(Context context, Profile profile) {
+        saveInternal(context, profile, SELECTED);
+    }
+
+    /** Media capture has a separately selected profile; never silently use the call profile. */
+    public static void saveMedia(Context context, Profile profile) {
+        saveInternal(context, profile, SELECTED_MEDIA);
+    }
+
+    private static void saveInternal(Context context, Profile profile, String selectedKey) {
         if (profile == null || profile.packageName.isEmpty()) return;
         String base = PREFIX + profile.packageName + ".";
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(SELECTED, profile.packageName)
+            .putString(selectedKey, profile.packageName)
             .putString(base + "label", profile.label)
             .putString(base + "transport", profile.transport)
             .putInt(base + "card", profile.card)
@@ -66,9 +76,16 @@ public final class RootCallProfileStore {
     }
 
     public static Profile loadSelected(Context context) {
+        return loadSelectedForKey(context, SELECTED);
+    }
+
+    public static Profile loadSelectedMedia(Context context) {
+        return loadSelectedForKey(context, SELECTED_MEDIA);
+    }
+
+    private static Profile loadSelectedForKey(Context context, String selectedKey) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String pkg = prefs.getString(SELECTED, "");
-        return load(context, pkg);
+        return load(context, prefs.getString(selectedKey, ""));
     }
 
     public static Profile load(Context context, String packageName) {
@@ -97,5 +114,9 @@ public final class RootCallProfileStore {
 
     public static boolean hasSelected(Context context) {
         return loadSelected(context) != null;
+    }
+
+    public static boolean hasSelectedMedia(Context context) {
+        return loadSelectedMedia(context) != null;
     }
 }
