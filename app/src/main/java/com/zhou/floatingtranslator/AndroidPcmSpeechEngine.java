@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.media.AudioFormat;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
@@ -18,6 +19,7 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -48,6 +50,7 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
     private final Context context;
     private final String languageMode;
     private final String speechLanguage;
+    private final ArrayList<String> allowedLanguageLocales;
     private final Callback callback;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService writer = Executors.newSingleThreadExecutor();
@@ -72,9 +75,15 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
 
     public AndroidPcmSpeechEngine(Context context, String languageMode, String speechLanguage,
                                   Callback callback) {
+        this(context, languageMode, speechLanguage, null, callback);
+    }
+
+    public AndroidPcmSpeechEngine(Context context, String languageMode, String speechLanguage,
+                                  List<String> selectedLanguages, Callback callback) {
         this.context = context.getApplicationContext();
         this.languageMode = languageMode == null ? SherpaSpeechEngine.LANG_AUTO : languageMode;
         this.speechLanguage = speechLanguage == null ? "" : speechLanguage.trim();
+        this.allowedLanguageLocales = SelectedSpeechLanguages.speechLocales(selectedLanguages);
         this.callback = callback;
     }
 
@@ -186,6 +195,15 @@ public final class AndroidPcmSpeechEngine implements RecognitionListener, AutoCl
                 listen.putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLanguage);
             } else {
                 listen.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
+                if (SelectedSpeechLanguages.MODE_CUSTOM.equals(languageMode)
+                    && Build.VERSION.SDK_INT >= 34 && !allowedLanguageLocales.isEmpty()) {
+                    // Android 14+ recognizers may optionally honor the selected
+                    // detection-language whitelist. If ignored, post-ASR still
+                    // restricts translation to the user's choices.
+                    listen.putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
+                        new ArrayList<>(allowedLanguageLocales));
+                }
             }
 
             postStatus("Android 系统识别 · 注入 16k PCM");
