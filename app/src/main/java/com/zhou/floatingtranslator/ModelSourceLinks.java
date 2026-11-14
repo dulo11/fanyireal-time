@@ -20,6 +20,9 @@ public final class ModelSourceLinks {
             case OfflineAsrModelCatalog.REAZON_JA:
                 return "https://github.com/reazon-research/ReazonSpeech";
             case OfflineAsrModelCatalog.PARAKEET_JA:
+                // Do not link the English-only NVIDIA v2 card for the
+                // separate Japanese Nemo-CTC converted pack.
+                return "https://github.com/k2-fsa/sherpa-onnx";
             case OfflineAsrModelCatalog.PARAKEET_EN_V2:
                 return "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2";
             case OfflineAsrModelCatalog.WHISPER_SMALL:
