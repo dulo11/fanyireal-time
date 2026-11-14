@@ -48,6 +48,8 @@ public final class MainActivity extends Activity {
     private Button customLanguageButton;
     private List<String> chosenCustomLanguages = new ArrayList<>();
     private Spinner sourceSpinner;
+    private TextView singleSourceLabel;
+    private Button swapLanguageButton;
     private Spinner targetSpinner;
     private CheckBox showOriginal;
     private CheckBox showDiagnostics;
@@ -188,7 +190,8 @@ public final class MainActivity extends Activity {
 
         LinearLayout languageCard = card(root);
         languageCard.addView(section("翻译语言"));
-        languageCard.addView(label("单语言原语言（混合模式以勾选语言为准）"));
+        singleSourceLabel = label("原语言（单语言模式可选择全部语言）");
+        languageCard.addView(singleSourceLabel);
         sourceSpinner = languageSpinner();
         sourceSpinner.setSelection(preferences.getInt("source_index", 2));
         languageCard.addView(sourceSpinner, params());
@@ -196,14 +199,15 @@ public final class MainActivity extends Activity {
         targetSpinner = languageSpinner();
         targetSpinner.setSelection(preferences.getInt("target_index", 0));
         languageCard.addView(targetSpinner, params());
-        Button swap = secondaryButton("⇄ 互换语言");
-        swap.setOnClickListener(v -> {
+        swapLanguageButton = secondaryButton("⇄ 互换语言");
+        swapLanguageButton.setOnClickListener(v -> {
             int s = sourceSpinner.getSelectedItemPosition();
             sourceSpinner.setSelection(targetSpinner.getSelectedItemPosition());
             targetSpinner.setSelection(s);
             saveSettings(false);
         });
-        languageCard.addView(swap, params());
+        languageCard.addView(swapLanguageButton, params());
+        updateCustomLanguageButton();
 
         LinearLayout displayCard = card(root);
         displayCard.addView(section("字幕与显示"));
@@ -623,11 +627,13 @@ public final class MainActivity extends Activity {
 
     private void updateCustomLanguageButton() {
         if (customLanguageButton == null) return;
-        customLanguageButton.setVisibility(
-            SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode())
-                ? View.VISIBLE : View.GONE);
+        boolean mixed = SelectedSpeechLanguages.MODE_CUSTOM.equals(selectedLanguageMode());
+        customLanguageButton.setVisibility(mixed ? View.VISIBLE : View.GONE);
         customLanguageButton.setText("＋ 选择混合识别语言："
             + SelectedSpeechLanguages.display(chosenCustomLanguages));
+        if (singleSourceLabel != null) singleSourceLabel.setVisibility(mixed ? View.GONE : View.VISIBLE);
+        if (sourceSpinner != null) sourceSpinner.setVisibility(mixed ? View.GONE : View.VISIBLE);
+        if (swapLanguageButton != null) swapLanguageButton.setVisibility(mixed ? View.GONE : View.VISIBLE);
     }
 
     private void chooseCustomLanguages() {
